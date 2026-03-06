@@ -52,6 +52,21 @@ export async function listSessions(): Promise<SessionSummary[]> {
   return invoke("session_list");
 }
 
+export async function createSessionFromAudio(
+  fileName: string,
+  audioBytes: number[],
+  mimeType?: string,
+  durationMs?: number
+): Promise<string> {
+  const response = await invoke<{ sessionId: string }>("session_create_from_audio", {
+    fileName,
+    audioBytes,
+    mimeType,
+    durationMs
+  });
+  return response.sessionId;
+}
+
 export async function getSession(sessionId: string): Promise<SessionDetail> {
   return invoke("session_get", { sessionId });
 }

@@ -5,6 +5,7 @@ import SettingsTab from "./components/SettingsTab";
 import SessionsTab from "./components/SessionsTab";
 import TabNav, { type AppTab } from "./components/TabNav";
 import {
+  createSessionFromAudio,
   enqueueSummary,
   enqueueTranscription,
   exportRecording,
@@ -259,6 +260,7 @@ function App() {
   const [statusState, setStatusState] = useState<StatusState>({ key: "status.ready" });
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
 
   const t = useMemo(() => createTranslator(locale), [locale]);
   const statusMessage = t(statusState.key, statusState.params);
@@ -545,6 +547,61 @@ function App() {
     }
   }
 
+  async function readAudioDurationMs(file: File): Promise<number | undefined> {
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const durationSeconds = await new Promise<number>((resolve, reject) => {
+        const audio = new Audio();
+        audio.preload = "metadata";
+        audio.onloadedmetadata = () => {
+          const duration = audio.duration;
+          audio.src = "";
+          if (Number.isFinite(duration) && duration > 0) {
+            resolve(duration);
+            return;
+          }
+          reject(new Error("invalid audio duration"));
+        };
+        audio.onerror = () => {
+          audio.src = "";
+          reject(new Error("failed to load audio metadata"));
+        };
+        audio.src = objectUrl;
+      });
+      return Math.round(durationSeconds * 1000);
+    } catch {
+      return undefined;
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  async function onCreateSessionFromFile(file: File) {
+    if (isCreatingSession) {
+      return;
+    }
+
+    setIsCreatingSession(true);
+    try {
+      const audioBytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+      const durationMs = await readAudioDurationMs(file);
+      const sessionId = await createSessionFromAudio(
+        file.name,
+        audioBytes,
+        file.type || undefined,
+        durationMs
+      );
+      await refreshSessions();
+      setActiveSessionId(sessionId);
+      await refreshSessionDetail(sessionId);
+      setStatus("status.sessionCreateFinished", { fileName: file.name });
+    } catch (error) {
+      setStatus("status.sessionCreateFailed", { error: String(error) });
+    } finally {
+      setIsCreatingSession(false);
+    }
+  }
+
   async function onRenameSession(sessionId: string, name: string) {
     const normalized = name.trim();
     const nextName = normalized.length > 0 ? normalized : undefined;
@@ -644,7 +701,9 @@ function App() {
           summaryTemplateId={summaryTemplateId}
           isTranscribing={isTranscribing}
           isSummarizing={isSummarizing}
+          isCreatingSession={isCreatingSession}
           onSummaryTemplateChange={setSummaryTemplateId}
+          onCreateSessionFromFile={(file) => void onCreateSessionFromFile(file)}
           onRefresh={() =>
             void refreshSessions().catch((error) => {
               setStatus("status.sessionsLoadFailed", { error: String(error) });

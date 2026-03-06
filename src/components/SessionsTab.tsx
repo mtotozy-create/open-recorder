@@ -26,6 +26,8 @@ type SessionsTabProps = {
   sessionJobs?: JobInfo[];
   isTranscribing?: boolean;
   isSummarizing?: boolean;
+  isCreatingSession?: boolean;
+  onCreateSessionFromFile: (file: File) => void | Promise<void>;
   onRefresh: () => void;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => void;
@@ -126,6 +128,8 @@ function SessionsTab({
   sessionJobs = [],
   isTranscribing = false,
   isSummarizing = false,
+  isCreatingSession = false,
+  onCreateSessionFromFile,
   onRefresh,
   onSelectSession,
   onRenameSession,
@@ -148,6 +152,7 @@ function SessionsTab({
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("transcription");
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const skipListBlurRef = useRef(false);
+  const audioFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -202,6 +207,15 @@ function SessionsTab({
     }
   }
 
+  function handleAudioFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    void onCreateSessionFromFile(file);
+  }
+
   const canShowCurrentShortcut = Boolean(activeSessionId);
 
   return (
@@ -229,6 +243,19 @@ function SessionsTab({
               <button
                 type="button"
                 className="btn-secondary sessions-toolbar-btn"
+                onClick={() => audioFileInputRef.current?.click()}
+                disabled={isCreatingSession}
+                aria-label={t("sessions.create")}
+                title={t("sessions.create")}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </button>
+
+              <button
+                type="button"
+                className="btn-secondary sessions-toolbar-btn"
                 onClick={onRefresh}
                 aria-label={t("sessions.refresh")}
                 title={t("sessions.refresh")}
@@ -250,6 +277,14 @@ function SessionsTab({
                   <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />
                 </svg>
               </button>
+
+              <input
+                ref={audioFileInputRef}
+                type="file"
+                accept="audio/*"
+                style={{ display: "none" }}
+                onChange={handleAudioFileChange}
+              />
             </>
           )}
         </div>

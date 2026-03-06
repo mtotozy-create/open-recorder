@@ -24,6 +24,7 @@ const enUS = {
 
   "sessions.title": "Sessions",
   "sessions.subtitle": "Browse recordings, rerun transcription, and generate summary.",
+  "sessions.create": "New Session",
   "sessions.refresh": "Refresh",
   "sessions.empty": "No sessions yet.",
   "sessions.hideList": "Hide List",
@@ -188,6 +189,8 @@ const enUS = {
   "status.summaryFailed": "Failed to summarize: {error}",
   "status.sessionRenameFinished": "Session name saved",
   "status.sessionRenameFailed": "Failed to rename session: {error}",
+  "status.sessionCreateFinished": "Session created from file: {fileName}",
+  "status.sessionCreateFailed": "Failed to create session from file: {error}",
   "status.pauseFailed": "Failed to pause: {error}",
   "status.resumeFailed": "Failed to resume: {error}",
   "status.sessionDeleteFinished": "Session deleted",
@@ -223,6 +226,7 @@ const zhCN: Record<TranslationKey, string> = {
 
   "sessions.title": "会话",
   "sessions.subtitle": "查看录音会话、重跑转写并生成纪要。",
+  "sessions.create": "新建会话",
   "sessions.refresh": "刷新",
   "sessions.empty": "暂无会话。",
   "sessions.hideList": "收起列表",
@@ -384,6 +388,8 @@ const zhCN: Record<TranslationKey, string> = {
   "status.summaryFailed": "纪要生成失败：{error}",
   "status.sessionRenameFinished": "会话名称已保存",
   "status.sessionRenameFailed": "会话重命名失败：{error}",
+  "status.sessionCreateFinished": "已从文件创建会话：{fileName}",
+  "status.sessionCreateFailed": "从文件创建会话失败：{error}",
   "status.pauseFailed": "暂停失败：{error}",
   "status.resumeFailed": "继续失败：{error}",
   "status.sessionDeleteFinished": "会话已删除",
