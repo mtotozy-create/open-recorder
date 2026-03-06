@@ -19,7 +19,7 @@ type SettingsTabProps = {
   t: Translator;
 };
 
-type SettingsSubTab = "general" | "provider" | "templates";
+type SettingsSubTab = "general" | "provider" | "oss" | "templates";
 
 type SettingsSubTabItem = {
   id: SettingsSubTab;
@@ -29,6 +29,7 @@ type SettingsSubTabItem = {
 const settingsSubTabs: SettingsSubTabItem[] = [
   { id: "general", labelKey: "settings.tabs.general" },
   { id: "provider", labelKey: "settings.tabs.provider" },
+  { id: "oss", labelKey: "settings.tabs.oss" },
   { id: "templates", labelKey: "settings.tabs.templates" }
 ];
 
@@ -80,15 +81,7 @@ function createProvider(kind: ProviderKind, index: number): ProviderConfig {
         apiKey: "",
         baseUrl: "https://dashscope.aliyuncs.com",
         transcriptionModel: "paraformer-v2",
-        summaryModel: "qwen-plus",
-        oss: {
-          accessKeyId: "",
-          accessKeySecret: "",
-          endpoint: "",
-          bucket: "",
-          pathPrefix: "open-recorder",
-          signedUrlTtlSeconds: 1800
-        }
+        summaryModel: "qwen-plus"
       }
     };
   }
@@ -114,15 +107,7 @@ function createProvider(kind: ProviderKind, index: number): ProviderConfig {
         transcriptionDisfluencyRemovalEnabled: false,
         transcriptionSpeakerDiarizationEnabled: true,
         pollIntervalSeconds: 60,
-        maxPollingMinutes: 180,
-        oss: {
-          accessKeyId: "",
-          accessKeySecret: "",
-          endpoint: "",
-          bucket: "",
-          pathPrefix: "open-recorder",
-          signedUrlTtlSeconds: 1800
-        }
+        maxPollingMinutes: 180
       }
     };
   }
@@ -308,103 +293,6 @@ function SettingsTab({
               }
             />
           </label>
-          <label>
-            {t("settings.ossAccessKeyId")}
-            <input
-              value={bailian.oss.accessKeyId ?? ""}
-              onChange={(event) =>
-                patchProvider(provider.id, (current) => ({
-                  ...current,
-                  bailian: {
-                    ...bailian,
-                    oss: { ...bailian.oss, accessKeyId: event.target.value }
-                  }
-                }))
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossAccessKeySecret")}
-            <input
-              type="password"
-              value={bailian.oss.accessKeySecret ?? ""}
-              onChange={(event) =>
-                patchProvider(provider.id, (current) => ({
-                  ...current,
-                  bailian: {
-                    ...bailian,
-                    oss: { ...bailian.oss, accessKeySecret: event.target.value }
-                  }
-                }))
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossEndpoint")}
-            <input
-              value={bailian.oss.endpoint ?? ""}
-              onChange={(event) =>
-                patchProvider(provider.id, (current) => ({
-                  ...current,
-                  bailian: {
-                    ...bailian,
-                    oss: { ...bailian.oss, endpoint: event.target.value }
-                  }
-                }))
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossBucket")}
-            <input
-              value={bailian.oss.bucket ?? ""}
-              onChange={(event) =>
-                patchProvider(provider.id, (current) => ({
-                  ...current,
-                  bailian: {
-                    ...bailian,
-                    oss: { ...bailian.oss, bucket: event.target.value }
-                  }
-                }))
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossPathPrefix")}
-            <input
-              value={bailian.oss.pathPrefix ?? ""}
-              onChange={(event) =>
-                patchProvider(provider.id, (current) => ({
-                  ...current,
-                  bailian: {
-                    ...bailian,
-                    oss: { ...bailian.oss, pathPrefix: event.target.value }
-                  }
-                }))
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossSignedUrlTtlSeconds")}
-            <input
-              type="number"
-              min={60}
-              max={86400}
-              value={bailian.oss.signedUrlTtlSeconds}
-              onChange={(event) =>
-                patchProvider(provider.id, (current) => ({
-                  ...current,
-                  bailian: {
-                    ...bailian,
-                    oss: {
-                      ...bailian.oss,
-                      signedUrlTtlSeconds: Number.parseInt(event.target.value || "0", 10) || 1800
-                    }
-                  }
-                }))
-              }
-            />
-          </label>
         </>
       );
     }
@@ -559,65 +447,6 @@ function SettingsTab({
               value={aliyun.maxPollingMinutes}
               onChange={(event) =>
                 updateAliyun({ maxPollingMinutes: Number.parseInt(event.target.value || "0", 10) || 180 })
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossAccessKeyId")}
-            <input
-              value={aliyun.oss.accessKeyId ?? ""}
-              onChange={(event) =>
-                updateAliyun({ oss: { ...aliyun.oss, accessKeyId: event.target.value } })
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossAccessKeySecret")}
-            <input
-              type="password"
-              value={aliyun.oss.accessKeySecret ?? ""}
-              onChange={(event) =>
-                updateAliyun({ oss: { ...aliyun.oss, accessKeySecret: event.target.value } })
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossEndpoint")}
-            <input
-              value={aliyun.oss.endpoint ?? ""}
-              onChange={(event) => updateAliyun({ oss: { ...aliyun.oss, endpoint: event.target.value } })}
-            />
-          </label>
-          <label>
-            {t("settings.ossBucket")}
-            <input
-              value={aliyun.oss.bucket ?? ""}
-              onChange={(event) => updateAliyun({ oss: { ...aliyun.oss, bucket: event.target.value } })}
-            />
-          </label>
-          <label>
-            {t("settings.ossPathPrefix")}
-            <input
-              value={aliyun.oss.pathPrefix ?? ""}
-              onChange={(event) =>
-                updateAliyun({ oss: { ...aliyun.oss, pathPrefix: event.target.value } })
-              }
-            />
-          </label>
-          <label>
-            {t("settings.ossSignedUrlTtlSeconds")}
-            <input
-              type="number"
-              min={60}
-              max={86400}
-              value={aliyun.oss.signedUrlTtlSeconds}
-              onChange={(event) =>
-                updateAliyun({
-                  oss: {
-                    ...aliyun.oss,
-                    signedUrlTtlSeconds: Number.parseInt(event.target.value || "0", 10) || 1800
-                  }
-                })
               }
             />
           </label>
@@ -844,6 +673,91 @@ function SettingsTab({
                 </select>
               </label>
             </div>
+          </div>
+        )}
+
+        {activeSubTab === "oss" && (
+          <div className="settings-section">
+            <h3>{t("settings.tabs.oss")}</h3>
+
+            <label>
+              {t("settings.ossAccessKeyId")}
+              <input
+                value={settings.oss.accessKeyId ?? ""}
+                onChange={(event) =>
+                  onSettingsChange({
+                    oss: { ...settings.oss, accessKeyId: event.target.value }
+                  })
+                }
+              />
+            </label>
+
+            <label>
+              {t("settings.ossAccessKeySecret")}
+              <input
+                type="password"
+                value={settings.oss.accessKeySecret ?? ""}
+                onChange={(event) =>
+                  onSettingsChange({
+                    oss: { ...settings.oss, accessKeySecret: event.target.value }
+                  })
+                }
+              />
+            </label>
+
+            <label>
+              {t("settings.ossEndpoint")}
+              <input
+                value={settings.oss.endpoint ?? ""}
+                onChange={(event) =>
+                  onSettingsChange({
+                    oss: { ...settings.oss, endpoint: event.target.value }
+                  })
+                }
+              />
+            </label>
+
+            <label>
+              {t("settings.ossBucket")}
+              <input
+                value={settings.oss.bucket ?? ""}
+                onChange={(event) =>
+                  onSettingsChange({
+                    oss: { ...settings.oss, bucket: event.target.value }
+                  })
+                }
+              />
+            </label>
+
+            <label>
+              {t("settings.ossPathPrefix")}
+              <input
+                value={settings.oss.pathPrefix ?? ""}
+                onChange={(event) =>
+                  onSettingsChange({
+                    oss: { ...settings.oss, pathPrefix: event.target.value }
+                  })
+                }
+              />
+            </label>
+
+            <label>
+              {t("settings.ossSignedUrlTtlSeconds")}
+              <input
+                type="number"
+                min={60}
+                max={86400}
+                value={settings.oss.signedUrlTtlSeconds}
+                onChange={(event) =>
+                  onSettingsChange({
+                    oss: {
+                      ...settings.oss,
+                      signedUrlTtlSeconds: Number.parseInt(event.target.value || "0", 10) || 1800
+                    }
+                  })
+                }
+              />
+            </label>
           </div>
         )}
 

@@ -29,6 +29,10 @@ pub fn settings_update(
         storage.data.settings.providers = providers;
     }
 
+    if let Some(oss) = request.oss {
+        storage.data.settings.oss = oss;
+    }
+
     if let Some(selected_transcription_provider_id) = request.selected_transcription_provider_id {
         storage.data.settings.selected_transcription_provider_id = selected_transcription_provider_id;
     }

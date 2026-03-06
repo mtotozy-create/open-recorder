@@ -33,6 +33,7 @@ import type {
   JobInfo,
   ProviderCapability,
   ProviderConfig,
+  ProviderOssSettings,
   PromptTemplate,
   RecordingQualityPreset,
   SessionDetail,
@@ -45,8 +46,8 @@ const DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID = "aliyun-transcription-default";
 const DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID = "bailian-summary-default";
 const DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID = "openrouter-summary-default";
 
-function createDefaultProviders(): ProviderConfig[] {
-  const defaultOss = {
+function createDefaultOssSettings(): ProviderOssSettings {
+  return {
     accessKeyId: "",
     accessKeySecret: "",
     endpoint: "",
@@ -54,6 +55,9 @@ function createDefaultProviders(): ProviderConfig[] {
     pathPrefix: "open-recorder",
     signedUrlTtlSeconds: 1800
   };
+}
+
+function createDefaultProviders(): ProviderConfig[] {
   return [
     {
       id: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID,
@@ -65,8 +69,7 @@ function createDefaultProviders(): ProviderConfig[] {
         apiKey: "",
         baseUrl: "https://dashscope.aliyuncs.com",
         transcriptionModel: "paraformer-v2",
-        summaryModel: "qwen-plus",
-        oss: { ...defaultOss }
+        summaryModel: "qwen-plus"
       }
     },
     {
@@ -89,8 +92,7 @@ function createDefaultProviders(): ProviderConfig[] {
         transcriptionDisfluencyRemovalEnabled: false,
         transcriptionSpeakerDiarizationEnabled: true,
         pollIntervalSeconds: 60,
-        maxPollingMinutes: 180,
-        oss: { ...defaultOss }
+        maxPollingMinutes: 180
       }
     },
     {
@@ -103,8 +105,7 @@ function createDefaultProviders(): ProviderConfig[] {
         apiKey: "",
         baseUrl: "https://dashscope.aliyuncs.com",
         transcriptionModel: "paraformer-v2",
-        summaryModel: "qwen-plus",
-        oss: { ...defaultOss }
+        summaryModel: "qwen-plus"
       }
     },
     {
@@ -124,6 +125,7 @@ function createDefaultProviders(): ProviderConfig[] {
 
 const emptySettings: Settings = {
   providers: createDefaultProviders(),
+  oss: createDefaultOssSettings(),
   selectedTranscriptionProviderId: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID,
   selectedSummaryProviderId: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID,
   defaultTemplateId: "meeting-default",
@@ -156,6 +158,14 @@ function supportsCapability(
 }
 
 function normalizeSettings(input: Settings): Settings {
+  const defaultOss = createDefaultOssSettings();
+  const oss = {
+    ...defaultOss,
+    ...(input.oss ?? {}),
+    signedUrlTtlSeconds: Number.isFinite(input.oss?.signedUrlTtlSeconds)
+      ? Math.min(86400, Math.max(60, Math.floor(input.oss.signedUrlTtlSeconds)))
+      : defaultOss.signedUrlTtlSeconds
+  };
   const templates = input.templates.length > 0 ? input.templates : [createDefaultTemplate()];
   const defaultExists = templates.some((template) => template.id === input.defaultTemplateId);
   const providers = (input.providers.length > 0 ? input.providers : createDefaultProviders()).map(
@@ -179,15 +189,7 @@ function normalizeSettings(input: Settings): Settings {
         const bailian = base.bailian ?? createDefaultProviders()[0].bailian!;
         return {
           ...base,
-          bailian: {
-            ...bailian,
-            oss: {
-              ...bailian.oss,
-              signedUrlTtlSeconds: Number.isFinite(bailian.oss.signedUrlTtlSeconds)
-                ? Math.min(86400, Math.max(60, Math.floor(bailian.oss.signedUrlTtlSeconds)))
-                : 1800
-            }
-          },
+          bailian,
           aliyunTingwu: undefined,
           openrouter: undefined
         };
@@ -204,13 +206,7 @@ function normalizeSettings(input: Settings): Settings {
               : 60,
             maxPollingMinutes: Number.isFinite(aliyun.maxPollingMinutes)
               ? Math.min(720, Math.max(5, Math.floor(aliyun.maxPollingMinutes)))
-              : 180,
-            oss: {
-              ...aliyun.oss,
-              signedUrlTtlSeconds: Number.isFinite(aliyun.oss.signedUrlTtlSeconds)
-                ? Math.min(86400, Math.max(60, Math.floor(aliyun.oss.signedUrlTtlSeconds)))
-                : 1800
-            }
+              : 180
           },
           bailian: undefined,
           openrouter: undefined
@@ -239,6 +235,7 @@ function normalizeSettings(input: Settings): Settings {
 
   return {
     providers,
+    oss,
     selectedTranscriptionProviderId,
     selectedSummaryProviderId,
     templates,

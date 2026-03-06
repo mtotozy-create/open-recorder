@@ -7,7 +7,7 @@ use crate::{
     commands::recorder::merge_segments_with_ffmpeg,
     models::{
         AudioSegmentMeta, Job, JobEnqueueResponse, JobKind, JobStatus, ProviderCapability,
-        ProviderKind, SessionStatus,
+        ProviderKind, ProviderOssSettings, SessionStatus,
     },
     providers::{
         aliyun_oss::AliyunOssConfig,
@@ -42,6 +42,32 @@ fn provider_supports_transcription(
         && provider_capabilities
             .iter()
             .any(|item| *item == ProviderCapability::Transcription)
+}
+
+fn has_oss_credential(oss: &ProviderOssSettings) -> bool {
+    oss.access_key_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        && oss
+            .access_key_secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        && oss
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        && oss
+            .bucket
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
 }
 
 enum ActiveTranscriptionConfig {
@@ -245,6 +271,8 @@ pub fn transcribe_enqueue(
             ));
         }
 
+        let oss = &settings.oss;
+
         let config = match provider.kind {
             ProviderKind::Bailian => {
                 let bailian = provider
@@ -260,46 +288,19 @@ pub fn transcribe_enqueue(
                     ));
                 }
 
-                let has_oss_credential = bailian
-                    .oss
-                    .access_key_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .is_some()
-                    && bailian
-                        .oss
-                        .access_key_secret
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .is_some()
-                    && bailian
-                        .oss
-                        .endpoint
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .is_some()
-                    && bailian
-                        .oss
-                        .bucket
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .is_some();
+                let has_global_oss_credential = has_oss_credential(oss);
 
                 ActiveTranscriptionConfig::Bailian(BailianConfig {
                     base_url: bailian.base_url.clone(),
                     api_key,
                     transcription_model: bailian.transcription_model.clone(),
-                    oss: has_oss_credential.then(|| AliyunOssConfig {
-                        access_key_id: bailian.oss.access_key_id.clone().unwrap_or_default(),
-                        access_key_secret: bailian.oss.access_key_secret.clone().unwrap_or_default(),
-                        endpoint: bailian.oss.endpoint.clone().unwrap_or_default(),
-                        bucket: bailian.oss.bucket.clone().unwrap_or_default(),
-                        path_prefix: bailian.oss.path_prefix.clone(),
-                        signed_url_ttl_seconds: bailian.oss.signed_url_ttl_seconds.clamp(60, 86_400),
+                    oss: has_global_oss_credential.then(|| AliyunOssConfig {
+                        access_key_id: oss.access_key_id.clone().unwrap_or_default(),
+                        access_key_secret: oss.access_key_secret.clone().unwrap_or_default(),
+                        endpoint: oss.endpoint.clone().unwrap_or_default(),
+                        bucket: oss.bucket.clone().unwrap_or_default(),
+                        path_prefix: oss.path_prefix.clone(),
+                        signed_url_ttl_seconds: oss.signed_url_ttl_seconds.clamp(60, 86_400),
                     }),
                 })
             }
@@ -334,34 +335,7 @@ pub fn transcribe_enqueue(
                     ));
                 }
 
-                let has_oss_credential = aliyun
-                    .oss
-                    .access_key_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .is_some()
-                    && aliyun
-                        .oss
-                        .access_key_secret
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .is_some()
-                    && aliyun
-                        .oss
-                        .endpoint
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .is_some()
-                    && aliyun
-                        .oss
-                        .bucket
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .is_some();
+                let has_global_oss_credential = has_oss_credential(oss);
 
                 ActiveTranscriptionConfig::AliyunTingwu(AliyunTingwuConfig {
                     access_key_id: aliyun.access_key_id.clone().unwrap_or_default(),
@@ -370,13 +344,13 @@ pub fn transcribe_enqueue(
                     endpoint: aliyun.endpoint.clone(),
                     source_language: aliyun.source_language.clone(),
                     file_url_prefix: aliyun.file_url_prefix.clone(),
-                    oss: has_oss_credential.then(|| AliyunOssConfig {
-                        access_key_id: aliyun.oss.access_key_id.clone().unwrap_or_default(),
-                        access_key_secret: aliyun.oss.access_key_secret.clone().unwrap_or_default(),
-                        endpoint: aliyun.oss.endpoint.clone().unwrap_or_default(),
-                        bucket: aliyun.oss.bucket.clone().unwrap_or_default(),
-                        path_prefix: aliyun.oss.path_prefix.clone(),
-                        signed_url_ttl_seconds: aliyun.oss.signed_url_ttl_seconds.clamp(60, 86_400),
+                    oss: has_global_oss_credential.then(|| AliyunOssConfig {
+                        access_key_id: oss.access_key_id.clone().unwrap_or_default(),
+                        access_key_secret: oss.access_key_secret.clone().unwrap_or_default(),
+                        endpoint: oss.endpoint.clone().unwrap_or_default(),
+                        bucket: oss.bucket.clone().unwrap_or_default(),
+                        path_prefix: oss.path_prefix.clone(),
+                        signed_url_ttl_seconds: oss.signed_url_ttl_seconds.clamp(60, 86_400),
                     }),
                     language_hints: parse_language_hints(aliyun.language_hints.as_deref()),
                     transcription_normalization_enabled: aliyun.transcription_normalization_enabled,

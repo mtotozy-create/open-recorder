@@ -53,7 +53,6 @@ export type BailianProviderSettings = {
   baseUrl: string;
   transcriptionModel: string;
   summaryModel: string;
-  oss: ProviderOssSettings;
 };
 
 export type AliyunTingwuProviderSettings = {
@@ -71,7 +70,6 @@ export type AliyunTingwuProviderSettings = {
   transcriptionSpeakerDiarizationEnabled: boolean;
   pollIntervalSeconds: number;
   maxPollingMinutes: number;
-  oss: ProviderOssSettings;
 };
 
 export type OpenrouterProviderSettings = {
@@ -93,6 +91,7 @@ export type ProviderConfig = {
 
 export type Settings = {
   providers: ProviderConfig[];
+  oss: ProviderOssSettings;
   selectedTranscriptionProviderId: string;
   selectedSummaryProviderId: string;
   defaultTemplateId: string;
