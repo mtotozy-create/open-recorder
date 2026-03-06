@@ -3,19 +3,18 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type KeyboardEvent,
-  type ReactNode
+  type KeyboardEvent
 } from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeSanitize from "rehype-sanitize";
+import remarkGfm from "remark-gfm";
 
 import type { Translator } from "../i18n";
 import type { JobInfo, PromptTemplate, SessionDetail, SessionSummary } from "../types/domain";
 
 type DetailTab = "transcription" | "meta" | "tasks";
 type ViewMode = "readable" | "raw";
-type MarkdownBlock =
-  | { kind: "heading"; level: 1 | 2 | 3; text: string }
-  | { kind: "paragraph"; text: string }
-  | { kind: "list"; items: string[] };
+const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
 type SessionsTabProps = {
   sessions: SessionSummary[];
@@ -84,94 +83,29 @@ function getDisplayName(
   return `${t("sessionDetail.renamePlaceholder")} - ${session.id.slice(0, 8)}`;
 }
 
-function parseSimpleMarkdown(markdown: string): MarkdownBlock[] {
-  const blocks: MarkdownBlock[] = [];
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  let paragraphLines: string[] = [];
-  let listItems: string[] = [];
-
-  function flushParagraph() {
-    if (paragraphLines.length === 0) {
-      return;
-    }
-    blocks.push({
-      kind: "paragraph",
-      text: paragraphLines.join(" ").trim()
-    });
-    paragraphLines = [];
+function toSafeHref(rawHref?: string): string | undefined {
+  if (!rawHref) {
+    return undefined;
   }
 
-  function flushList() {
-    if (listItems.length === 0) {
-      return;
-    }
-    blocks.push({ kind: "list", items: listItems });
-    listItems = [];
+  const href = rawHref.trim();
+  if (!href) {
+    return undefined;
   }
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,3})\s+(.*)$/);
-    if (heading && heading[2].trim()) {
-      flushParagraph();
-      flushList();
-      const level = heading[1].length as 1 | 2 | 3;
-      blocks.push({ kind: "heading", level, text: heading[2].trim() });
-      continue;
-    }
-
-    const unorderedListItem = line.match(/^[-*+]\s+(.*)$/);
-    const orderedListItem = line.match(/^\d+\.\s+(.*)$/);
-    const listText = unorderedListItem?.[1] ?? orderedListItem?.[1];
-    if (listText && listText.trim()) {
-      flushParagraph();
-      listItems.push(listText.trim());
-      continue;
-    }
-
-    flushList();
-    paragraphLines.push(line);
+  if (href.startsWith("#")) {
+    return href;
   }
 
-  flushParagraph();
-  flushList();
-
-  return blocks;
-}
-
-function renderSimpleMarkdown(markdown: string): ReactNode {
-  const blocks = parseSimpleMarkdown(markdown);
-  if (blocks.length === 0) {
-    return <p className="empty-hint">{markdown.trim() || "-"}</p>;
+  try {
+    const parsed = new URL(href);
+    if (SAFE_LINK_PROTOCOLS.has(parsed.protocol)) {
+      return href;
+    }
+    return undefined;
+  } catch {
+    return undefined;
   }
-
-  return blocks.map((block, index) => {
-    if (block.kind === "heading") {
-      if (block.level === 1) {
-        return <h4 key={`h1-${index}`}>{block.text}</h4>;
-      }
-      if (block.level === 2) {
-        return <h5 key={`h2-${index}`}>{block.text}</h5>;
-      }
-      return <h6 key={`h3-${index}`}>{block.text}</h6>;
-    }
-    if (block.kind === "list") {
-      return (
-        <ul key={`ul-${index}`}>
-          {block.items.map((item, itemIndex) => (
-            <li key={`li-${index}-${itemIndex}`}>{item}</li>
-          ))}
-        </ul>
-      );
-    }
-    return <p key={`p-${index}`}>{block.text}</p>;
-  });
 }
 
 function SessionsTab({
@@ -638,7 +572,35 @@ function SessionsTab({
 
                   {summaryViewMode === "readable" && activeSession.summary && (
                     <div className="summary-markdown-view">
-                      {renderSimpleMarkdown(activeSession.summary.rawMarkdown)}
+                      {activeSession.summary.rawMarkdown.trim() ? (
+                        <ReactMarkdown
+                          skipHtml
+                          remarkPlugins={[remarkGfm]}
+                          rehypePlugins={[rehypeSanitize]}
+                          components={{
+                            a: ({ href, children, ...props }) => {
+                              const safeHref = toSafeHref(href);
+                              if (!safeHref) {
+                                return <span className="md-link-disabled">{children}</span>;
+                              }
+                              return (
+                                <a
+                                  {...props}
+                                  href={safeHref}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  {children}
+                                </a>
+                              );
+                            }
+                          }}
+                        >
+                          {activeSession.summary.rawMarkdown}
+                        </ReactMarkdown>
+                      ) : (
+                        <p className="empty-hint">-</p>
+                      )}
                     </div>
                   )}
                 </section>

@@ -105,9 +105,9 @@ fn quality_config(preset: &RecordingQualityPreset) -> QualityConfig {
 /// 根据音质等级返回 AAC 编码比特率
 fn aac_bitrate_for_quality(sample_rate: u32, channels: u16) -> &'static str {
     match (sample_rate, channels) {
-        (48_000, 2) => "192k",  // HiFi
-        (24_000, _) => "96k",   // HD
-        _ => "64k",             // Standard
+        (48_000, 2) => "192k", // HiFi
+        (24_000, _) => "96k",  // HD
+        _ => "64k",            // Standard
     }
 }
 
@@ -119,11 +119,7 @@ fn encode_wav_to_m4a(wav_path: &Path, bitrate: &str) -> Result<PathBuf, String> 
     let m4a_str = m4a_path.to_string_lossy();
 
     // 将 bitrate 从 "64k" 格式转为 afconvert 需要的纯数字格式（单位 bps）
-    let bitrate_bps = bitrate
-        .trim_end_matches('k')
-        .parse::<u32>()
-        .unwrap_or(64)
-        * 1000;
+    let bitrate_bps = bitrate.trim_end_matches('k').parse::<u32>().unwrap_or(64) * 1000;
 
     // 优先尝试 afconvert（macOS 自带）
     let afconvert_result = Command::new("afconvert")
@@ -1003,7 +999,10 @@ pub(crate) fn merge_segments_with_ffmpeg(
         }
 
         // 合并所有临时 WAV
-        let wav_paths: Vec<String> = temp_wavs.iter().map(|p| p.to_string_lossy().to_string()).collect();
+        let wav_paths: Vec<String> = temp_wavs
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
         merge_wav_segments_with_hound(&wav_paths, &intermediate_wav)?;
 
         // 清理临时解码文件
@@ -1015,9 +1014,8 @@ pub(crate) fn merge_segments_with_ffmpeg(
 
     // 如果目标就是 WAV，直接 rename 中间文件
     if output_format == "wav" {
-        fs::rename(&intermediate_wav, output_path).map_err(|error| {
-            format!("failed to rename intermediate wav: {error}")
-        })?;
+        fs::rename(&intermediate_wav, output_path)
+            .map_err(|error| format!("failed to rename intermediate wav: {error}"))?;
         return Ok(());
     }
 
@@ -1035,7 +1033,10 @@ pub(crate) fn merge_segments_with_ffmpeg(
 }
 
 /// 使用 hound 合并多个 WAV 文件
-pub(crate) fn merge_wav_segments_with_hound(segment_paths: &[String], output_path: &Path) -> Result<(), String> {
+pub(crate) fn merge_wav_segments_with_hound(
+    segment_paths: &[String],
+    output_path: &Path,
+) -> Result<(), String> {
     use hound::{WavReader, WavWriter};
 
     let first_reader = WavReader::open(&segment_paths[0])
@@ -1044,7 +1045,10 @@ pub(crate) fn merge_wav_segments_with_hound(segment_paths: &[String], output_pat
     drop(first_reader);
 
     let mut writer = WavWriter::create(output_path, spec).map_err(|error| {
-        format!("failed to create export wav {}: {error}", output_path.display())
+        format!(
+            "failed to create export wav {}: {error}",
+            output_path.display()
+        )
     })?;
 
     for segment in segment_paths {
@@ -1069,7 +1073,11 @@ pub(crate) fn merge_wav_segments_with_hound(segment_paths: &[String], output_pat
 }
 
 /// 单文件格式转换：优先 afconvert，回退 ffmpeg
-pub(crate) fn convert_single_file(input: &str, output_path: &Path, output_format: &str) -> Result<(), String> {
+pub(crate) fn convert_single_file(
+    input: &str,
+    output_path: &Path,
+    output_format: &str,
+) -> Result<(), String> {
     let output_str = output_path.to_string_lossy();
 
     // 优先尝试 afconvert
@@ -1110,11 +1118,7 @@ pub(crate) fn convert_single_file(input: &str, output_path: &Path, output_format
     }
 
     // afconvert 不可用或不支持该格式，回退到 ffmpeg
-    let mut args = vec![
-        "-y".to_string(),
-        "-i".to_string(),
-        input.to_string(),
-    ];
+    let mut args = vec!["-y".to_string(), "-i".to_string(), input.to_string()];
 
     match output_format {
         "wav" => {
@@ -1122,15 +1126,19 @@ pub(crate) fn convert_single_file(input: &str, output_path: &Path, output_format
         }
         "m4a" => {
             args.extend_from_slice(&[
-                "-codec:a".to_string(), "aac".to_string(),
-                "-b:a".to_string(), "128k".to_string(),
+                "-codec:a".to_string(),
+                "aac".to_string(),
+                "-b:a".to_string(),
+                "128k".to_string(),
             ]);
         }
         _ => {
             // mp3
             args.extend_from_slice(&[
-                "-codec:a".to_string(), "libmp3lame".to_string(),
-                "-q:a".to_string(), "3".to_string(),
+                "-codec:a".to_string(),
+                "libmp3lame".to_string(),
+                "-q:a".to_string(),
+                "3".to_string(),
             ]);
         }
     }

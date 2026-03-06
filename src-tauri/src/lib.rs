@@ -10,7 +10,7 @@ use commands::{
         recorder_export, recorder_pause, recorder_resume, recorder_start, recorder_status,
         recorder_stop,
     },
-    session::{session_get, session_list, session_rename, session_delete},
+    session::{session_delete, session_get, session_list, session_rename},
     settings::{settings_get, settings_update},
     summary::summary_enqueue,
     transcribe::transcribe_enqueue,

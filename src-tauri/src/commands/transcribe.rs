@@ -1,4 +1,5 @@
 use chrono::Utc;
+use std::path::Path;
 use tauri::State;
 use uuid::Uuid;
 
@@ -69,7 +70,15 @@ pub fn transcribe_enqueue(
         );
 
         let settings = storage.data.settings.clone();
-        let (raw_segment_paths, raw_segment_meta) = {
+        let (
+            raw_segment_paths,
+            raw_segment_meta,
+            exported_m4a_path,
+            exported_mp3_path,
+            session_elapsed_ms,
+            session_sample_rate,
+            session_channels,
+        ) = {
             let session = storage
                 .data
                 .sessions
@@ -80,38 +89,96 @@ pub fn transcribe_enqueue(
             (
                 session.audio_segments.clone(),
                 session.audio_segment_meta.clone(),
+                session.exported_m4a_path.clone(),
+                session.exported_mp3_path.clone(),
+                session.elapsed_ms,
+                session.sample_rate,
+                session.channels,
             )
         };
 
-        if raw_segment_paths.is_empty() {
+        let exported_audio_for_transcription = [exported_m4a_path.as_deref(), exported_mp3_path.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|path| Path::new(path).is_file())
+            .map(str::to_string);
+
+        if raw_segment_paths.is_empty() && exported_audio_for_transcription.is_none() {
             if let Some(session) = storage.data.sessions.get_mut(&session_id) {
                 session.status = SessionStatus::Failed;
                 session.updated_at = now_iso();
             }
             if let Some(job) = storage.data.jobs.get_mut(&job_id) {
                 job.status = JobStatus::Failed;
-                job.error = Some("audio segments are empty; record audio first".to_string());
+                job.error = Some(
+                    "audio segments and exported files are empty; record or export audio first"
+                        .to_string(),
+                );
                 job.updated_at = now_iso();
             }
             storage.save()?;
-            return Err("audio segments are empty; record audio first".to_string());
+            return Err(
+                "audio segments and exported files are empty; record or export audio first"
+                    .to_string(),
+            );
         }
 
-        // NOTE: 将多个分片合并为单一文件再转写，避免串行多次 API 调用导致等待过长
-        // 合并后的文件放在 session audio 目录下，转写完成后无需保留（不影响原始分片）
-        let (segment_paths, segment_meta) = if raw_segment_paths.len() <= 1 {
+        // 优先复用已导出的单文件（m4a > mp3），确保导出文件可直接用于后续转写。
+        let (segment_paths, segment_meta) = if let Some(exported_path) = exported_audio_for_transcription
+        {
+            let total_duration_ms: u64 = raw_segment_meta.iter().map(|m| m.duration_ms).sum();
+            let duration_ms = if total_duration_ms > 0 {
+                total_duration_ms
+            } else if session_elapsed_ms > 0 {
+                session_elapsed_ms
+            } else {
+                600_000
+            };
+            let sample_rate = raw_segment_meta
+                .first()
+                .map(|m| m.sample_rate)
+                .filter(|rate| *rate > 0)
+                .unwrap_or_else(|| if session_sample_rate > 0 { session_sample_rate } else { 48_000 });
+            let channels = raw_segment_meta
+                .first()
+                .map(|m| m.channels)
+                .filter(|count| *count > 0)
+                .unwrap_or_else(|| if session_channels > 0 { session_channels } else { 1 });
+            let format = Path::new(&exported_path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(str::to_lowercase)
+                .unwrap_or_else(|| "m4a".to_string());
+            let exported_meta = vec![AudioSegmentMeta {
+                path: exported_path.clone(),
+                sequence: 0,
+                started_at: raw_segment_meta
+                    .first()
+                    .map(|m| m.started_at.clone())
+                    .unwrap_or_default(),
+                ended_at: raw_segment_meta
+                    .last()
+                    .map(|m| m.ended_at.clone())
+                    .unwrap_or_default(),
+                duration_ms,
+                sample_rate,
+                channels,
+                format,
+            }];
+            (vec![exported_path], exported_meta)
+        } else if raw_segment_paths.len() <= 1 {
             (raw_segment_paths, raw_segment_meta)
         } else {
+            // NOTE: 将多个分片合并为单一文件再转写，避免串行多次 API 调用导致等待过长
+            // 合并后的文件放在 session audio 目录下，转写完成后无需保留（不影响原始分片）
             let audio_dir = storage.session_audio_dir(&session_id)?;
             let merged_path = audio_dir.join("_merged_for_transcription.m4a");
 
             match merge_segments_with_ffmpeg(&raw_segment_paths, &merged_path, "m4a") {
                 Ok(()) => {
                     // 合并总时长 = 各分片时长之和
-                    let total_duration_ms: u64 = raw_segment_meta
-                        .iter()
-                        .map(|m| m.duration_ms)
-                        .sum();
+                    let total_duration_ms: u64 =
+                        raw_segment_meta.iter().map(|m| m.duration_ms).sum();
                     let merged_meta = vec![AudioSegmentMeta {
                         path: merged_path.to_string_lossy().to_string(),
                         sequence: 0,
@@ -128,10 +195,7 @@ pub fn transcribe_enqueue(
                             .first()
                             .map(|m| m.sample_rate)
                             .unwrap_or(48000),
-                        channels: raw_segment_meta
-                            .first()
-                            .map(|m| m.channels)
-                            .unwrap_or(1),
+                        channels: raw_segment_meta.first().map(|m| m.channels).unwrap_or(1),
                         format: "m4a".to_string(),
                     }];
                     let merged_path_str = merged_path.to_string_lossy().to_string();
@@ -146,7 +210,6 @@ pub fn transcribe_enqueue(
         };
 
         storage.save()?;
-
 
         let config = match settings.transcription_provider.clone() {
             TranscriptionProvider::Bailian => {
@@ -224,7 +287,7 @@ pub fn transcribe_enqueue(
                 if !has_full_credential {
                     return Err("aliyun tingwu transcription requires access key id, access key secret, and app key".to_string());
                 }
-                
+
                 let has_oss_credential = settings
                     .bailian_oss_access_key_id
                     .as_deref()
@@ -271,9 +334,7 @@ pub fn transcribe_enqueue(
                         path_prefix: settings.bailian_oss_path_prefix.clone(),
                         signed_url_ttl_seconds: settings.bailian_oss_signed_url_ttl_seconds,
                     }),
-                    language_hints: parse_language_hints(
-                        settings.aliyun_language_hints.as_deref(),
-                    ),
+                    language_hints: parse_language_hints(settings.aliyun_language_hints.as_deref()),
                     transcription_normalization_enabled: settings
                         .aliyun_transcription_normalization_enabled,
                     transcription_paragraph_enabled: settings
@@ -307,17 +368,13 @@ pub fn transcribe_enqueue(
                 &segment_meta,
                 &session_id_clone,
             ),
-            ActiveTranscriptionConfig::AliyunTingwu(config) => {
-                transcribe_with_aliyun_tingwu(
-                    &segment_paths,
-                    &config,
-                    &segment_meta,
-                    &session_id_clone,
-                )
-            }
-            ActiveTranscriptionConfig::Mock => {
-                Ok(mock_transcript(&segment_paths, &segment_meta))
-            }
+            ActiveTranscriptionConfig::AliyunTingwu(config) => transcribe_with_aliyun_tingwu(
+                &segment_paths,
+                &config,
+                &segment_meta,
+                &session_id_clone,
+            ),
+            ActiveTranscriptionConfig::Mock => Ok(mock_transcript(&segment_paths, &segment_meta)),
         };
 
         // 转写完成后清理合并的临时文件（若存在）

@@ -93,6 +93,7 @@ export type SessionDetail = SessionSummary & {
   audioSegmentMeta: AudioSegmentMeta[];
   sampleRate: number;
   channels: number;
+  exportedM4aPath?: string;
   exportedWavPath?: string;
   exportedMp3Path?: string;
   transcript: TranscriptSegment[];

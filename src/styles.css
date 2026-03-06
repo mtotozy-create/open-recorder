@@ -756,31 +756,131 @@ p {
 }
 
 .summary-markdown-view {
-  display: grid;
-  gap: 8px;
+  color: var(--text-1);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
-.summary-markdown-view h4 {
-  margin: 0;
-  font-size: 0.95rem;
+.summary-markdown-view > :first-child {
+  margin-top: 0;
 }
 
+.summary-markdown-view > :last-child {
+  margin-bottom: 0;
+}
+
+.summary-markdown-view h1,
+.summary-markdown-view h2,
+.summary-markdown-view h3,
+.summary-markdown-view h4,
 .summary-markdown-view h5,
 .summary-markdown-view h6 {
-  margin: 0;
-  font-size: 0.84rem;
-  color: var(--text-1);
+  margin: 1rem 0 0.5rem;
+  color: var(--text-0);
+  font-weight: 700;
+}
+
+.summary-markdown-view h1 {
+  font-size: 1.15rem;
+}
+
+.summary-markdown-view h2 {
+  font-size: 1.05rem;
+}
+
+.summary-markdown-view h3 {
+  font-size: 0.98rem;
+}
+
+.summary-markdown-view h4,
+.summary-markdown-view h5,
+.summary-markdown-view h6 {
+  font-size: 0.9rem;
 }
 
 .summary-markdown-view p {
-  margin: 0;
-  color: var(--text-1);
+  margin: 0.5rem 0;
 }
 
-.summary-markdown-view ul {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--text-1);
+.summary-markdown-view ul,
+.summary-markdown-view ol {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+
+.summary-markdown-view li + li {
+  margin-top: 0.25rem;
+}
+
+.summary-markdown-view blockquote {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--line);
+  background: var(--bg-1);
+  color: var(--text-muted);
+}
+
+.summary-markdown-view pre {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-0);
+  overflow-x: auto;
+}
+
+.summary-markdown-view code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+
+.summary-markdown-view pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.summary-markdown-view table {
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+}
+
+.summary-markdown-view thead {
+  background: var(--bg-1);
+}
+
+.summary-markdown-view th,
+.summary-markdown-view td {
+  border: 1px solid var(--line);
+  padding: 0.45rem 0.6rem;
+  white-space: nowrap;
+}
+
+.summary-markdown-view a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.summary-markdown-view .md-link-disabled {
+  color: var(--text-muted);
+  text-decoration: underline dotted;
+}
+
+.summary-markdown-view hr {
+  margin: 0.9rem 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+.summary-markdown-view input[type="checkbox"] {
+  margin-right: 0.45rem;
 }
 
 .empty-hint {

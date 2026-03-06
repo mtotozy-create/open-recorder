@@ -39,7 +39,7 @@ export async function getRecorderStatus(sessionId: string): Promise<RecorderRunt
 
 export async function exportRecording(
   sessionId: string,
-  format: "wav" | "mp3"
+  format: "m4a" | "mp3"
 ): Promise<string> {
   const response = await invoke<{ path: string }>("recorder_export", {
     sessionId,

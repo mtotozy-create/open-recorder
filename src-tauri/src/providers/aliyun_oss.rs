@@ -214,6 +214,8 @@ fn mime_from_file_name(file_name: &str) -> &'static str {
         "audio/wav"
     } else if file_name.ends_with(".ogg") {
         "audio/ogg"
+    } else if file_name.ends_with(".mp3") {
+        "audio/mpeg"
     } else if file_name.ends_with(".m4a") {
         "audio/mp4"
     } else {

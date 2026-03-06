@@ -487,6 +487,10 @@ fn extract_string(payload: &Value, pointers: &[&str]) -> Option<String> {
 }
 
 fn extract_text_from_payload(payload: &Value) -> Option<String> {
+    if let Some(text) = extract_tingwu_paragraph_text(payload) {
+        return Some(text);
+    }
+
     if let Some(text) = extract_string(
         payload,
         &[
@@ -510,6 +514,98 @@ fn extract_text_from_payload(payload: &Value) -> Option<String> {
     } else {
         Some(merged)
     }
+}
+
+fn extract_tingwu_paragraph_text(payload: &Value) -> Option<String> {
+    let paragraphs = [
+        "/Transcription/Paragraphs",
+        "/transcription/paragraphs",
+        "/Data/Transcription/Paragraphs",
+        "/Data/transcription/paragraphs",
+        "/data/Transcription/Paragraphs",
+        "/data/transcription/paragraphs",
+        "/Paragraphs",
+        "/paragraphs",
+    ]
+    .iter()
+    .find_map(|pointer| payload.pointer(pointer).and_then(Value::as_array))?;
+
+    let mut lines: Vec<(Option<String>, String)> = Vec::new();
+    for paragraph in paragraphs {
+        let Some(text) = extract_paragraph_text(paragraph) else {
+            continue;
+        };
+        let speaker = extract_speaker_id(paragraph);
+
+        if let Some((last_speaker, last_text)) = lines.last_mut() {
+            if *last_speaker == speaker {
+                last_text.push('\n');
+                last_text.push_str(&text);
+                continue;
+            }
+        }
+
+        lines.push((speaker, text));
+    }
+
+    let merged = lines
+        .into_iter()
+        .map(|(speaker, text)| match speaker {
+            Some(id) => format!("Speaker {id}: {text}"),
+            None => text,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if merged.trim().is_empty() {
+        None
+    } else {
+        Some(merged)
+    }
+}
+
+fn extract_paragraph_text(paragraph: &Value) -> Option<String> {
+    if let Some(text) = extract_string(paragraph, &["/Text", "/text"]) {
+        return Some(text);
+    }
+
+    let words = paragraph
+        .pointer("/Words")
+        .or_else(|| paragraph.pointer("/words"))
+        .and_then(Value::as_array)?;
+
+    let text = words
+        .iter()
+        .filter_map(|item| {
+            item.pointer("/Text")
+                .or_else(|| item.pointer("/text"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn extract_speaker_id(paragraph: &Value) -> Option<String> {
+    paragraph
+        .pointer("/SpeakerId")
+        .or_else(|| paragraph.pointer("/speakerId"))
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+                .or_else(|| value.as_i64().map(|number| number.to_string()))
+                .or_else(|| value.as_u64().map(|number| number.to_string()))
+        })
 }
 
 fn collect_text_lines(value: &Value, lines: &mut Vec<String>) {
@@ -553,4 +649,55 @@ fn is_failed_status(status: &str) -> bool {
         status,
         "FAILED" | "FAILURE" | "ERROR" | "CANCELED" | "CANCELLED"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::extract_text_from_payload;
+
+    #[test]
+    fn extracts_tingwu_paragraphs_with_speaker_labels() {
+        let payload = json!({
+            "Transcription": {
+                "Paragraphs": [
+                    {
+                        "SpeakerId": "1",
+                        "Words": [{ "Text": "您好，" }, { "Text": "我是" }]
+                    },
+                    {
+                        "SpeakerId": "1",
+                        "Words": [{ "Text": "小李。" }]
+                    },
+                    {
+                        "SpeakerId": "2",
+                        "Words": [{ "Text": "你好。" }]
+                    }
+                ]
+            }
+        });
+
+        let text = extract_text_from_payload(&payload).unwrap_or_default();
+        assert_eq!(text, "Speaker 1: 您好，我是\n小李。\nSpeaker 2: 你好。");
+    }
+
+    #[test]
+    fn extracts_tingwu_paragraphs_without_speaker_labels() {
+        let payload = json!({
+            "Transcription": {
+                "Paragraphs": [
+                    {
+                        "Words": [{ "Text": "第一段" }]
+                    },
+                    {
+                        "Words": [{ "Text": "第二段" }]
+                    }
+                ]
+            }
+        });
+
+        let text = extract_text_from_payload(&payload).unwrap_or_default();
+        assert_eq!(text, "第一段\n第二段");
+    }
 }

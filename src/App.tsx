@@ -307,7 +307,7 @@ function App() {
     }
   }
 
-  async function onExport(format: "wav" | "mp3") {
+  async function onExport(format: "m4a" | "mp3") {
     if (!activeSessionId) {
       return;
     }
@@ -485,7 +485,7 @@ function App() {
           onPause={() => void onPause()}
           onResume={() => void onResume()}
           onStop={() => void onStop()}
-          onExportWav={() => void onExport("wav")}
+          onExportM4a={() => void onExport("m4a")}
           onExportMp3={() => void onExport("mp3")}
           t={t}
         />

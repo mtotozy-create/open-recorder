@@ -85,8 +85,11 @@ pub fn session_delete(session_id: String, state: State<'_, AppState>) -> Result<
     }
 
     // also remove jobs matching this session_id
-    storage.data.jobs.retain(|_, job| job.session_id != session_id);
-    
+    storage
+        .data
+        .jobs
+        .retain(|_, job| job.session_id != session_id);
+
     storage.save()?;
     Ok(())
 }

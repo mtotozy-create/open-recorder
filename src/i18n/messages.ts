@@ -19,7 +19,7 @@ const enUS = {
   "recorder.quality.hifi": "Hi-Fi (48k stereo)",
   "recorder.waveform": "Live Waveform",
   "recorder.segmentLength": "Segment length: 2 minutes",
-  "recorder.exportWav": "Export WAV",
+  "recorder.exportM4a": "Export M4A",
   "recorder.exportMp3": "Export MP3",
 
   "sessions.title": "Sessions",
@@ -179,7 +179,7 @@ const zhCN: Record<TranslationKey, string> = {
   "recorder.quality.hifi": "高保真（48k 双声道）",
   "recorder.waveform": "实时波形",
   "recorder.segmentLength": "切片时长：2 分钟",
-  "recorder.exportWav": "导出 WAV",
+  "recorder.exportM4a": "导出 M4A",
   "recorder.exportMp3": "导出 MP3",
 
   "sessions.title": "会话",

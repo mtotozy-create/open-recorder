@@ -16,7 +16,7 @@ type RecorderTabProps = {
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
-  onExportWav: () => void;
+  onExportM4a: () => void;
   onExportMp3: () => void;
   t: Translator;
 };
@@ -97,7 +97,7 @@ function RecorderTab({
   onPause,
   onResume,
   onStop,
-  onExportWav,
+  onExportM4a,
   onExportMp3,
   t
 }: RecorderTabProps) {
@@ -243,13 +243,13 @@ function RecorderTab({
       <div className="export-grid">
         <button
           type="button"
-          onClick={onExportWav}
+          onClick={onExportM4a}
           disabled={!canExport}
           className="icon-button secondary"
-          aria-label={t("recorder.exportWav")}
+          aria-label={t("recorder.exportM4a")}
         >
-          <IconDownload title={t("recorder.exportWav")} />
-          <span>{t("recorder.exportWav")}</span>
+          <IconDownload title={t("recorder.exportM4a")} />
+          <span>{t("recorder.exportM4a")}</span>
         </button>
 
         <button
