@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.open-recorder-data/
+src-tauri/target/
+.DS_Store
