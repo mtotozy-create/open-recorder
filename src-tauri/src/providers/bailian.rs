@@ -21,8 +21,15 @@ pub struct BailianConfig {
     pub base_url: String,
     pub api_key: String,
     pub transcription_model: String,
-    pub summary_model: String,
     pub oss: Option<AliyunOssConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatCompatibleSummaryConfig {
+    pub provider_name: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -298,11 +305,11 @@ fn fetch_or_extract_transcript_text(client: &Client, result_ref: &str) -> Result
     }
 }
 
-pub fn summarize_with_bailian(
+pub fn summarize_with_chat_compatible(
     transcript: &[TranscriptSegment],
     system_prompt: &str,
     user_prompt: &str,
-    config: &BailianConfig,
+    config: &ChatCompatibleSummaryConfig,
 ) -> Result<SummaryResult, String> {
     let transcript_text = transcript
         .iter()
@@ -311,7 +318,7 @@ pub fn summarize_with_bailian(
         .join("\n");
 
     let request = ChatCompletionsRequest {
-        model: config.summary_model.clone(),
+        model: config.model.clone(),
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
@@ -337,22 +344,30 @@ pub fn summarize_with_bailian(
         .bearer_auth(&config.api_key)
         .json(&request)
         .send()
-        .map_err(|error| format!("bailian request failed: {error}"))?;
+        .map_err(|error| format!("{} request failed: {error}", config.provider_name))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().unwrap_or_default();
-        return Err(format!("bailian request failed with {status}: {body}"));
+        return Err(format!(
+            "{} request failed with {status}: {body}",
+            config.provider_name
+        ));
     }
 
     let payload: ChatCompletionsResponse = response
         .json()
-        .map_err(|error| format!("failed to parse bailian response: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "failed to parse {} response: {error}",
+                config.provider_name
+            )
+        })?;
 
     let raw_content = payload
         .choices
         .first()
-        .ok_or_else(|| "bailian response has empty choices".to_string())?
+        .ok_or_else(|| format!("{} response has empty choices", config.provider_name))?
         .message
         .content
         .trim()

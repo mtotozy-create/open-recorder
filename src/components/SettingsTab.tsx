@@ -1,8 +1,14 @@
-import type { ChangeEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from "react";
 
 import type { Translator } from "../i18n";
-import type { Locale } from "../i18n/messages";
-import type { PromptTemplate, Settings } from "../types/domain";
+import type { Locale, TranslationKey } from "../i18n/messages";
+import type {
+  PromptTemplate,
+  ProviderCapability,
+  ProviderConfig,
+  ProviderKind,
+  Settings
+} from "../types/domain";
 
 type SettingsTabProps = {
   locale: Locale;
@@ -12,6 +18,19 @@ type SettingsTabProps = {
   onSave: () => void;
   t: Translator;
 };
+
+type SettingsSubTab = "general" | "provider" | "templates";
+
+type SettingsSubTabItem = {
+  id: SettingsSubTab;
+  labelKey: TranslationKey;
+};
+
+const settingsSubTabs: SettingsSubTabItem[] = [
+  { id: "general", labelKey: "settings.tabs.general" },
+  { id: "provider", labelKey: "settings.tabs.provider" },
+  { id: "templates", labelKey: "settings.tabs.templates" }
+];
 
 function buildTemplateId(name: string, index: number): string {
   const normalized = name
@@ -34,6 +53,94 @@ function createTemplate(index: number): PromptTemplate {
   };
 }
 
+function supportsCapability(provider: ProviderConfig, capability: ProviderCapability): boolean {
+  return provider.enabled && provider.capabilities.includes(capability);
+}
+
+function providerKindLabel(kind: ProviderKind, t: Translator): string {
+  if (kind === "bailian") {
+    return t("settings.transcriptionProvider.bailian");
+  }
+  if (kind === "aliyun_tingwu") {
+    return t("settings.transcriptionProvider.aliyunTingwu");
+  }
+  return "OpenRouter";
+}
+
+function createProvider(kind: ProviderKind, index: number): ProviderConfig {
+  const id = `${kind}-${Date.now()}-${index}`;
+  if (kind === "bailian") {
+    return {
+      id,
+      name: `Bailian ${index}`,
+      kind,
+      capabilities: ["transcription", "summary"],
+      enabled: true,
+      bailian: {
+        apiKey: "",
+        baseUrl: "https://dashscope.aliyuncs.com",
+        transcriptionModel: "paraformer-v2",
+        summaryModel: "qwen-plus",
+        oss: {
+          accessKeyId: "",
+          accessKeySecret: "",
+          endpoint: "",
+          bucket: "",
+          pathPrefix: "open-recorder",
+          signedUrlTtlSeconds: 1800
+        }
+      }
+    };
+  }
+
+  if (kind === "aliyun_tingwu") {
+    return {
+      id,
+      name: `Aliyun Tingwu ${index}`,
+      kind,
+      capabilities: ["transcription"],
+      enabled: true,
+      aliyunTingwu: {
+        accessKeyId: "",
+        accessKeySecret: "",
+        appKey: "",
+        endpoint: "https://tingwu.cn-beijing.aliyuncs.com",
+        sourceLanguage: "cn",
+        fileUrlPrefix: "",
+        languageHints: "",
+        transcriptionNormalizationEnabled: true,
+        transcriptionParagraphEnabled: true,
+        transcriptionPunctuationPredictionEnabled: true,
+        transcriptionDisfluencyRemovalEnabled: false,
+        transcriptionSpeakerDiarizationEnabled: true,
+        pollIntervalSeconds: 60,
+        maxPollingMinutes: 180,
+        oss: {
+          accessKeyId: "",
+          accessKeySecret: "",
+          endpoint: "",
+          bucket: "",
+          pathPrefix: "open-recorder",
+          signedUrlTtlSeconds: 1800
+        }
+      }
+    };
+  }
+
+  return {
+    id,
+    name: `OpenRouter ${index}`,
+    kind,
+    capabilities: ["summary"],
+    enabled: true,
+    openrouter: {
+      apiKey: "",
+      baseUrl: "https://openrouter.ai/api/v1",
+      summaryModel: "qwen/qwen-plus"
+    }
+  };
+}
+
 function SettingsTab({
   locale,
   settings,
@@ -42,11 +149,38 @@ function SettingsTab({
   onSave,
   t
 }: SettingsTabProps) {
-  const isBailianSelected = settings.transcriptionProvider === "bailian";
-  const isAliyunSelected = settings.transcriptionProvider === "aliyun_tingwu";
+  const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>("general");
+  const [activeProviderId, setActiveProviderId] = useState<string>(
+    settings.providers[0]?.id ?? ""
+  );
+
+  useEffect(() => {
+    if (settings.providers.length === 0) {
+      if (activeProviderId !== "") {
+        setActiveProviderId("");
+      }
+      return;
+    }
+
+    const hasActiveProvider = settings.providers.some((provider) => provider.id === activeProviderId);
+    if (!hasActiveProvider) {
+      setActiveProviderId(settings.providers[0].id);
+    }
+  }, [settings.providers, activeProviderId]);
 
   function handleLocaleChange(event: ChangeEvent<HTMLSelectElement>) {
     onLocaleChange(event.target.value as Locale);
+  }
+
+  function handleSubTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const nextIndex = (index + direction + settingsSubTabs.length) % settingsSubTabs.length;
+    setActiveSubTab(settingsSubTabs[nextIndex].id);
   }
 
   function handleTemplateChange(index: number, patch: Partial<PromptTemplate>) {
@@ -95,6 +229,458 @@ function SettingsTab({
     onSettingsChange({ templates, defaultTemplateId });
   }
 
+  function updateProviders(nextProviders: ProviderConfig[]) {
+    onSettingsChange({ providers: nextProviders });
+  }
+
+  function patchProvider(providerId: string, next: (provider: ProviderConfig) => ProviderConfig) {
+    const providers = settings.providers.map((provider) =>
+      provider.id === providerId ? next(provider) : provider
+    );
+    updateProviders(providers);
+  }
+
+  function removeProvider(providerId: string) {
+    const providers = settings.providers.filter((provider) => provider.id !== providerId);
+    updateProviders(providers);
+  }
+
+  function addProvider() {
+    const provider = createProvider("openrouter", settings.providers.length + 1);
+    updateProviders([...settings.providers, provider]);
+    setActiveProviderId(provider.id);
+  }
+
+  function renderProviderForm(provider: ProviderConfig) {
+    if (provider.kind === "bailian") {
+      const bailian = provider.bailian;
+      if (!bailian) {
+        return null;
+      }
+      return (
+        <>
+          <label>
+            {t("settings.apiKey")}
+            <input
+              type="password"
+              value={bailian.apiKey ?? ""}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: { ...bailian, apiKey: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.baseUrl")}
+            <input
+              value={bailian.baseUrl}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: { ...bailian, baseUrl: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.transcriptionModel")}
+            <input
+              value={bailian.transcriptionModel}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: { ...bailian, transcriptionModel: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.summaryModel")}
+            <input
+              value={bailian.summaryModel}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: { ...bailian, summaryModel: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossAccessKeyId")}
+            <input
+              value={bailian.oss.accessKeyId ?? ""}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: {
+                    ...bailian,
+                    oss: { ...bailian.oss, accessKeyId: event.target.value }
+                  }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossAccessKeySecret")}
+            <input
+              type="password"
+              value={bailian.oss.accessKeySecret ?? ""}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: {
+                    ...bailian,
+                    oss: { ...bailian.oss, accessKeySecret: event.target.value }
+                  }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossEndpoint")}
+            <input
+              value={bailian.oss.endpoint ?? ""}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: {
+                    ...bailian,
+                    oss: { ...bailian.oss, endpoint: event.target.value }
+                  }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossBucket")}
+            <input
+              value={bailian.oss.bucket ?? ""}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: {
+                    ...bailian,
+                    oss: { ...bailian.oss, bucket: event.target.value }
+                  }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossPathPrefix")}
+            <input
+              value={bailian.oss.pathPrefix ?? ""}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: {
+                    ...bailian,
+                    oss: { ...bailian.oss, pathPrefix: event.target.value }
+                  }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossSignedUrlTtlSeconds")}
+            <input
+              type="number"
+              min={60}
+              max={86400}
+              value={bailian.oss.signedUrlTtlSeconds}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  bailian: {
+                    ...bailian,
+                    oss: {
+                      ...bailian.oss,
+                      signedUrlTtlSeconds: Number.parseInt(event.target.value || "0", 10) || 1800
+                    }
+                  }
+                }))
+              }
+            />
+          </label>
+        </>
+      );
+    }
+
+    if (provider.kind === "aliyun_tingwu") {
+      const aliyun = provider.aliyunTingwu;
+      if (!aliyun) {
+        return null;
+      }
+
+      const updateAliyun = (next: Partial<typeof aliyun>) =>
+        patchProvider(provider.id, (current) => ({
+          ...current,
+          aliyunTingwu: { ...aliyun, ...next }
+        }));
+
+      return (
+        <>
+          <label>
+            {t("settings.aliyunAccessKeyId")}
+            <input
+              value={aliyun.accessKeyId ?? ""}
+              onChange={(event) => updateAliyun({ accessKeyId: event.target.value })}
+            />
+          </label>
+          <label>
+            {t("settings.aliyunAccessKeySecret")}
+            <input
+              type="password"
+              value={aliyun.accessKeySecret ?? ""}
+              onChange={(event) => updateAliyun({ accessKeySecret: event.target.value })}
+            />
+          </label>
+          <label>
+            {t("settings.aliyunAppKey")}
+            <input
+              value={aliyun.appKey ?? ""}
+              onChange={(event) => updateAliyun({ appKey: event.target.value })}
+            />
+          </label>
+          <label>
+            {t("settings.aliyunEndpoint")}
+            <input
+              value={aliyun.endpoint}
+              onChange={(event) => updateAliyun({ endpoint: event.target.value })}
+            />
+          </label>
+          <label>
+            {t("settings.aliyunSourceLanguage")}
+            <select
+              value={aliyun.sourceLanguage}
+              onChange={(event) => updateAliyun({ sourceLanguage: event.target.value })}
+            >
+              <option value="cn">{t("settings.aliyunSourceLanguage.cn")}</option>
+              <option value="en">{t("settings.aliyunSourceLanguage.en")}</option>
+            </select>
+          </label>
+          <label>
+            {t("settings.aliyunLanguageHints")}
+            <input
+              value={aliyun.languageHints ?? ""}
+              onChange={(event) => updateAliyun({ languageHints: event.target.value })}
+            />
+          </label>
+          <label>
+            {t("settings.aliyunFileUrlPrefix")}
+            <input
+              value={aliyun.fileUrlPrefix ?? ""}
+              onChange={(event) => updateAliyun({ fileUrlPrefix: event.target.value })}
+            />
+          </label>
+          <label>
+            {t("settings.aliyunNormalizationEnabled")}
+            <select
+              value={String(aliyun.transcriptionNormalizationEnabled)}
+              onChange={(event) =>
+                updateAliyun({ transcriptionNormalizationEnabled: event.target.value === "true" })
+              }
+            >
+              <option value="true">{t("settings.option.enabled")}</option>
+              <option value="false">{t("settings.option.disabled")}</option>
+            </select>
+          </label>
+          <label>
+            {t("settings.aliyunParagraphEnabled")}
+            <select
+              value={String(aliyun.transcriptionParagraphEnabled)}
+              onChange={(event) =>
+                updateAliyun({ transcriptionParagraphEnabled: event.target.value === "true" })
+              }
+            >
+              <option value="true">{t("settings.option.enabled")}</option>
+              <option value="false">{t("settings.option.disabled")}</option>
+            </select>
+          </label>
+          <label>
+            {t("settings.aliyunPunctuationPredictionEnabled")}
+            <select
+              value={String(aliyun.transcriptionPunctuationPredictionEnabled)}
+              onChange={(event) =>
+                updateAliyun({ transcriptionPunctuationPredictionEnabled: event.target.value === "true" })
+              }
+            >
+              <option value="true">{t("settings.option.enabled")}</option>
+              <option value="false">{t("settings.option.disabled")}</option>
+            </select>
+          </label>
+          <label>
+            {t("settings.aliyunDisfluencyRemovalEnabled")}
+            <select
+              value={String(aliyun.transcriptionDisfluencyRemovalEnabled)}
+              onChange={(event) =>
+                updateAliyun({ transcriptionDisfluencyRemovalEnabled: event.target.value === "true" })
+              }
+            >
+              <option value="true">{t("settings.option.enabled")}</option>
+              <option value="false">{t("settings.option.disabled")}</option>
+            </select>
+          </label>
+          <label>
+            {t("settings.aliyunSpeakerDiarizationEnabled")}
+            <select
+              value={String(aliyun.transcriptionSpeakerDiarizationEnabled)}
+              onChange={(event) =>
+                updateAliyun({
+                  transcriptionSpeakerDiarizationEnabled: event.target.value === "true"
+                })
+              }
+            >
+              <option value="true">{t("settings.option.enabled")}</option>
+              <option value="false">{t("settings.option.disabled")}</option>
+            </select>
+          </label>
+          <label>
+            {t("settings.aliyunPollIntervalSeconds")}
+            <input
+              type="number"
+              min={60}
+              max={300}
+              value={aliyun.pollIntervalSeconds}
+              onChange={(event) =>
+                updateAliyun({ pollIntervalSeconds: Number.parseInt(event.target.value || "0", 10) || 60 })
+              }
+            />
+          </label>
+          <label>
+            {t("settings.aliyunMaxPollingMinutes")}
+            <input
+              type="number"
+              min={5}
+              max={720}
+              value={aliyun.maxPollingMinutes}
+              onChange={(event) =>
+                updateAliyun({ maxPollingMinutes: Number.parseInt(event.target.value || "0", 10) || 180 })
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossAccessKeyId")}
+            <input
+              value={aliyun.oss.accessKeyId ?? ""}
+              onChange={(event) =>
+                updateAliyun({ oss: { ...aliyun.oss, accessKeyId: event.target.value } })
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossAccessKeySecret")}
+            <input
+              type="password"
+              value={aliyun.oss.accessKeySecret ?? ""}
+              onChange={(event) =>
+                updateAliyun({ oss: { ...aliyun.oss, accessKeySecret: event.target.value } })
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossEndpoint")}
+            <input
+              value={aliyun.oss.endpoint ?? ""}
+              onChange={(event) => updateAliyun({ oss: { ...aliyun.oss, endpoint: event.target.value } })}
+            />
+          </label>
+          <label>
+            {t("settings.ossBucket")}
+            <input
+              value={aliyun.oss.bucket ?? ""}
+              onChange={(event) => updateAliyun({ oss: { ...aliyun.oss, bucket: event.target.value } })}
+            />
+          </label>
+          <label>
+            {t("settings.ossPathPrefix")}
+            <input
+              value={aliyun.oss.pathPrefix ?? ""}
+              onChange={(event) =>
+                updateAliyun({ oss: { ...aliyun.oss, pathPrefix: event.target.value } })
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ossSignedUrlTtlSeconds")}
+            <input
+              type="number"
+              min={60}
+              max={86400}
+              value={aliyun.oss.signedUrlTtlSeconds}
+              onChange={(event) =>
+                updateAliyun({
+                  oss: {
+                    ...aliyun.oss,
+                    signedUrlTtlSeconds: Number.parseInt(event.target.value || "0", 10) || 1800
+                  }
+                })
+              }
+            />
+          </label>
+        </>
+      );
+    }
+
+    const openrouter = provider.openrouter;
+    if (!openrouter) {
+      return null;
+    }
+
+    return (
+      <>
+        <label>
+          {t("settings.openrouterApiKey")}
+          <input
+            type="password"
+            value={openrouter.apiKey ?? ""}
+            onChange={(event) =>
+              patchProvider(provider.id, (current) => ({
+                ...current,
+                openrouter: { ...openrouter, apiKey: event.target.value }
+              }))
+            }
+          />
+        </label>
+        <label>
+          {t("settings.openrouterBaseUrl")}
+          <input
+            value={openrouter.baseUrl}
+            onChange={(event) =>
+              patchProvider(provider.id, (current) => ({
+                ...current,
+                openrouter: { ...openrouter, baseUrl: event.target.value }
+              }))
+            }
+          />
+        </label>
+        <label>
+          {t("settings.openrouterSummaryModel")}
+          <input
+            value={openrouter.summaryModel}
+            onChange={(event) =>
+              patchProvider(provider.id, (current) => ({
+                ...current,
+                openrouter: { ...openrouter, summaryModel: event.target.value }
+              }))
+            }
+          />
+        </label>
+      </>
+    );
+  }
+
+  const transcriptionProviders = settings.providers.filter((provider) =>
+    supportsCapability(provider, "transcription")
+  );
+  const summaryProviders = settings.providers.filter((provider) =>
+    supportsCapability(provider, "summary")
+  );
+  const activeProvider = settings.providers.find((provider) => provider.id === activeProviderId);
+
   return (
     <section className="panel settings-panel">
       <header>
@@ -102,382 +688,269 @@ function SettingsTab({
         <p>{t("settings.subtitle")}</p>
       </header>
 
-      <div className="settings-section">
-        <h3>{t("settings.interface")}</h3>
-        <label>
-          {t("settings.language")}
-          <select value={locale} onChange={handleLocaleChange}>
-            <option value="zh-CN">{t("settings.language.zh")}</option>
-            <option value="en-US">{t("settings.language.en")}</option>
-          </select>
-        </label>
-      </div>
+      <nav className="settings-subtabs" aria-label={t("settings.tabs.ariaLabel")} role="tablist">
+        {settingsSubTabs.map((tab, index) => {
+          const active = activeSubTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              className={`settings-subtab-trigger${active ? " active" : ""}`}
+              role="tab"
+              id={`settings-tab-${tab.id}`}
+              aria-selected={active}
+              aria-controls={`settings-panel-${tab.id}`}
+              tabIndex={active ? 0 : -1}
+              onClick={() => setActiveSubTab(tab.id)}
+              onKeyDown={(event) => handleSubTabKeyDown(event, index)}
+            >
+              {t(tab.labelKey)}
+            </button>
+          );
+        })}
+      </nav>
 
-      <div className="settings-section">
-        <h3>{t("settings.transcriptionProvider")}</h3>
-        <p>{t("settings.transcriptionProviderHint")}</p>
-        <label>
-          {t("settings.transcriptionProvider")}
-          <select
-            value={settings.transcriptionProvider}
-            onChange={(event) =>
-              onSettingsChange({
-                transcriptionProvider: event.target.value as Settings["transcriptionProvider"]
-              })
-            }
-          >
-            <option value="bailian">{t("settings.transcriptionProvider.bailian")}</option>
-            <option value="aliyun_tingwu">{t("settings.transcriptionProvider.aliyunTingwu")}</option>
-          </select>
-        </label>
-      </div>
+      <div
+        className="settings-tab-content"
+        role="tabpanel"
+        id={`settings-panel-${activeSubTab}`}
+        aria-labelledby={`settings-tab-${activeSubTab}`}
+      >
+        {activeSubTab === "general" && (
+          <div className="settings-section">
+            <h3>{t("settings.interface")}</h3>
+            <label>
+              {t("settings.language")}
+              <select value={locale} onChange={handleLocaleChange}>
+                <option value="zh-CN">{t("settings.language.zh")}</option>
+                <option value="en-US">{t("settings.language.en")}</option>
+              </select>
+            </label>
+          </div>
+        )}
 
-      <div className="settings-section">
-        <h3>{t("settings.bailian")}</h3>
-        <label>
-          {t("settings.apiKey")}
-          <input
-            type="password"
-            value={settings.bailianApiKey ?? ""}
-            onChange={(event) => onSettingsChange({ bailianApiKey: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.baseUrl")}
-          <input
-            value={settings.bailianBaseUrl}
-            onChange={(event) => onSettingsChange({ bailianBaseUrl: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.transcriptionModel")}
-          <input
-            value={settings.bailianTranscriptionModel}
-            onChange={(event) => onSettingsChange({ bailianTranscriptionModel: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.summaryModel")}
-          <input
-            value={settings.bailianSummaryModel}
-            onChange={(event) => onSettingsChange({ bailianSummaryModel: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.bailianOssAccessKeyId")}
-          <input
-            value={settings.bailianOssAccessKeyId ?? ""}
-            onChange={(event) => onSettingsChange({ bailianOssAccessKeyId: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.bailianOssAccessKeySecret")}
-          <input
-            type="password"
-            value={settings.bailianOssAccessKeySecret ?? ""}
-            onChange={(event) =>
-              onSettingsChange({ bailianOssAccessKeySecret: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          {t("settings.bailianOssEndpoint")}
-          <input
-            value={settings.bailianOssEndpoint ?? ""}
-            onChange={(event) => onSettingsChange({ bailianOssEndpoint: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.bailianOssBucket")}
-          <input
-            value={settings.bailianOssBucket ?? ""}
-            onChange={(event) => onSettingsChange({ bailianOssBucket: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.bailianOssPathPrefix")}
-          <input
-            value={settings.bailianOssPathPrefix ?? ""}
-            onChange={(event) => onSettingsChange({ bailianOssPathPrefix: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.bailianOssSignedUrlTtlSeconds")}
-          <input
-            type="number"
-            min={60}
-            max={86400}
-            value={settings.bailianOssSignedUrlTtlSeconds}
-            onChange={(event) =>
-              onSettingsChange({
-                bailianOssSignedUrlTtlSeconds: Number.parseInt(event.target.value || "0", 10) || 1800
-              })
-            }
-          />
-        </label>
-        <p>{t("settings.bailianOssHint")}</p>
-        {!isBailianSelected && <p>{t("settings.bailianUsedForSummary")}</p>}
-      </div>
-
-      <div className="settings-section">
-        <h3>{t("settings.aliyunTingwu")}</h3>
-        <label>
-          {t("settings.aliyunAccessKeyId")}
-          <input
-            value={settings.aliyunAccessKeyId ?? ""}
-            onChange={(event) => onSettingsChange({ aliyunAccessKeyId: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.aliyunAccessKeySecret")}
-          <input
-            type="password"
-            value={settings.aliyunAccessKeySecret ?? ""}
-            onChange={(event) => onSettingsChange({ aliyunAccessKeySecret: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.aliyunAppKey")}
-          <input
-            value={settings.aliyunAppKey ?? ""}
-            onChange={(event) => onSettingsChange({ aliyunAppKey: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.aliyunEndpoint")}
-          <input
-            value={settings.aliyunEndpoint}
-            onChange={(event) => onSettingsChange({ aliyunEndpoint: event.target.value })}
-          />
-        </label>
-        <label>
-          {t("settings.aliyunSourceLanguage")}
-          <select
-            value={settings.aliyunSourceLanguage}
-            onChange={(event) => onSettingsChange({ aliyunSourceLanguage: event.target.value })}
-          >
-            <option value="cn">{t("settings.aliyunSourceLanguage.cn")}</option>
-            <option value="en">{t("settings.aliyunSourceLanguage.en")}</option>
-          </select>
-        </label>
-        <label>
-          {t("settings.aliyunLanguageHints")}
-          <input
-            value={settings.aliyunLanguageHints ?? ""}
-            onChange={(event) => onSettingsChange({ aliyunLanguageHints: event.target.value })}
-          />
-        </label>
-        <p>{t("settings.aliyunLanguageHintsHint")}</p>
-        <label>
-          {t("settings.aliyunFileUrlPrefix")}
-          <input
-            value={settings.aliyunFileUrlPrefix ?? ""}
-            onChange={(event) => onSettingsChange({ aliyunFileUrlPrefix: event.target.value })}
-          />
-        </label>
-        <p>{t("settings.aliyunOssReuseHint")}</p>
-        <label>
-          {t("settings.aliyunNormalizationEnabled")}
-          <select
-            value={String(settings.aliyunTranscriptionNormalizationEnabled)}
-            onChange={(event) =>
-              onSettingsChange({
-                aliyunTranscriptionNormalizationEnabled: event.target.value === "true"
-              })
-            }
-          >
-            <option value="true">{t("settings.option.enabled")}</option>
-            <option value="false">{t("settings.option.disabled")}</option>
-          </select>
-        </label>
-        <label>
-          {t("settings.aliyunParagraphEnabled")}
-          <select
-            value={String(settings.aliyunTranscriptionParagraphEnabled)}
-            onChange={(event) =>
-              onSettingsChange({
-                aliyunTranscriptionParagraphEnabled: event.target.value === "true"
-              })
-            }
-          >
-            <option value="true">{t("settings.option.enabled")}</option>
-            <option value="false">{t("settings.option.disabled")}</option>
-          </select>
-        </label>
-        <label>
-          {t("settings.aliyunPunctuationPredictionEnabled")}
-          <select
-            value={String(settings.aliyunTranscriptionPunctuationPredictionEnabled)}
-            onChange={(event) =>
-              onSettingsChange({
-                aliyunTranscriptionPunctuationPredictionEnabled: event.target.value === "true"
-              })
-            }
-          >
-            <option value="true">{t("settings.option.enabled")}</option>
-            <option value="false">{t("settings.option.disabled")}</option>
-          </select>
-        </label>
-        <label>
-          {t("settings.aliyunDisfluencyRemovalEnabled")}
-          <select
-            value={String(settings.aliyunTranscriptionDisfluencyRemovalEnabled)}
-            onChange={(event) =>
-              onSettingsChange({
-                aliyunTranscriptionDisfluencyRemovalEnabled: event.target.value === "true"
-              })
-            }
-          >
-            <option value="false">{t("settings.option.disabled")}</option>
-            <option value="true">{t("settings.option.enabled")}</option>
-          </select>
-        </label>
-        <label>
-          {t("settings.aliyunSpeakerDiarizationEnabled")}
-          <select
-            value={String(settings.aliyunTranscriptionSpeakerDiarizationEnabled)}
-            onChange={(event) =>
-              onSettingsChange({
-                aliyunTranscriptionSpeakerDiarizationEnabled: event.target.value === "true"
-              })
-            }
-          >
-            <option value="true">{t("settings.option.enabled")}</option>
-            <option value="false">{t("settings.option.disabled")}</option>
-          </select>
-        </label>
-        <label>
-          {t("settings.aliyunPollIntervalSeconds")}
-          <input
-            type="number"
-            min={60}
-            max={300}
-            value={settings.aliyunPollIntervalSeconds}
-            onChange={(event) =>
-              onSettingsChange({
-                aliyunPollIntervalSeconds: Number.parseInt(event.target.value || "0", 10) || 60
-              })
-            }
-          />
-        </label>
-        <label>
-          {t("settings.aliyunMaxPollingMinutes")}
-          <input
-            type="number"
-            min={5}
-            max={720}
-            value={settings.aliyunMaxPollingMinutes}
-            onChange={(event) =>
-              onSettingsChange({
-                aliyunMaxPollingMinutes: Number.parseInt(event.target.value || "0", 10) || 180
-              })
-            }
-          />
-        </label>
-        <p>{t("settings.aliyunPollingHint")}</p>
-        <p>{t("settings.aliyunFileUrlPrefixHint")}</p>
-        {!isAliyunSelected && <p>{t("settings.aliyunOnlyForTranscription")}</p>}
-      </div>
-
-      <div className="settings-section">
-        <h3>{t("settings.prompts")}</h3>
-        <p>{t("settings.templateHint")}</p>
-
-        <label>
-          {t("settings.defaultTemplateId")}
-          <select
-            value={settings.defaultTemplateId}
-            onChange={(event) => onSettingsChange({ defaultTemplateId: event.target.value })}
-          >
-            {settings.templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                {template.name} ({template.id})
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="template-list">
-          {settings.templates.map((template, index) => (
-            <article key={`${template.id}-${index}`} className="template-card">
-              <div className="template-actions">
-                <strong>{template.name}</strong>
-                <button type="button" onClick={() => removeTemplate(index)}>
-                  {t("settings.removeTemplate")}
-                </button>
-              </div>
-
+        {activeSubTab === "provider" && (
+          <div className="settings-section">
+            <h3>{t("settings.providerConfigs")}</h3>
+            <div className="provider-toolbar">
               <label>
-                {t("settings.templateName")}
-                <input
-                  value={template.name}
-                  onChange={(event) => {
-                    const nextName = event.target.value;
-                    handleTemplateChange(index, {
-                      name: nextName,
-                      id: template.id.startsWith("template-")
-                        ? buildTemplateId(nextName, index + 1)
-                        : template.id
-                    });
-                  }}
-                />
+                {t("settings.providerSelect")}
+                <select
+                  value={activeProviderId}
+                  onChange={(event) => setActiveProviderId(event.target.value)}
+                >
+                  {settings.providers.length === 0 && <option value="">{t("settings.noProvider")}</option>}
+                  {settings.providers.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name} ({providerKindLabel(provider.kind, t)})
+                    </option>
+                  ))}
+                </select>
               </label>
+              <button type="button" className="settings-inline-btn" onClick={addProvider}>
+                {t("settings.addProvider")}
+              </button>
+            </div>
 
+            {activeProvider ? (
+              <article className="provider-editor">
+                <div className="provider-editor-header">
+                  <strong>{providerKindLabel(activeProvider.kind, t)}</strong>
+                  <button type="button" onClick={() => removeProvider(activeProvider.id)}>
+                    {t("settings.removeProvider")}
+                  </button>
+                </div>
+
+                <label>
+                  {t("settings.providerName")}
+                  <input
+                    value={activeProvider.name}
+                    onChange={(event) =>
+                      patchProvider(activeProvider.id, (current) => ({
+                        ...current,
+                        name: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  {t("settings.providerEnabled")}
+                  <select
+                    value={String(activeProvider.enabled)}
+                    onChange={(event) =>
+                      patchProvider(activeProvider.id, (current) => ({
+                        ...current,
+                        enabled: event.target.value === "true"
+                      }))
+                    }
+                  >
+                    <option value="true">{t("settings.option.enabled")}</option>
+                    <option value="false">{t("settings.option.disabled")}</option>
+                  </select>
+                </label>
+
+                <p>
+                  {t("settings.capabilities")}:
+                  {activeProvider.capabilities
+                    .map((capability) =>
+                      capability === "transcription"
+                        ? t("settings.capability.transcription")
+                        : t("settings.capability.summary")
+                    )
+                    .join(" / ")}
+                </p>
+
+                {renderProviderForm(activeProvider)}
+              </article>
+            ) : (
+              <p className="provider-empty-hint">{t("settings.emptyProviders")}</p>
+            )}
+
+            <div className="provider-selectors">
               <label>
-                {t("settings.templateId")}
-                <input
-                  value={template.id}
+                {t("settings.transcriptionProvider")}
+                <select
+                  value={settings.selectedTranscriptionProviderId}
                   onChange={(event) =>
-                    handleTemplateChange(index, {
-                      id: buildTemplateId(event.target.value, index + 1)
-                    })
+                    onSettingsChange({ selectedTranscriptionProviderId: event.target.value })
                   }
-                />
+                >
+                  {transcriptionProviders.length === 0 && (
+                    <option value="">{t("settings.noProvider")}</option>
+                  )}
+                  {transcriptionProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name} ({providerKindLabel(provider.kind, t)})
+                    </option>
+                  ))}
+                </select>
               </label>
 
               <label>
-                {t("settings.systemPrompt")}
-                <textarea
-                  value={template.systemPrompt}
+                {t("settings.summaryProvider")}
+                <select
+                  value={settings.selectedSummaryProviderId}
                   onChange={(event) =>
-                    handleTemplateChange(index, {
-                      systemPrompt: event.target.value
-                    })
+                    onSettingsChange({ selectedSummaryProviderId: event.target.value })
                   }
-                />
+                >
+                  {summaryProviders.length === 0 && <option value="">{t("settings.noProvider")}</option>}
+                  {summaryProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name} ({providerKindLabel(provider.kind, t)})
+                    </option>
+                  ))}
+                </select>
               </label>
+            </div>
+          </div>
+        )}
 
-              <label>
-                {t("settings.userPrompt")}
-                <textarea
-                  value={template.userPrompt}
-                  onChange={(event) =>
-                    handleTemplateChange(index, {
-                      userPrompt: event.target.value
-                    })
-                  }
-                />
-              </label>
+        {activeSubTab === "templates" && (
+          <div className="settings-section">
+            <h3>{t("settings.prompts")}</h3>
+            <p>{t("settings.templateHint")}</p>
 
-              <label>
-                {t("settings.variables")}
-                <input
-                  value={template.variables.join(", ")}
-                  onChange={(event) => handleTemplateVariablesChange(index, event.target.value)}
-                />
-              </label>
-            </article>
-          ))}
-        </div>
+            <label>
+              {t("settings.defaultTemplateId")}
+              <select
+                value={settings.defaultTemplateId}
+                onChange={(event) => onSettingsChange({ defaultTemplateId: event.target.value })}
+              >
+                {settings.templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name} ({template.id})
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        <button type="button" onClick={addTemplate}>
-          {t("settings.addTemplate")}
+            <div className="template-list">
+              {settings.templates.map((template, index) => (
+                <article key={`${template.id}-${index}`} className="template-card">
+                  <div className="template-actions">
+                    <strong>{template.name}</strong>
+                    <button type="button" onClick={() => removeTemplate(index)}>
+                      {t("settings.removeTemplate")}
+                    </button>
+                  </div>
+
+                  <label>
+                    {t("settings.templateName")}
+                    <input
+                      value={template.name}
+                      onChange={(event) => {
+                        const nextName = event.target.value;
+                        handleTemplateChange(index, {
+                          name: nextName,
+                          id: template.id.startsWith("template-")
+                            ? buildTemplateId(nextName, index + 1)
+                            : template.id
+                        });
+                      }}
+                    />
+                  </label>
+
+                  <label>
+                    {t("settings.templateId")}
+                    <input
+                      value={template.id}
+                      onChange={(event) =>
+                        handleTemplateChange(index, {
+                          id: buildTemplateId(event.target.value, index + 1)
+                        })
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    {t("settings.systemPrompt")}
+                    <textarea
+                      value={template.systemPrompt}
+                      onChange={(event) =>
+                        handleTemplateChange(index, {
+                          systemPrompt: event.target.value
+                        })
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    {t("settings.userPrompt")}
+                    <textarea
+                      value={template.userPrompt}
+                      onChange={(event) =>
+                        handleTemplateChange(index, {
+                          userPrompt: event.target.value
+                        })
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    {t("settings.variables")}
+                    <input
+                      value={template.variables.join(", ")}
+                      onChange={(event) => handleTemplateVariablesChange(index, event.target.value)}
+                    />
+                  </label>
+                </article>
+              ))}
+            </div>
+
+            <button type="button" className="settings-inline-btn" onClick={addTemplate}>
+              {t("settings.addTemplate")}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="settings-save-row">
+        <button type="button" className="settings-save-btn" onClick={onSave}>
+          {t("settings.save")}
         </button>
       </div>
-
-      <button type="button" onClick={onSave} style={{ marginTop: "4px" }}>
-        {t("settings.save")}
-      </button>
     </section>
   );
 }

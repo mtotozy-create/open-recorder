@@ -46,15 +46,20 @@ impl Storage {
 
             let file_path = data_dir.join("state.json");
             if !file_path.exists() {
+                let mut data = PersistedState::default();
+                data.settings.normalize();
                 return Ok(Self {
                     file_path,
-                    data: PersistedState::default(),
+                    data,
                 });
             }
 
             match fs::read_to_string(&file_path) {
                 Ok(raw) => match serde_json::from_str::<PersistedState>(&raw) {
-                    Ok(data) => return Ok(Self { file_path, data }),
+                    Ok(mut data) => {
+                        data.settings.normalize();
+                        return Ok(Self { file_path, data });
+                    }
                     Err(error) => {
                         errors.push(format!(
                             "failed to parse persisted state {}: {error}",

@@ -31,6 +31,8 @@ import {
 import { type Locale, type TranslationKey } from "./i18n/messages";
 import type {
   JobInfo,
+  ProviderCapability,
+  ProviderConfig,
   PromptTemplate,
   RecordingQualityPreset,
   SessionDetail,
@@ -38,25 +40,94 @@ import type {
   Settings
 } from "./types/domain";
 
+const DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID = "bailian-transcription-default";
+const DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID = "aliyun-transcription-default";
+const DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID = "bailian-summary-default";
+const DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID = "openrouter-summary-default";
+
+function createDefaultProviders(): ProviderConfig[] {
+  const defaultOss = {
+    accessKeyId: "",
+    accessKeySecret: "",
+    endpoint: "",
+    bucket: "",
+    pathPrefix: "open-recorder",
+    signedUrlTtlSeconds: 1800
+  };
+  return [
+    {
+      id: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID,
+      name: "Bailian Transcription",
+      kind: "bailian",
+      capabilities: ["transcription"],
+      enabled: true,
+      bailian: {
+        apiKey: "",
+        baseUrl: "https://dashscope.aliyuncs.com",
+        transcriptionModel: "paraformer-v2",
+        summaryModel: "qwen-plus",
+        oss: { ...defaultOss }
+      }
+    },
+    {
+      id: DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID,
+      name: "Aliyun Tingwu Transcription",
+      kind: "aliyun_tingwu",
+      capabilities: ["transcription"],
+      enabled: true,
+      aliyunTingwu: {
+        accessKeyId: "",
+        accessKeySecret: "",
+        appKey: "",
+        endpoint: "https://tingwu.cn-beijing.aliyuncs.com",
+        sourceLanguage: "cn",
+        fileUrlPrefix: "",
+        languageHints: "",
+        transcriptionNormalizationEnabled: true,
+        transcriptionParagraphEnabled: true,
+        transcriptionPunctuationPredictionEnabled: true,
+        transcriptionDisfluencyRemovalEnabled: false,
+        transcriptionSpeakerDiarizationEnabled: true,
+        pollIntervalSeconds: 60,
+        maxPollingMinutes: 180,
+        oss: { ...defaultOss }
+      }
+    },
+    {
+      id: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID,
+      name: "Bailian Summary",
+      kind: "bailian",
+      capabilities: ["summary"],
+      enabled: true,
+      bailian: {
+        apiKey: "",
+        baseUrl: "https://dashscope.aliyuncs.com",
+        transcriptionModel: "paraformer-v2",
+        summaryModel: "qwen-plus",
+        oss: { ...defaultOss }
+      }
+    },
+    {
+      id: DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID,
+      name: "OpenRouter Summary",
+      kind: "openrouter",
+      capabilities: ["summary"],
+      enabled: true,
+      openrouter: {
+        apiKey: "",
+        baseUrl: "https://openrouter.ai/api/v1",
+        summaryModel: "qwen/qwen-plus"
+      }
+    }
+  ];
+}
+
 const emptySettings: Settings = {
-  transcriptionProvider: "bailian",
-  bailianBaseUrl: "https://dashscope.aliyuncs.com",
-  bailianTranscriptionModel: "paraformer-v2",
-  bailianSummaryModel: "qwen-plus",
-  bailianOssPathPrefix: "open-recorder",
-  bailianOssSignedUrlTtlSeconds: 1800,
-  aliyunEndpoint: "https://tingwu.cn-beijing.aliyuncs.com",
-  aliyunSourceLanguage: "cn",
-  aliyunTranscriptionNormalizationEnabled: true,
-  aliyunTranscriptionParagraphEnabled: true,
-  aliyunTranscriptionPunctuationPredictionEnabled: true,
-  aliyunTranscriptionDisfluencyRemovalEnabled: false,
-  aliyunTranscriptionSpeakerDiarizationEnabled: true,
-  aliyunPollIntervalSeconds: 60,
-  aliyunMaxPollingMinutes: 180,
+  providers: createDefaultProviders(),
+  selectedTranscriptionProviderId: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID,
+  selectedSummaryProviderId: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID,
   defaultTemplateId: "meeting-default",
-  templates: [],
-  bailianApiKey: ""
+  templates: []
 };
 const initialSettings = normalizeSettings(emptySettings);
 
@@ -77,24 +148,99 @@ function createDefaultTemplate(): PromptTemplate {
   };
 }
 
+function supportsCapability(
+  provider: ProviderConfig,
+  capability: ProviderCapability
+): boolean {
+  return provider.enabled && provider.capabilities.includes(capability);
+}
+
 function normalizeSettings(input: Settings): Settings {
   const templates = input.templates.length > 0 ? input.templates : [createDefaultTemplate()];
   const defaultExists = templates.some((template) => template.id === input.defaultTemplateId);
-  const ttl = Number.isFinite(input.bailianOssSignedUrlTtlSeconds)
-    ? Math.min(86400, Math.max(60, Math.floor(input.bailianOssSignedUrlTtlSeconds)))
-    : 1800;
-  const aliyunPollIntervalSeconds = Number.isFinite(input.aliyunPollIntervalSeconds)
-    ? Math.min(300, Math.max(60, Math.floor(input.aliyunPollIntervalSeconds)))
-    : 60;
-  const aliyunMaxPollingMinutes = Number.isFinite(input.aliyunMaxPollingMinutes)
-    ? Math.min(720, Math.max(5, Math.floor(input.aliyunMaxPollingMinutes)))
-    : 180;
+  const providers = (input.providers.length > 0 ? input.providers : createDefaultProviders()).map(
+    (provider, index): ProviderConfig => {
+      const base: ProviderConfig = {
+        ...provider,
+        id: provider.id?.trim() || `provider-${index + 1}`,
+        name: provider.name?.trim() || provider.kind,
+        capabilities:
+          provider.capabilities.length > 0
+            ? provider.capabilities
+            : provider.kind === "aliyun_tingwu"
+              ? ["transcription"]
+              : provider.kind === "openrouter"
+                ? ["summary"]
+                : ["transcription", "summary"],
+        enabled: provider.enabled ?? true
+      };
+
+      if (base.kind === "bailian") {
+        const bailian = base.bailian ?? createDefaultProviders()[0].bailian!;
+        return {
+          ...base,
+          bailian: {
+            ...bailian,
+            oss: {
+              ...bailian.oss,
+              signedUrlTtlSeconds: Number.isFinite(bailian.oss.signedUrlTtlSeconds)
+                ? Math.min(86400, Math.max(60, Math.floor(bailian.oss.signedUrlTtlSeconds)))
+                : 1800
+            }
+          },
+          aliyunTingwu: undefined,
+          openrouter: undefined
+        };
+      }
+
+      if (base.kind === "aliyun_tingwu") {
+        const aliyun = base.aliyunTingwu ?? createDefaultProviders()[1].aliyunTingwu!;
+        return {
+          ...base,
+          aliyunTingwu: {
+            ...aliyun,
+            pollIntervalSeconds: Number.isFinite(aliyun.pollIntervalSeconds)
+              ? Math.min(300, Math.max(60, Math.floor(aliyun.pollIntervalSeconds)))
+              : 60,
+            maxPollingMinutes: Number.isFinite(aliyun.maxPollingMinutes)
+              ? Math.min(720, Math.max(5, Math.floor(aliyun.maxPollingMinutes)))
+              : 180,
+            oss: {
+              ...aliyun.oss,
+              signedUrlTtlSeconds: Number.isFinite(aliyun.oss.signedUrlTtlSeconds)
+                ? Math.min(86400, Math.max(60, Math.floor(aliyun.oss.signedUrlTtlSeconds)))
+                : 1800
+            }
+          },
+          bailian: undefined,
+          openrouter: undefined
+        };
+      }
+
+      const openrouter = base.openrouter ?? createDefaultProviders()[3].openrouter!;
+      return {
+        ...base,
+        openrouter,
+        bailian: undefined,
+        aliyunTingwu: undefined
+      };
+    }
+  );
+
+  const selectedTranscriptionProviderId =
+    providers.find((provider) => provider.id === input.selectedTranscriptionProviderId && supportsCapability(provider, "transcription"))
+      ?.id ??
+    providers.find((provider) => supportsCapability(provider, "transcription"))?.id ??
+    "";
+  const selectedSummaryProviderId =
+    providers.find((provider) => provider.id === input.selectedSummaryProviderId && supportsCapability(provider, "summary"))?.id ??
+    providers.find((provider) => supportsCapability(provider, "summary"))?.id ??
+    "";
 
   return {
-    ...input,
-    bailianOssSignedUrlTtlSeconds: ttl,
-    aliyunPollIntervalSeconds,
-    aliyunMaxPollingMinutes,
+    providers,
+    selectedTranscriptionProviderId,
+    selectedSummaryProviderId,
     templates,
     defaultTemplateId: defaultExists ? input.defaultTemplateId : templates[0].id
   };

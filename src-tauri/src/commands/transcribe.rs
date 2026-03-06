@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::{
     commands::recorder::merge_segments_with_ffmpeg,
     models::{
-        AudioSegmentMeta, Job, JobEnqueueResponse, JobKind, JobStatus, SessionStatus,
-        TranscriptSegment, TranscriptionProvider,
+        AudioSegmentMeta, Job, JobEnqueueResponse, JobKind, JobStatus, ProviderCapability,
+        ProviderKind, SessionStatus,
     },
     providers::{
         aliyun_oss::AliyunOssConfig,
@@ -34,10 +34,19 @@ fn parse_language_hints(raw: Option<&str>) -> Vec<String> {
     .unwrap_or_default()
 }
 
+fn provider_supports_transcription(
+    provider_capabilities: &[ProviderCapability],
+    enabled: bool,
+) -> bool {
+    enabled
+        && provider_capabilities
+            .iter()
+            .any(|item| *item == ProviderCapability::Transcription)
+}
+
 enum ActiveTranscriptionConfig {
     Bailian(BailianConfig),
     AliyunTingwu(AliyunTingwuConfig),
-    Mock,
 }
 
 #[tauri::command]
@@ -69,6 +78,7 @@ pub fn transcribe_enqueue(
             },
         );
 
+        storage.data.settings.normalize();
         let settings = storage.data.settings.clone();
         let (
             raw_segment_paths,
@@ -217,143 +227,175 @@ pub fn transcribe_enqueue(
 
         storage.save()?;
 
-        let config = match settings.transcription_provider.clone() {
-            TranscriptionProvider::Bailian => {
-                let api_key = settings.bailian_api_key.clone().unwrap_or_default();
+        let provider = settings
+            .providers
+            .iter()
+            .find(|provider| provider.id == settings.selected_transcription_provider_id)
+            .ok_or_else(|| {
+                format!(
+                    "selected transcription provider '{}' not found",
+                    settings.selected_transcription_provider_id
+                )
+            })?;
+
+        if !provider_supports_transcription(&provider.capabilities, provider.enabled) {
+            return Err(format!(
+                "selected transcription provider '{}' is disabled or not transcription-capable",
+                provider.name
+            ));
+        }
+
+        let config = match provider.kind {
+            ProviderKind::Bailian => {
+                let bailian = provider
+                    .bailian
+                    .as_ref()
+                    .ok_or_else(|| format!("provider '{}' missing bailian config", provider.name))?;
+
+                let api_key = bailian.api_key.clone().unwrap_or_default();
                 if api_key.trim().is_empty() {
-                    return Err("bailian transcription requires api key".to_string());
+                    return Err(format!(
+                        "provider '{}' requires API key for transcription",
+                        provider.name
+                    ));
                 }
 
-                let has_oss_credential = settings
-                    .bailian_oss_access_key_id
+                let has_oss_credential = bailian
+                    .oss
+                    .access_key_id
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .is_some()
-                    && settings
-                        .bailian_oss_access_key_secret
+                    && bailian
+                        .oss
+                        .access_key_secret
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .is_some()
-                    && settings
-                        .bailian_oss_endpoint
+                    && bailian
+                        .oss
+                        .endpoint
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .is_some()
-                    && settings
-                        .bailian_oss_bucket
+                    && bailian
+                        .oss
+                        .bucket
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .is_some();
 
                 ActiveTranscriptionConfig::Bailian(BailianConfig {
-                    base_url: settings.bailian_base_url.clone(),
+                    base_url: bailian.base_url.clone(),
                     api_key,
-                    transcription_model: settings.bailian_transcription_model.clone(),
-                    summary_model: settings.bailian_summary_model.clone(),
+                    transcription_model: bailian.transcription_model.clone(),
                     oss: has_oss_credential.then(|| AliyunOssConfig {
-                        access_key_id: settings
-                            .bailian_oss_access_key_id
-                            .clone()
-                            .unwrap_or_default(),
-                        access_key_secret: settings
-                            .bailian_oss_access_key_secret
-                            .clone()
-                            .unwrap_or_default(),
-                        endpoint: settings.bailian_oss_endpoint.clone().unwrap_or_default(),
-                        bucket: settings.bailian_oss_bucket.clone().unwrap_or_default(),
-                        path_prefix: settings.bailian_oss_path_prefix.clone(),
-                        signed_url_ttl_seconds: settings.bailian_oss_signed_url_ttl_seconds,
+                        access_key_id: bailian.oss.access_key_id.clone().unwrap_or_default(),
+                        access_key_secret: bailian.oss.access_key_secret.clone().unwrap_or_default(),
+                        endpoint: bailian.oss.endpoint.clone().unwrap_or_default(),
+                        bucket: bailian.oss.bucket.clone().unwrap_or_default(),
+                        path_prefix: bailian.oss.path_prefix.clone(),
+                        signed_url_ttl_seconds: bailian.oss.signed_url_ttl_seconds.clamp(60, 86_400),
                     }),
                 })
             }
-            TranscriptionProvider::AliyunTingwu => {
-                let has_full_credential = settings
-                    .aliyun_access_key_id
+            ProviderKind::AliyunTingwu => {
+                let aliyun = provider.aliyun_tingwu.as_ref().ok_or_else(|| {
+                    format!("provider '{}' missing aliyun_tingwu config", provider.name)
+                })?;
+
+                let has_full_credential = aliyun
+                    .access_key_id
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .is_some()
-                    && settings
-                        .aliyun_access_key_secret
+                    && aliyun
+                        .access_key_secret
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .is_some()
-                    && settings
-                        .aliyun_app_key
+                    && aliyun
+                        .app_key
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .is_some();
 
                 if !has_full_credential {
-                    return Err("aliyun tingwu transcription requires access key id, access key secret, and app key".to_string());
+                    return Err(format!(
+                        "provider '{}' requires access key id, access key secret, and app key",
+                        provider.name
+                    ));
                 }
 
-                let has_oss_credential = settings
-                    .bailian_oss_access_key_id
+                let has_oss_credential = aliyun
+                    .oss
+                    .access_key_id
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .is_some()
-                    && settings
-                        .bailian_oss_access_key_secret
+                    && aliyun
+                        .oss
+                        .access_key_secret
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .is_some()
-                    && settings
-                        .bailian_oss_endpoint
+                    && aliyun
+                        .oss
+                        .endpoint
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .is_some()
-                    && settings
-                        .bailian_oss_bucket
+                    && aliyun
+                        .oss
+                        .bucket
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .is_some();
 
                 ActiveTranscriptionConfig::AliyunTingwu(AliyunTingwuConfig {
-                    access_key_id: settings.aliyun_access_key_id.unwrap_or_default(),
-                    access_key_secret: settings.aliyun_access_key_secret.unwrap_or_default(),
-                    app_key: settings.aliyun_app_key.unwrap_or_default(),
-                    endpoint: settings.aliyun_endpoint.clone(),
-                    source_language: settings.aliyun_source_language.clone(),
-                    file_url_prefix: settings.aliyun_file_url_prefix.clone(),
+                    access_key_id: aliyun.access_key_id.clone().unwrap_or_default(),
+                    access_key_secret: aliyun.access_key_secret.clone().unwrap_or_default(),
+                    app_key: aliyun.app_key.clone().unwrap_or_default(),
+                    endpoint: aliyun.endpoint.clone(),
+                    source_language: aliyun.source_language.clone(),
+                    file_url_prefix: aliyun.file_url_prefix.clone(),
                     oss: has_oss_credential.then(|| AliyunOssConfig {
-                        access_key_id: settings
-                            .bailian_oss_access_key_id
-                            .clone()
-                            .unwrap_or_default(),
-                        access_key_secret: settings
-                            .bailian_oss_access_key_secret
-                            .clone()
-                            .unwrap_or_default(),
-                        endpoint: settings.bailian_oss_endpoint.clone().unwrap_or_default(),
-                        bucket: settings.bailian_oss_bucket.clone().unwrap_or_default(),
-                        path_prefix: settings.bailian_oss_path_prefix.clone(),
-                        signed_url_ttl_seconds: settings.bailian_oss_signed_url_ttl_seconds,
+                        access_key_id: aliyun.oss.access_key_id.clone().unwrap_or_default(),
+                        access_key_secret: aliyun.oss.access_key_secret.clone().unwrap_or_default(),
+                        endpoint: aliyun.oss.endpoint.clone().unwrap_or_default(),
+                        bucket: aliyun.oss.bucket.clone().unwrap_or_default(),
+                        path_prefix: aliyun.oss.path_prefix.clone(),
+                        signed_url_ttl_seconds: aliyun.oss.signed_url_ttl_seconds.clamp(60, 86_400),
                     }),
-                    language_hints: parse_language_hints(settings.aliyun_language_hints.as_deref()),
-                    transcription_normalization_enabled: settings
-                        .aliyun_transcription_normalization_enabled,
-                    transcription_paragraph_enabled: settings
-                        .aliyun_transcription_paragraph_enabled,
-                    transcription_punctuation_prediction_enabled: settings
-                        .aliyun_transcription_punctuation_prediction_enabled,
-                    transcription_disfluency_removal_enabled: settings
-                        .aliyun_transcription_disfluency_removal_enabled,
-                    transcription_speaker_diarization_enabled: settings
-                        .aliyun_transcription_speaker_diarization_enabled,
-                    poll_interval_seconds: settings.aliyun_poll_interval_seconds.clamp(60, 300),
-                    max_polling_minutes: settings.aliyun_max_polling_minutes.clamp(5, 720),
+                    language_hints: parse_language_hints(aliyun.language_hints.as_deref()),
+                    transcription_normalization_enabled: aliyun.transcription_normalization_enabled,
+                    transcription_paragraph_enabled: aliyun.transcription_paragraph_enabled,
+                    transcription_punctuation_prediction_enabled: aliyun
+                        .transcription_punctuation_prediction_enabled,
+                    transcription_disfluency_removal_enabled: aliyun
+                        .transcription_disfluency_removal_enabled,
+                    transcription_speaker_diarization_enabled: aliyun
+                        .transcription_speaker_diarization_enabled,
+                    poll_interval_seconds: aliyun.poll_interval_seconds.clamp(60, 300),
+                    max_polling_minutes: aliyun.max_polling_minutes.clamp(5, 720),
                 })
+            }
+            ProviderKind::Openrouter => {
+                return Err(format!(
+                    "provider '{}' does not support transcription",
+                    provider.name
+                ))
             }
         };
 
@@ -380,7 +422,6 @@ pub fn transcribe_enqueue(
                 &segment_meta,
                 &session_id_clone,
             ),
-            ActiveTranscriptionConfig::Mock => Ok(mock_transcript(&segment_paths, &segment_meta)),
         };
 
         // 原先转写完成后清理临时文件，现已保存为 exported_m4a_path，不予删除
@@ -417,32 +458,4 @@ pub fn transcribe_enqueue(
     });
 
     Ok(JobEnqueueResponse { job_id })
-}
-
-fn mock_transcript(
-    segment_paths: &[String],
-    segment_meta: &[AudioSegmentMeta],
-) -> Vec<TranscriptSegment> {
-    segment_paths
-        .iter()
-        .enumerate()
-        .map(|(index, path)| {
-            let start_ms = segment_meta
-                .iter()
-                .take(index)
-                .map(|value| value.duration_ms)
-                .sum::<u64>();
-            let duration_ms = segment_meta
-                .get(index)
-                .map(|value| value.duration_ms)
-                .unwrap_or(600_000);
-            let end_ms = start_ms + duration_ms;
-            TranscriptSegment {
-                start_ms,
-                end_ms,
-                text: format!("[mock] transcript from segment file: {path}"),
-                confidence: Some(0.8),
-            }
-        })
-        .collect()
 }

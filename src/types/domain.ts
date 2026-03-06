@@ -35,34 +35,66 @@ export type PromptTemplate = {
   variables: string[];
 };
 
-export type TranscriptionProvider = "bailian" | "aliyun_tingwu";
+export type ProviderKind = "bailian" | "aliyun_tingwu" | "openrouter";
+
+export type ProviderCapability = "transcription" | "summary";
+
+export type ProviderOssSettings = {
+  accessKeyId?: string;
+  accessKeySecret?: string;
+  endpoint?: string;
+  bucket?: string;
+  pathPrefix?: string;
+  signedUrlTtlSeconds: number;
+};
+
+export type BailianProviderSettings = {
+  apiKey?: string;
+  baseUrl: string;
+  transcriptionModel: string;
+  summaryModel: string;
+  oss: ProviderOssSettings;
+};
+
+export type AliyunTingwuProviderSettings = {
+  accessKeyId?: string;
+  accessKeySecret?: string;
+  appKey?: string;
+  endpoint: string;
+  sourceLanguage: string;
+  fileUrlPrefix?: string;
+  languageHints?: string;
+  transcriptionNormalizationEnabled: boolean;
+  transcriptionParagraphEnabled: boolean;
+  transcriptionPunctuationPredictionEnabled: boolean;
+  transcriptionDisfluencyRemovalEnabled: boolean;
+  transcriptionSpeakerDiarizationEnabled: boolean;
+  pollIntervalSeconds: number;
+  maxPollingMinutes: number;
+  oss: ProviderOssSettings;
+};
+
+export type OpenrouterProviderSettings = {
+  apiKey?: string;
+  baseUrl: string;
+  summaryModel: string;
+};
+
+export type ProviderConfig = {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  capabilities: ProviderCapability[];
+  enabled: boolean;
+  bailian?: BailianProviderSettings;
+  aliyunTingwu?: AliyunTingwuProviderSettings;
+  openrouter?: OpenrouterProviderSettings;
+};
 
 export type Settings = {
-  transcriptionProvider: TranscriptionProvider;
-  bailianApiKey?: string;
-  bailianBaseUrl: string;
-  bailianTranscriptionModel: string;
-  bailianSummaryModel: string;
-  bailianOssAccessKeyId?: string;
-  bailianOssAccessKeySecret?: string;
-  bailianOssEndpoint?: string;
-  bailianOssBucket?: string;
-  bailianOssPathPrefix?: string;
-  bailianOssSignedUrlTtlSeconds: number;
-  aliyunAccessKeyId?: string;
-  aliyunAccessKeySecret?: string;
-  aliyunAppKey?: string;
-  aliyunEndpoint: string;
-  aliyunSourceLanguage: string;
-  aliyunFileUrlPrefix?: string;
-  aliyunLanguageHints?: string;
-  aliyunTranscriptionNormalizationEnabled: boolean;
-  aliyunTranscriptionParagraphEnabled: boolean;
-  aliyunTranscriptionPunctuationPredictionEnabled: boolean;
-  aliyunTranscriptionDisfluencyRemovalEnabled: boolean;
-  aliyunTranscriptionSpeakerDiarizationEnabled: boolean;
-  aliyunPollIntervalSeconds: number;
-  aliyunMaxPollingMinutes: number;
+  providers: ProviderConfig[];
+  selectedTranscriptionProviderId: string;
+  selectedSummaryProviderId: string;
   defaultTemplateId: string;
   templates: PromptTemplate[];
 };

@@ -164,6 +164,123 @@ p {
 .settings-panel {
   display: grid;
   gap: 14px;
+  align-content: start;
+}
+
+.settings-subtabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+
+.settings-subtab-trigger {
+  width: auto;
+  min-height: 34px;
+  padding: 6px 16px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-1);
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  user-select: none;
+  transition: all 150ms ease;
+  white-space: nowrap;
+}
+
+.settings-subtab-trigger.active {
+  background: var(--panel);
+  color: var(--text-0);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.settings-subtab-trigger:hover:not(.active) {
+  color: var(--text-0);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.settings-tab-content {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-height: 360px;
+}
+
+.settings-save-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+
+.settings-inline-btn,
+.settings-save-btn {
+  width: auto;
+}
+
+.settings-save-btn {
+  min-width: 170px;
+}
+
+.provider-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.provider-toolbar label {
+  margin-top: 0;
+}
+
+.provider-editor {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  padding: 12px;
+  margin-top: 12px;
+}
+
+.provider-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.provider-editor-header button {
+  width: auto;
+  min-width: 72px;
+  min-height: 30px;
+  background: transparent;
+  color: var(--danger);
+  border: 1.5px solid var(--danger);
+  border-radius: var(--radius);
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.provider-editor-header button:hover {
+  background: #fee2e2;
+}
+
+.provider-empty-hint {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.provider-selectors {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .recorder-header {
@@ -1037,6 +1154,7 @@ pre {
 /* Focus ring */
 button:focus-visible,
 .tab-trigger:focus-visible,
+.settings-subtab-trigger:focus-visible,
 .session-item:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
@@ -1095,6 +1213,23 @@ button:focus-visible,
 
   .icon-button-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-subtabs {
+    width: 100%;
+  }
+
+  .settings-save-row {
+    justify-content: stretch;
+  }
+
+  .settings-inline-btn,
+  .settings-save-btn {
+    width: 100%;
+  }
+
+  .provider-toolbar {
+    grid-template-columns: 1fr;
   }
 
   .template-actions {
