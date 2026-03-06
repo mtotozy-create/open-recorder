@@ -35,14 +35,19 @@ body {
 
 #root {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .app-shell {
-  max-width: 1240px;
+  max-width: 100%;
+  width: 100%;
   margin: 0 auto;
   padding: 16px;
   display: grid;
   gap: 14px;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1;
 }
 
 .panel {
@@ -150,7 +155,12 @@ p {
 }
 
 /* Recorder Panel */
-.recorder-panel,
+.recorder-panel {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
 .settings-panel {
   display: grid;
   gap: 14px;
@@ -360,7 +370,8 @@ p {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
 }
 
 .sessions-layout.list-collapsed {
@@ -369,10 +380,10 @@ p {
 
 .sessions-sidebar {
   min-width: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px;
-  align-self: start;
 }
 
 .sessions-sidebar.collapsed {
@@ -452,6 +463,7 @@ p {
   min-width: 0;
   display: grid;
   gap: 12px;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .session-detail-panel {
@@ -577,14 +589,17 @@ p {
 .session-results-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .session-result-panel {
-  min-height: 300px;
-  display: grid;
-  align-content: start;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  overflow: hidden;
 }
 
 .session-result-header {
@@ -621,10 +636,11 @@ p {
   margin: 4px 0 0;
   padding: 0;
   list-style: none;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 5px;
-  max-height: 620px;
-  overflow: auto;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .session-item {
@@ -727,10 +743,11 @@ p {
   margin: 0;
   padding: 0;
   list-style: none;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  max-height: 430px;
-  overflow: auto;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .transcript-item {
@@ -759,13 +776,15 @@ p {
   color: var(--text-1);
   line-height: 1.6;
   overflow-wrap: anywhere;
+  overflow-y: auto;
+  flex: 1;
 }
 
-.summary-markdown-view > :first-child {
+.summary-markdown-view> :first-child {
   margin-top: 0;
 }
 
-.summary-markdown-view > :last-child {
+.summary-markdown-view> :last-child {
   margin-bottom: 0;
 }
 
@@ -808,7 +827,7 @@ p {
   padding-left: 1.25rem;
 }
 
-.summary-markdown-view li + li {
+.summary-markdown-view li+li {
   margin-top: 0.25rem;
 }
 

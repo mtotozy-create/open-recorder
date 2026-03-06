@@ -74,7 +74,7 @@ pub fn transcribe_with_bailian(
     let endpoint = build_endpoint(&config.base_url, BAILIAN_ASR_PATH);
 
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
+        .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|error| format!("failed to create http client: {error}"))?;
 
@@ -328,7 +328,7 @@ pub fn summarize_with_bailian(
     let endpoint = build_endpoint(&config.base_url, BAILIAN_COMPATIBLE_CHAT_PATH);
 
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
+        .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|error| format!("failed to create http client: {error}"))?;
 

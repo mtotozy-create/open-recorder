@@ -85,6 +85,8 @@ export type AudioSegmentMeta = {
   durationMs: number;
   sampleRate: number;
   channels: number;
+  format: string;
+  fileSizeBytes: number;
 };
 
 export type SessionDetail = SessionSummary & {
@@ -94,8 +96,14 @@ export type SessionDetail = SessionSummary & {
   sampleRate: number;
   channels: number;
   exportedM4aPath?: string;
+  exportedM4aSize?: number;
+  exportedM4aCreatedAt?: string;
   exportedWavPath?: string;
+  exportedWavSize?: number;
+  exportedWavCreatedAt?: string;
   exportedMp3Path?: string;
+  exportedMp3Size?: number;
+  exportedMp3CreatedAt?: string;
   transcript: TranscriptSegment[];
   summary?: SummaryResult;
 };

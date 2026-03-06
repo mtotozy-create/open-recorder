@@ -267,6 +267,8 @@ fn close_open_segment(
         }
     };
 
+    let file_size_bytes = fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
+
     let meta = AudioSegmentMeta {
         path: final_path.clone(),
         sequence: open_segment.sequence,
@@ -276,6 +278,7 @@ fn close_open_segment(
         sample_rate: shared.sample_rate,
         channels: shared.channels,
         format: final_format,
+        file_size_bytes,
     };
 
     let mut state = storage
@@ -644,8 +647,14 @@ pub fn recorder_start(
                 channels: actual_channels,
                 elapsed_ms: 0,
                 exported_wav_path: None,
+                exported_wav_size: None,
+                exported_wav_created_at: None,
                 exported_mp3_path: None,
+                exported_mp3_size: None,
+                exported_mp3_created_at: None,
                 exported_m4a_path: None,
+                exported_m4a_size: None,
+                exported_m4a_created_at: None,
                 transcript: vec![],
                 summary: None,
             },
@@ -927,15 +936,22 @@ pub fn recorder_export(
             .sessions
             .get_mut(&session_id)
             .ok_or_else(|| "session not found".to_string())?;
+        let file_size_bytes = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
         match format.as_str() {
             "wav" => {
                 session.exported_wav_path = Some(output_path.to_string_lossy().to_string());
+                session.exported_wav_size = Some(file_size_bytes);
+                session.exported_wav_created_at = Some(now_iso());
             }
             "m4a" => {
                 session.exported_m4a_path = Some(output_path.to_string_lossy().to_string());
+                session.exported_m4a_size = Some(file_size_bytes);
+                session.exported_m4a_created_at = Some(now_iso());
             }
             _ => {
                 session.exported_mp3_path = Some(output_path.to_string_lossy().to_string());
+                session.exported_mp3_size = Some(file_size_bytes);
+                session.exported_mp3_created_at = Some(now_iso());
             }
         }
         session.updated_at = now_iso();

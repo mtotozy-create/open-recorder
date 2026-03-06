@@ -164,15 +164,16 @@ pub fn transcribe_enqueue(
                 sample_rate,
                 channels,
                 format,
+                file_size_bytes: std::fs::metadata(&exported_path).map(|m| m.len()).unwrap_or(0),
             }];
             (vec![exported_path], exported_meta)
         } else if raw_segment_paths.len() <= 1 {
             (raw_segment_paths, raw_segment_meta)
         } else {
             // NOTE: 将多个分片合并为单一文件再转写，避免串行多次 API 调用导致等待过长
-            // 合并后的文件放在 session audio 目录下，转写完成后无需保留（不影响原始分片）
-            let audio_dir = storage.session_audio_dir(&session_id)?;
-            let merged_path = audio_dir.join("_merged_for_transcription.m4a");
+            // NOTE: 将多个分片合并为单一文件再转写，避免串行多次 API 调用导致等待过长
+            let export_dir = storage.session_export_dir(&session_id)?;
+            let merged_path = export_dir.join(format!("recording-{}.m4a", session_id));
 
             match merge_segments_with_ffmpeg(&raw_segment_paths, &merged_path, "m4a") {
                 Ok(()) => {
@@ -197,8 +198,13 @@ pub fn transcribe_enqueue(
                             .unwrap_or(48000),
                         channels: raw_segment_meta.first().map(|m| m.channels).unwrap_or(1),
                         format: "m4a".to_string(),
+                        file_size_bytes: std::fs::metadata(&merged_path).map(|m| m.len()).unwrap_or(0),
                     }];
                     let merged_path_str = merged_path.to_string_lossy().to_string();
+                    if let Some(session) = storage.data.sessions.get_mut(&session_id) {
+                        session.exported_m4a_path = Some(merged_path_str.clone());
+                        session.exported_m4a_size = Some(merged_meta[0].file_size_bytes);
+                    }
                     (vec![merged_path_str], merged_meta)
                 }
                 Err(merge_err) => {
@@ -377,16 +383,7 @@ pub fn transcribe_enqueue(
             ActiveTranscriptionConfig::Mock => Ok(mock_transcript(&segment_paths, &segment_meta)),
         };
 
-        // 转写完成后清理合并的临时文件（若存在）
-        // NOTE: 仅清理名为 _merged_for_transcription.m4a 的临时文件
-        for path_str in &segment_paths {
-            if path_str.ends_with("/_merged_for_transcription.m4a")
-                || path_str.ends_with("\\_merged_for_transcription.m4a")
-                || path_str == "_merged_for_transcription.m4a"
-            {
-                let _ = std::fs::remove_file(path_str);
-            }
-        }
+        // 原先转写完成后清理临时文件，现已保存为 exported_m4a_path，不予删除
 
         // 回写结果到 storage
         if let Ok(mut storage) = storage_arc.lock() {

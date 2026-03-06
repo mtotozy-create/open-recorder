@@ -57,6 +57,14 @@ function formatDuration(ms: number): string {
     : `${pad(minutes)}:${pad(seconds)}`;
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${Number.parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
+}
+
 function formatSegmentTime(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -451,10 +459,55 @@ function SessionsTab({
                   <p>
                     <strong>{t("recorder.quality")}:</strong> {activeSession.qualityPreset}
                   </p>
-                  <p>
-                    <strong>{t("sessionDetail.audioSegmentPaths")}:</strong>{" "}
-                    {activeSession.audioSegments.length > 0 ? activeSession.audioSegments[0] : "-"}
-                  </p>
+                  {activeSession.audioSegmentMeta && activeSession.audioSegmentMeta.length > 0 ? (
+                    <div className="session-meta-full-width" style={{ gridColumn: "1 / -1", marginTop: "16px" }}>
+                      <h4 style={{ marginBottom: "12px", color: "var(--text-primary)" }}>{t("sessionDetail.audioSegmentsDetail")}</h4>
+                      <ul className="segment-meta-list" style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" }}>
+                        {activeSession.audioSegmentMeta.map((meta, index) => (
+                          <li key={`${meta.sequence}-${index}`} style={{ background: "var(--bg-secondary)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color, #e5e7eb)" }}>
+                            <p style={{ margin: "0 0 8px 0", wordBreak: "break-all", fontSize: "0.9em", color: "var(--text-primary)" }}>
+                              <strong>{t("sessionDetail.audioSegmentPath")}:</strong> {meta.path}
+                            </p>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", fontSize: "0.85em", color: "var(--text-secondary)" }}>
+                              <span><strong>{t("sessionDetail.audioSegmentSequence")}:</strong> {meta.sequence}</span>
+                              <span><strong>{t("sessionDetail.audioSegmentDuration")}:</strong> {formatDuration(meta.durationMs)}</span>
+                              <span><strong>{t("sessionDetail.audioSegmentSampleRate")}:</strong> {meta.sampleRate}Hz</span>
+                              <span><strong>{t("sessionDetail.audioSegmentChannels")}:</strong> {meta.channels}</span>
+                              {meta.fileSizeBytes !== undefined && <span><strong>{t("sessionDetail.audioSegmentFileSize")}:</strong> {formatFileSize(meta.fileSizeBytes)}</span>}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p style={{ gridColumn: "1 / -1", wordBreak: "break-all" }}>
+                      <strong>{t("sessionDetail.audioSegmentPaths")}:</strong>{" "}
+                      {activeSession.audioSegments.length > 0 ? activeSession.audioSegments.join(", ") : "-"}
+                    </p>
+                  )}
+
+                  {(activeSession.exportedM4aPath || activeSession.exportedMp3Path || activeSession.exportedWavPath) && (
+                    <div className="session-meta-full-width" style={{ gridColumn: "1 / -1", marginTop: "16px" }}>
+                      <h4 style={{ marginBottom: "12px", color: "var(--text-primary)" }}>{t("sessionDetail.mergedFile")}</h4>
+                      <ul className="segment-meta-list" style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" }}>
+                        {[
+                          { path: activeSession.exportedM4aPath, size: activeSession.exportedM4aSize, createdAt: activeSession.exportedM4aCreatedAt },
+                          { path: activeSession.exportedMp3Path, size: activeSession.exportedMp3Size, createdAt: activeSession.exportedMp3CreatedAt },
+                          { path: activeSession.exportedWavPath, size: activeSession.exportedWavSize, createdAt: activeSession.exportedWavCreatedAt },
+                        ].filter((file) => file.path).map((file, index) => (
+                          <li key={`merged-${index}`} style={{ background: "var(--bg-secondary)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color, #e5e7eb)" }}>
+                            <p style={{ margin: "0 0 8px 0", wordBreak: "break-all", fontSize: "0.9em", color: "var(--text-primary)" }}>
+                              <strong>{t("sessionDetail.audioSegmentPath")}:</strong> {file.path}
+                            </p>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", fontSize: "0.85em", color: "var(--text-secondary)" }}>
+                              {file.size !== undefined && file.size > 0 && <span><strong>{t("sessionDetail.audioSegmentFileSize")}:</strong> {formatFileSize(file.size)}</span>}
+                              {file.createdAt && <span><strong>{t("sessionDetail.audioSegmentCreatedAt")}:</strong> {formatDateTime(file.createdAt)}</span>}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -534,7 +587,7 @@ function SessionsTab({
                               <span>{Math.round(segment.confidence * 100)}%</span>
                             )}
                           </div>
-                          <p>{segment.text}</p>
+                          <p style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{segment.text}</p>
                         </li>
                       ))}
                     </ul>

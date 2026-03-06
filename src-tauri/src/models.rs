@@ -87,6 +87,7 @@ pub struct AudioSegmentMeta {
     pub channels: u16,
     /// 分段文件格式："wav" 或 "m4a"
     pub format: String,
+    pub file_size_bytes: u64,
 }
 
 impl Default for AudioSegmentMeta {
@@ -100,6 +101,7 @@ impl Default for AudioSegmentMeta {
             sample_rate: 0,
             channels: 0,
             format: "wav".to_string(),
+            file_size_bytes: 0,
         }
     }
 }
@@ -194,8 +196,14 @@ pub struct Session {
     pub channels: u16,
     pub elapsed_ms: u64,
     pub exported_wav_path: Option<String>,
+    pub exported_wav_size: Option<u64>,
+    pub exported_wav_created_at: Option<String>,
     pub exported_mp3_path: Option<String>,
+    pub exported_mp3_size: Option<u64>,
+    pub exported_mp3_created_at: Option<String>,
     pub exported_m4a_path: Option<String>,
+    pub exported_m4a_size: Option<u64>,
+    pub exported_m4a_created_at: Option<String>,
     pub transcript: Vec<TranscriptSegment>,
     pub summary: Option<SummaryResult>,
 }
@@ -216,8 +224,14 @@ impl Default for Session {
             channels: 0,
             elapsed_ms: 0,
             exported_wav_path: None,
+            exported_wav_size: None,
+            exported_wav_created_at: None,
             exported_mp3_path: None,
+            exported_mp3_size: None,
+            exported_mp3_created_at: None,
             exported_m4a_path: None,
+            exported_m4a_size: None,
+            exported_m4a_created_at: None,
             transcript: vec![],
             summary: None,
         }
