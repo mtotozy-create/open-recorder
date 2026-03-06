@@ -5,12 +5,12 @@ mod state;
 mod storage;
 
 use commands::{
-    job::job_get,
+    job::{job_get, session_jobs},
     recorder::{
         recorder_export, recorder_pause, recorder_resume, recorder_start, recorder_status,
         recorder_stop,
     },
-    session::{session_get, session_list, session_rename},
+    session::{session_get, session_list, session_rename, session_delete},
     settings::{settings_get, settings_update},
     summary::summary_enqueue,
     transcribe::transcribe_enqueue,
@@ -32,9 +32,11 @@ pub fn run() {
             session_list,
             session_get,
             session_rename,
+            session_delete,
             transcribe_enqueue,
             summary_enqueue,
             job_get,
+            session_jobs,
             settings_get,
             settings_update,
         ])

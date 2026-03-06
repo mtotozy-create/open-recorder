@@ -18,7 +18,7 @@ const enUS = {
   "recorder.quality.hd": "HD (24k mono)",
   "recorder.quality.hifi": "Hi-Fi (48k stereo)",
   "recorder.waveform": "Live Waveform",
-  "recorder.segmentLength": "Segment length: 10 minutes",
+  "recorder.segmentLength": "Segment length: 2 minutes",
   "recorder.exportWav": "Export WAV",
   "recorder.exportMp3": "Export MP3",
 
@@ -29,6 +29,8 @@ const enUS = {
   "sessions.hideList": "Hide List",
   "sessions.showList": "Show List",
   "sessions.currentSession": "Current Session",
+  "sessions.delete": "Delete Session",
+  "sessions.deleteConfirm": "Are you sure you want to delete this session? This action cannot be undone.",
 
   "sessionDetail.title": "Session Detail",
   "sessionDetail.noSelection": "No session selected.",
@@ -51,6 +53,14 @@ const enUS = {
   "sessionDetail.actionItems": "Action Items",
   "sessionDetail.risks": "Risks",
   "sessionDetail.timeline": "Timeline",
+  "sessionDetail.transcriptionTab": "Transcription & Summary",
+  "sessionDetail.metaTab": "Session Detail",
+  "sessionDetail.tasksTab": "Tasks",
+  "sessionDetail.tasksEmpty": "No tasks executed.",
+  "sessionDetail.taskKind": "Type",
+  "sessionDetail.taskStatus": "Status",
+  "sessionDetail.taskTime": "Update Time",
+  "sessionDetail.taskError": "Error Message",
 
   "settings.title": "Settings",
   "settings.subtitle": "Configure language, transcription provider, and model settings.",
@@ -121,6 +131,8 @@ const enUS = {
   "status.recordingResumed": "Recording resumed",
   "status.recordingStopped": "Recording stopped",
   "status.transcriptionFinished": "Transcription finished. job={jobId}",
+  "status.transcriptionRunning": "Transcribing… {elapsed}",
+  "status.summaryRunning": "Generating summary… {elapsed}",
   "status.summaryFinished": "Summary finished. job={jobId}",
   "status.settingsSaved": "Settings saved",
   "status.settingsLoadFailed": "Failed to load settings: {error}",
@@ -138,7 +150,12 @@ const enUS = {
   "status.sessionRenameFinished": "Session name saved",
   "status.sessionRenameFailed": "Failed to rename session: {error}",
   "status.pauseFailed": "Failed to pause: {error}",
-  "status.resumeFailed": "Failed to resume: {error}"
+  "status.resumeFailed": "Failed to resume: {error}",
+  "status.sessionDeleteFinished": "Session deleted",
+  "status.sessionDeleteFailed": "Failed to delete session: {error}",
+
+  "action.cancel": "Cancel",
+  "action.confirm": "Confirm"
 } as const;
 
 export type TranslationKey = keyof typeof enUS;
@@ -161,7 +178,7 @@ const zhCN: Record<TranslationKey, string> = {
   "recorder.quality.hd": "高清（24k 单声道）",
   "recorder.quality.hifi": "高保真（48k 双声道）",
   "recorder.waveform": "实时波形",
-  "recorder.segmentLength": "切片时长：10 分钟",
+  "recorder.segmentLength": "切片时长：2 分钟",
   "recorder.exportWav": "导出 WAV",
   "recorder.exportMp3": "导出 MP3",
 
@@ -172,6 +189,8 @@ const zhCN: Record<TranslationKey, string> = {
   "sessions.hideList": "收起列表",
   "sessions.showList": "展开列表",
   "sessions.currentSession": "当前会话",
+  "sessions.delete": "删除会话",
+  "sessions.deleteConfirm": "确认要删除此会话及其音频文件吗？此操作无法撤销。",
 
   "sessionDetail.title": "会话详情",
   "sessionDetail.noSelection": "尚未选择会话。",
@@ -194,6 +213,14 @@ const zhCN: Record<TranslationKey, string> = {
   "sessionDetail.actionItems": "行动项",
   "sessionDetail.risks": "风险",
   "sessionDetail.timeline": "时间线",
+  "sessionDetail.transcriptionTab": "转写与纪要",
+  "sessionDetail.metaTab": "会话详情",
+  "sessionDetail.tasksTab": "任务详情",
+  "sessionDetail.tasksEmpty": "无执行任务",
+  "sessionDetail.taskKind": "任务类型",
+  "sessionDetail.taskStatus": "状态",
+  "sessionDetail.taskTime": "更新时间",
+  "sessionDetail.taskError": "错误信息",
 
   "settings.title": "设置",
   "settings.subtitle": "配置界面语言、转写 Provider 与模型参数。",
@@ -261,6 +288,8 @@ const zhCN: Record<TranslationKey, string> = {
   "status.recordingResumed": "录音已继续",
   "status.recordingStopped": "录音已停止",
   "status.transcriptionFinished": "转写完成，任务号：{jobId}",
+  "status.transcriptionRunning": "正在转写… {elapsed}",
+  "status.summaryRunning": "正在生成纪要… {elapsed}",
   "status.summaryFinished": "纪要生成完成，任务号：{jobId}",
   "status.settingsSaved": "设置已保存",
   "status.settingsLoadFailed": "加载设置失败：{error}",
@@ -278,7 +307,12 @@ const zhCN: Record<TranslationKey, string> = {
   "status.sessionRenameFinished": "会话名称已保存",
   "status.sessionRenameFailed": "会话重命名失败：{error}",
   "status.pauseFailed": "暂停失败：{error}",
-  "status.resumeFailed": "继续失败：{error}"
+  "status.resumeFailed": "继续失败：{error}",
+  "status.sessionDeleteFinished": "会话已删除",
+  "status.sessionDeleteFailed": "删除会话失败：{error}",
+
+  "action.cancel": "取消",
+  "action.confirm": "确定"
 };
 
 export const messages: Record<Locale, Record<TranslationKey, string>> = {

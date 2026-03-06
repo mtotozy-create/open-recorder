@@ -66,3 +66,27 @@ pub fn session_rename(
     storage.save()?;
     Ok(())
 }
+
+#[tauri::command]
+pub fn session_delete(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+
+    let session = storage
+        .data
+        .sessions
+        .remove(&session_id)
+        .ok_or_else(|| "session not found".to_string())?;
+
+    for path in session.audio_segments {
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // also remove jobs matching this session_id
+    storage.data.jobs.retain(|_, job| job.session_id != session_id);
+    
+    storage.save()?;
+    Ok(())
+}

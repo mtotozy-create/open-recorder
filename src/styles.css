@@ -358,7 +358,7 @@ p {
 /* Sessions */
 .sessions-layout {
   display: grid;
-  gap: 16px;
+  gap: 12px;
   grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
   align-items: start;
 }
@@ -451,12 +451,48 @@ p {
 .sessions-main {
   min-width: 0;
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 .session-detail-panel {
   display: grid;
-  gap: 12px;
+  gap: 10px;
+}
+
+.session-detail-tabs-header {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin: -16px -16px 10px -16px;
+  padding: 0 16px;
+  background: var(--bg-0);
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+}
+
+.session-detail-tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 12px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-1);
+  cursor: pointer;
+  transition: all 150ms ease;
+  border-radius: 0;
+}
+
+.session-detail-tab-btn:hover {
+  color: var(--text-0);
+  background: transparent;
+}
+
+.session-detail-tab-btn.active {
+  color: var(--primary);
+  font-weight: 600;
+  border-bottom-color: var(--primary);
+  background: transparent;
 }
 
 .session-meta-grid {
@@ -475,17 +511,80 @@ p {
   gap: 10px;
 }
 
+.session-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  width: auto;
+  min-height: 32px;
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 转写/纪要 loading 按钮 */
+.action-btn.loading {
+  opacity: 0.75;
+  cursor: wait;
+  pointer-events: none;
+}
+
+/* 旋转 spinner */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.summary-template-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.summary-template-inline span {
+  font-size: 0.82rem;
+  color: var(--text-0);
+  white-space: nowrap;
+}
+
+.summary-template-inline select {
+  width: auto;
+  min-height: 32px;
+  padding: 4px 28px 4px 8px;
+  margin-top: 0;
+  font-size: 0.82rem;
+}
+
 .session-results-grid {
   display: grid;
-  gap: 16px;
+  gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .session-result-panel {
-  min-height: 360px;
+  min-height: 300px;
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: 8px;
 }
 
 .session-result-header {
@@ -729,6 +828,10 @@ button:disabled {
   opacity: 0.45;
 }
 
+.session-detail-tab-btn {
+  min-height: auto;
+}
+
 input:focus,
 textarea:focus,
 select:focus {
@@ -744,9 +847,9 @@ label {
   font-weight: 500;
 }
 
-label > input,
-label > textarea,
-label > select {
+label>input,
+label>textarea,
+label>select {
   margin-top: 5px;
 }
 
@@ -834,6 +937,7 @@ button:focus-visible,
 
 /* Responsive */
 @media (max-width: 960px) {
+
   .sessions-layout,
   .sessions-layout.list-collapsed {
     grid-template-columns: 1fr;
@@ -885,6 +989,7 @@ button:focus-visible,
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {
@@ -892,4 +997,45 @@ button:focus-visible,
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Modal styles */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.modal-content {
+  background: var(--bg-0);
+  padding: 24px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  max-width: 400px;
+  width: 90%;
+  text-align: center;
+}
+
+.modal-content h3 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: var(--text-0);
+  font-size: 1.25rem;
+}
+
+.modal-content p {
+  color: var(--text-1);
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
 }

@@ -60,6 +60,10 @@ export async function renameSession(sessionId: string, name: string): Promise<vo
   await invoke("session_rename", { sessionId, name });
 }
 
+export async function deleteSession(sessionId: string): Promise<void> {
+  await invoke("session_delete", { sessionId });
+}
+
 export async function enqueueTranscription(sessionId: string): Promise<string> {
   const response = await invoke<{ jobId: string }>("transcribe_enqueue", {
     sessionId
@@ -77,6 +81,10 @@ export async function enqueueSummary(sessionId: string, templateId?: string): Pr
 
 export async function getJob(jobId: string): Promise<JobInfo> {
   return invoke("job_get", { jobId });
+}
+
+export async function getSessionJobs(sessionId: string): Promise<JobInfo[]> {
+  return invoke("session_jobs", { sessionId });
 }
 
 export async function getSettings(): Promise<Settings> {

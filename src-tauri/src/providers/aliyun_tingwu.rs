@@ -61,25 +61,36 @@ pub fn transcribe_with_aliyun_tingwu(
 
     let mut transcript = Vec::with_capacity(segment_paths.len());
     for (index, file_url) in file_urls.iter().enumerate() {
-        let mut input = json!({
+        let input = json!({
             "SourceLanguage": config.source_language,
             "TaskKey": format!("open-recorder-{}", Uuid::new_v4()),
-            "FileUrl": file_url,
-            "Transcription": {
-                "NormalizationEnabled": config.transcription_normalization_enabled,
-                "ParagraphEnabled": config.transcription_paragraph_enabled,
-                "PunctuationPredictionEnabled": config.transcription_punctuation_prediction_enabled,
-                "DisfluencyRemovalEnabled": config.transcription_disfluency_removal_enabled,
-                "SpeakerDiarizationEnabled": config.transcription_speaker_diarization_enabled
-            }
+            "FileUrl": file_url
         });
+
+        // 通义听悟 v2 API 要求 Transcription 配置在 Parameters 下
+        let mut transcription_params = json!({});
+        if config.transcription_disfluency_removal_enabled {
+            transcription_params["DisfluencyRemovalEnabled"] = json!(true);
+        }
+        if config.transcription_speaker_diarization_enabled {
+            transcription_params["DiarizationEnabled"] = json!(true);
+            transcription_params["Diarization"] = json!({
+                "SpeakerCount": 0
+            });
+        }
+
+        let mut parameters = json!({
+            "Transcription": transcription_params
+        });
+
         if !config.language_hints.is_empty() {
-            input["LanguageHints"] = json!(config.language_hints);
+            parameters["LanguageHints"] = json!(config.language_hints);
         }
 
         let create_body = json!({
             "AppKey": config.app_key,
-            "Input": input
+            "Input": input,
+            "Parameters": parameters
         });
 
         let create_url = format!("{endpoint}{create_path}?{create_query}");
@@ -326,10 +337,14 @@ fn extract_task_result_ref(payload: &Value) -> Option<String> {
     extract_string(
         payload,
         &[
+            "/Data/Result/TranscriptionUrl",
+            "/Data/result/transcriptionUrl",
             "/Data/Result/Transcription",
             "/Data/result/transcription",
             "/Data/Result",
             "/Data/result",
+            "/Result/TranscriptionUrl",
+            "/result/transcriptionUrl",
             "/Result/Transcription",
             "/result/transcription",
             "/Data/Result/TranscriptionResult",

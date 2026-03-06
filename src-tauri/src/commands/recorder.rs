@@ -13,7 +13,7 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     SampleFormat, SampleRate,
 };
-use hound::{SampleFormat as WavSampleFormat, WavReader, WavSpec, WavWriter};
+use hound::{SampleFormat as WavSampleFormat, WavSpec, WavWriter};
 use tauri::State;
 use uuid::Uuid;
 
@@ -26,7 +26,8 @@ use crate::{
     storage::Storage,
 };
 
-const SEGMENT_DURATION_SECS: u64 = 600;
+// NOTE: 分段时长 2 分钟，降低单段文件大小
+const SEGMENT_DURATION_SECS: u64 = 120;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct QualityConfig {
@@ -98,6 +99,87 @@ fn quality_config(preset: &RecordingQualityPreset) -> QualityConfig {
             sample_rate: 48_000,
             channels: 2,
         },
+    }
+}
+
+/// 根据音质等级返回 AAC 编码比特率
+fn aac_bitrate_for_quality(sample_rate: u32, channels: u16) -> &'static str {
+    match (sample_rate, channels) {
+        (48_000, 2) => "192k",  // HiFi
+        (24_000, _) => "96k",   // HD
+        _ => "64k",             // Standard
+    }
+}
+
+/// 使用 macOS 原生 afconvert 或 FFmpeg 将 WAV 分段转码为 M4A (AAC)
+/// 优先使用 afconvert（macOS 自带），不可用时回退到 ffmpeg
+fn encode_wav_to_m4a(wav_path: &Path, bitrate: &str) -> Result<PathBuf, String> {
+    let m4a_path = wav_path.with_extension("m4a");
+    let wav_str = wav_path.to_string_lossy();
+    let m4a_str = m4a_path.to_string_lossy();
+
+    // 将 bitrate 从 "64k" 格式转为 afconvert 需要的纯数字格式（单位 bps）
+    let bitrate_bps = bitrate
+        .trim_end_matches('k')
+        .parse::<u32>()
+        .unwrap_or(64)
+        * 1000;
+
+    // 优先尝试 afconvert（macOS 自带）
+    let afconvert_result = Command::new("afconvert")
+        .args([
+            wav_str.as_ref(),
+            m4a_str.as_ref(),
+            "-d",
+            "aac",
+            "-f",
+            "m4af",
+            "-b",
+            &bitrate_bps.to_string(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    let success = match afconvert_result {
+        Ok(status) if status.success() => true,
+        _ => {
+            // afconvert 不可用或失败，回退到 ffmpeg
+            let ffmpeg_result = Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-i",
+                    wav_str.as_ref(),
+                    "-codec:a",
+                    "aac",
+                    "-b:a",
+                    bitrate,
+                    m4a_str.as_ref(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+
+            match ffmpeg_result {
+                Ok(status) if status.success() => true,
+                Ok(status) => {
+                    return Err(format!("ffmpeg m4a encode exited with status: {status}"));
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "both afconvert and ffmpeg unavailable for m4a encode: {error}"
+                    ));
+                }
+            }
+        }
+    };
+
+    if success {
+        // 转码成功，删除原始 WAV
+        let _ = fs::remove_file(wav_path);
+        Ok(m4a_path)
+    } else {
+        Err("m4a encode failed".to_string())
     }
 }
 
@@ -178,14 +260,26 @@ fn close_open_segment(
     let finished_elapsed_ms = elapsed_ms(shared);
     let duration_ms = finished_elapsed_ms.saturating_sub(open_segment.start_elapsed_ms);
 
+    // WAV 写入完成后，转码为 M4A
+    let bitrate = aac_bitrate_for_quality(shared.sample_rate, shared.channels);
+    let wav_path = Path::new(&open_segment.path);
+    let (final_path, final_format) = match encode_wav_to_m4a(wav_path, bitrate) {
+        Ok(m4a_path) => (m4a_path.to_string_lossy().to_string(), "m4a".to_string()),
+        Err(_) => {
+            // 转码失败时保留 WAV 作为降级
+            (open_segment.path.clone(), "wav".to_string())
+        }
+    };
+
     let meta = AudioSegmentMeta {
-        path: open_segment.path.clone(),
+        path: final_path.clone(),
         sequence: open_segment.sequence,
         started_at: open_segment.started_at,
         ended_at: now_iso(),
         duration_ms,
         sample_rate: shared.sample_rate,
         channels: shared.channels,
+        format: final_format,
     };
 
     let mut state = storage
@@ -555,6 +649,7 @@ pub fn recorder_start(
                 elapsed_ms: 0,
                 exported_wav_path: None,
                 exported_mp3_path: None,
+                exported_m4a_path: None,
                 transcript: vec![],
                 summary: None,
             },
@@ -786,8 +881,8 @@ pub fn recorder_export(
     state: State<'_, AppState>,
 ) -> Result<RecorderExportResponse, String> {
     let format = format.trim().to_lowercase();
-    if format != "wav" && format != "mp3" {
-        return Err("unsupported export format; expected wav|mp3".to_string());
+    if format != "wav" && format != "mp3" && format != "m4a" {
+        return Err("unsupported export format; expected wav|mp3|m4a".to_string());
     }
 
     let (segments, export_dir) = {
@@ -810,15 +905,19 @@ pub fn recorder_export(
     };
 
     let base_name = format!("recording-{session_id}");
-    let wav_path = export_dir.join(format!("{base_name}.wav"));
 
     let output_path = if format == "wav" {
-        merge_segments_to_wav(&segments, &wav_path)?;
-        wav_path.clone()
+        let wav_path = export_dir.join(format!("{base_name}.wav"));
+        merge_segments_with_ffmpeg(&segments, &wav_path, "wav")?;
+        wav_path
+    } else if format == "m4a" {
+        let m4a_path = export_dir.join(format!("{base_name}.m4a"));
+        merge_segments_with_ffmpeg(&segments, &m4a_path, "m4a")?;
+        m4a_path
     } else {
-        merge_segments_to_wav(&segments, &wav_path)?;
+        // mp3
         let mp3_path = export_dir.join(format!("{base_name}.mp3"));
-        encode_mp3_with_ffmpeg(&wav_path, &mp3_path)?;
+        merge_segments_with_ffmpeg(&segments, &mp3_path, "mp3")?;
         mp3_path
     };
 
@@ -832,11 +931,16 @@ pub fn recorder_export(
             .sessions
             .get_mut(&session_id)
             .ok_or_else(|| "session not found".to_string())?;
-        if format == "wav" {
-            session.exported_wav_path = Some(output_path.to_string_lossy().to_string());
-        } else {
-            session.exported_wav_path = Some(wav_path.to_string_lossy().to_string());
-            session.exported_mp3_path = Some(output_path.to_string_lossy().to_string());
+        match format.as_str() {
+            "wav" => {
+                session.exported_wav_path = Some(output_path.to_string_lossy().to_string());
+            }
+            "m4a" => {
+                session.exported_m4a_path = Some(output_path.to_string_lossy().to_string());
+            }
+            _ => {
+                session.exported_mp3_path = Some(output_path.to_string_lossy().to_string());
+            }
         }
         session.updated_at = now_iso();
         storage.save()?;
@@ -847,10 +951,92 @@ pub fn recorder_export(
     })
 }
 
-fn merge_segments_to_wav(segment_paths: &[String], output_path: &Path) -> Result<(), String> {
+/// 合并多个分段文件并输出为指定格式
+/// 单分段：优先 afconvert，回退 ffmpeg
+/// 多分段：先 hound 合并为中间 WAV，再转码为目标格式
+pub(crate) fn merge_segments_with_ffmpeg(
+    segment_paths: &[String],
+    output_path: &Path,
+    output_format: &str,
+) -> Result<(), String> {
     if segment_paths.is_empty() {
         return Err("segment list is empty".to_string());
     }
+
+    // 单分段：直接转码
+    if segment_paths.len() == 1 {
+        return convert_single_file(&segment_paths[0], output_path, output_format);
+    }
+
+    // 多分段：先合并为中间 WAV，再转码
+    let export_dir = output_path
+        .parent()
+        .ok_or_else(|| "failed to resolve export directory".to_string())?;
+    let intermediate_wav = export_dir.join("_intermediate_merge.wav");
+
+    // 使用 hound 合并所有分段为 WAV（分段可能是 m4a，需先解码）
+    // 检查第一个分段的格式
+    let first_ext = Path::new(&segment_paths[0])
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("wav");
+
+    if first_ext == "wav" {
+        // 全是 WAV，直接用 hound 合并
+        merge_wav_segments_with_hound(segment_paths, &intermediate_wav)?;
+    } else {
+        // 包含 M4A，需要先逐个解码再合并
+        // 逐个用 afconvert/ffmpeg 解码为临时 WAV
+        let mut temp_wavs: Vec<PathBuf> = Vec::new();
+        for (index, segment) in segment_paths.iter().enumerate() {
+            let ext = Path::new(segment)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("wav");
+            if ext == "wav" {
+                temp_wavs.push(PathBuf::from(segment));
+            } else {
+                let temp_wav = export_dir.join(format!("_temp_decode_{index}.wav"));
+                convert_single_file(segment, &temp_wav, "wav")?;
+                temp_wavs.push(temp_wav);
+            }
+        }
+
+        // 合并所有临时 WAV
+        let wav_paths: Vec<String> = temp_wavs.iter().map(|p| p.to_string_lossy().to_string()).collect();
+        merge_wav_segments_with_hound(&wav_paths, &intermediate_wav)?;
+
+        // 清理临时解码文件
+        for (index, _) in segment_paths.iter().enumerate() {
+            let temp_wav = export_dir.join(format!("_temp_decode_{index}.wav"));
+            let _ = fs::remove_file(&temp_wav);
+        }
+    }
+
+    // 如果目标就是 WAV，直接 rename 中间文件
+    if output_format == "wav" {
+        fs::rename(&intermediate_wav, output_path).map_err(|error| {
+            format!("failed to rename intermediate wav: {error}")
+        })?;
+        return Ok(());
+    }
+
+    // 转码中间 WAV 为目标格式
+    let result = convert_single_file(
+        &intermediate_wav.to_string_lossy(),
+        output_path,
+        output_format,
+    );
+
+    // 清理中间文件
+    let _ = fs::remove_file(&intermediate_wav);
+
+    result
+}
+
+/// 使用 hound 合并多个 WAV 文件
+pub(crate) fn merge_wav_segments_with_hound(segment_paths: &[String], output_path: &Path) -> Result<(), String> {
+    use hound::{WavReader, WavWriter};
 
     let first_reader = WavReader::open(&segment_paths[0])
         .map_err(|error| format!("failed to read wav segment {}: {error}", segment_paths[0]))?;
@@ -858,21 +1044,12 @@ fn merge_segments_to_wav(segment_paths: &[String], output_path: &Path) -> Result
     drop(first_reader);
 
     let mut writer = WavWriter::create(output_path, spec).map_err(|error| {
-        format!(
-            "failed to create export wav {}: {error}",
-            output_path.display()
-        )
+        format!("failed to create export wav {}: {error}", output_path.display())
     })?;
 
     for segment in segment_paths {
         let mut reader = WavReader::open(segment)
             .map_err(|error| format!("failed to read segment {segment}: {error}"))?;
-
-        if reader.spec() != spec {
-            return Err(format!(
-                "segment format mismatch in {segment}; cannot merge wav files"
-            ));
-        }
 
         for sample in reader.samples::<i16>() {
             let value = sample.map_err(|error| {
@@ -891,25 +1068,86 @@ fn merge_segments_to_wav(segment_paths: &[String], output_path: &Path) -> Result
     Ok(())
 }
 
-fn encode_mp3_with_ffmpeg(wav_path: &Path, mp3_path: &Path) -> Result<(), String> {
+/// 单文件格式转换：优先 afconvert，回退 ffmpeg
+pub(crate) fn convert_single_file(input: &str, output_path: &Path, output_format: &str) -> Result<(), String> {
+    let output_str = output_path.to_string_lossy();
+
+    // 优先尝试 afconvert
+    let afconvert_args = match output_format {
+        "wav" => vec![
+            input.to_string(),
+            output_str.to_string(),
+            "-d".to_string(),
+            "LEI16".to_string(),
+            "-f".to_string(),
+            "WAVE".to_string(),
+        ],
+        "m4a" => vec![
+            input.to_string(),
+            output_str.to_string(),
+            "-d".to_string(),
+            "aac".to_string(),
+            "-f".to_string(),
+            "m4af".to_string(),
+            "-b".to_string(),
+            "128000".to_string(),
+        ],
+        _ => vec![], // afconvert 不支持 MP3
+    };
+
+    if !afconvert_args.is_empty() {
+        let result = Command::new("afconvert")
+            .args(&afconvert_args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        if let Ok(status) = result {
+            if status.success() {
+                return Ok(());
+            }
+        }
+    }
+
+    // afconvert 不可用或不支持该格式，回退到 ffmpeg
+    let mut args = vec![
+        "-y".to_string(),
+        "-i".to_string(),
+        input.to_string(),
+    ];
+
+    match output_format {
+        "wav" => {
+            args.extend_from_slice(&["-codec:a".to_string(), "pcm_s16le".to_string()]);
+        }
+        "m4a" => {
+            args.extend_from_slice(&[
+                "-codec:a".to_string(), "aac".to_string(),
+                "-b:a".to_string(), "128k".to_string(),
+            ]);
+        }
+        _ => {
+            // mp3
+            args.extend_from_slice(&[
+                "-codec:a".to_string(), "libmp3lame".to_string(),
+                "-q:a".to_string(), "3".to_string(),
+            ]);
+        }
+    }
+
+    args.push(output_str.to_string());
+
     let status = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-i",
-            wav_path.to_string_lossy().as_ref(),
-            "-codec:a",
-            "libmp3lame",
-            "-q:a",
-            "3",
-            mp3_path.to_string_lossy().as_ref(),
-        ])
+        .args(&args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status();
 
     match status {
         Ok(result) if result.success() => Ok(()),
         Ok(result) => Err(format!("ffmpeg exited with status: {result}")),
         Err(error) => Err(format!(
-            "failed to run ffmpeg for mp3 export; ensure ffmpeg is installed: {error}"
+            "failed to run ffmpeg for export; ensure ffmpeg is installed: {error}"
         )),
     }
 }

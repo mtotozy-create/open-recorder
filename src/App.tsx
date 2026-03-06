@@ -11,7 +11,10 @@ import {
   getRecorderStatus,
   getSession,
   getSettings,
+  getSessionJobs,
+  getJob,
   listSessions,
+  deleteSession,
   pauseRecording,
   renameSession,
   resumeRecording,
@@ -27,6 +30,7 @@ import {
 } from "./i18n";
 import { type Locale, type TranslationKey } from "./i18n/messages";
 import type {
+  JobInfo,
   PromptTemplate,
   RecordingQualityPreset,
   SessionDetail,
@@ -102,6 +106,7 @@ function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [activeSession, setActiveSession] = useState<SessionDetail>();
+  const [sessionJobs, setSessionJobs] = useState<JobInfo[]>([]);
   const [currentRecording, setCurrentRecording] = useState<string>();
   const [recordingQuality, setRecordingQuality] = useState<RecordingQualityPreset>("standard");
   const [recordingElapsedMs, setRecordingElapsedMs] = useState<number>(0);
@@ -109,6 +114,8 @@ function App() {
   const [settings, setSettings] = useState<Settings>(initialSettings);
   const [summaryTemplateId, setSummaryTemplateId] = useState<string>(initialSettings.defaultTemplateId);
   const [statusState, setStatusState] = useState<StatusState>({ key: "status.ready" });
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
 
   const t = useMemo(() => createTranslator(locale), [locale]);
   const statusMessage = t(statusState.key, statusState.params);
@@ -122,12 +129,37 @@ function App() {
     setStatusState({ key, params });
   }
 
+  /**
+   * 格式化秒数为 mm:ss 字符串
+   */
+  function formatElapsed(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  /**
+   * 启动状态栏计时器，每秒更新显示已用时间
+   * 返回清理函数
+   */
+  function startElapsedTimer(statusKey: TranslationKey): () => void {
+    const startedAt = Date.now();
+    const update = () => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      setStatus(statusKey, { elapsed: formatElapsed(elapsed) });
+    };
+    update();
+    const id = window.setInterval(update, 1000);
+    return () => window.clearInterval(id);
+  }
+
   async function refreshSessions() {
     const data = await listSessions();
     setSessions(data);
     if (data.length === 0) {
       setActiveSessionId(undefined);
       setActiveSession(undefined);
+      setSessionJobs([]);
       return;
     }
     if (!activeSessionId || !data.some((session) => session.id === activeSessionId)) {
@@ -138,6 +170,8 @@ function App() {
   async function refreshSessionDetail(sessionId: string) {
     const detail = await getSession(sessionId);
     setActiveSession(detail);
+    const jobs = await getSessionJobs(sessionId);
+    setSessionJobs(jobs);
   }
 
   useEffect(() => {
@@ -161,6 +195,7 @@ function App() {
   useEffect(() => {
     if (!activeSessionId) {
       setActiveSession(undefined);
+      setSessionJobs([]);
       return;
     }
     void refreshSessionDetail(activeSessionId).catch((error) => {
@@ -288,20 +323,71 @@ function App() {
   }
 
   async function onTranscribe() {
-    if (!activeSessionId) return;
+    if (!activeSessionId || isTranscribing) return;
+
+    setIsTranscribing(true);
+    const stopTimer = startElapsedTimer("status.transcriptionRunning");
 
     try {
+      // 后端立即返回 jobId，实际转写在后台线程执行
       const jobId = await enqueueTranscription(activeSessionId);
-      setStatus("status.transcriptionFinished", { jobId });
+
+      // 轮询 job 状态直到完成或失败
+      const pollResult = await pollJobUntilDone(jobId);
+
+      if (pollResult.status === "completed") {
+        setStatus("status.transcriptionFinished", { jobId });
+      } else {
+        setStatus("status.transcriptionFailed", {
+          error: pollResult.error || "unknown error"
+        });
+      }
+
       await refreshSessionDetail(activeSessionId);
       await refreshSessions();
     } catch (error) {
       setStatus("status.transcriptionFailed", { error: String(error) });
+    } finally {
+      stopTimer();
+      setIsTranscribing(false);
     }
   }
 
+  /**
+   * 轮询 job 状态直到完成或失败
+   * 每 3 秒查询一次，最长等待 180 分钟
+   */
+  async function pollJobUntilDone(
+    jobId: string
+  ): Promise<{ status: string; error?: string }> {
+    const maxAttempts = 3600; // 3 * 3600 = 10800 秒 = 3 小时
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await sleep(3000);
+      try {
+        const job = await getJob(jobId);
+        if (job.status === "completed") {
+          return { status: "completed" };
+        }
+        if (job.status === "failed") {
+          return { status: "failed", error: job.error ?? undefined };
+        }
+        // 仍在运行，继续轮询
+      } catch {
+        // 获取状态失败，继续重试
+      }
+    }
+    return { status: "failed", error: "polling timed out" };
+  }
+
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   async function onSummarize() {
-    if (!activeSessionId) return;
+    if (!activeSessionId || isSummarizing) return;
+
+    setIsSummarizing(true);
+    const stopTimer = startElapsedTimer("status.summaryRunning");
 
     try {
       const jobId = await enqueueSummary(activeSessionId, summaryTemplateId || settings.defaultTemplateId);
@@ -310,6 +396,9 @@ function App() {
       await refreshSessions();
     } catch (error) {
       setStatus("status.summaryFailed", { error: String(error) });
+    } finally {
+      stopTimer();
+      setIsSummarizing(false);
     }
   }
 
@@ -338,6 +427,21 @@ function App() {
         await refreshSessionDetail(sessionId);
       }
       setStatus("status.sessionRenameFailed", { error: String(error) });
+    }
+  }
+
+  async function handleDeleteSession(sessionId: string) {
+    try {
+      await deleteSession(sessionId);
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(undefined);
+        setActiveSession(undefined);
+        setSessionJobs([]);
+      }
+      await refreshSessions();
+      setStatus("status.sessionDeleteFinished");
+    } catch (error) {
+      setStatus("status.sessionDeleteFailed", { error: String(error) });
     }
   }
 
@@ -393,7 +497,10 @@ function App() {
           templates={settings.templates}
           activeSessionId={activeSessionId}
           activeSession={activeSession}
+          sessionJobs={sessionJobs}
           summaryTemplateId={summaryTemplateId}
+          isTranscribing={isTranscribing}
+          isSummarizing={isSummarizing}
           onSummaryTemplateChange={setSummaryTemplateId}
           onRefresh={() =>
             void refreshSessions().catch((error) => {
@@ -402,6 +509,7 @@ function App() {
           }
           onSelectSession={setActiveSessionId}
           onRenameSession={(sessionId, name) => void onRenameSession(sessionId, name)}
+          onDeleteSession={(sessionId) => void handleDeleteSession(sessionId)}
           onTranscribe={() => void onTranscribe()}
           onSummarize={() => void onSummarize()}
           t={t}

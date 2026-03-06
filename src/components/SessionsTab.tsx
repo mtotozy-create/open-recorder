@@ -8,8 +8,9 @@ import {
 } from "react";
 
 import type { Translator } from "../i18n";
-import type { PromptTemplate, SessionDetail, SessionSummary } from "../types/domain";
+import type { JobInfo, PromptTemplate, SessionDetail, SessionSummary } from "../types/domain";
 
+type DetailTab = "transcription" | "meta" | "tasks";
 type ViewMode = "readable" | "raw";
 type MarkdownBlock =
   | { kind: "heading"; level: 1 | 2 | 3; text: string }
@@ -23,9 +24,13 @@ type SessionsTabProps = {
   activeSession?: SessionDetail;
   summaryTemplateId: string;
   onSummaryTemplateChange: (value: string) => void;
+  sessionJobs?: JobInfo[];
+  isTranscribing?: boolean;
+  isSummarizing?: boolean;
   onRefresh: () => void;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => void;
+  onDeleteSession: (sessionId: string) => void;
   onTranscribe: () => void;
   onSummarize: () => void;
   t: Translator;
@@ -176,9 +181,13 @@ function SessionsTab({
   activeSession,
   summaryTemplateId,
   onSummaryTemplateChange,
+  sessionJobs = [],
+  isTranscribing = false,
+  isSummarizing = false,
   onRefresh,
   onSelectSession,
   onRenameSession,
+  onDeleteSession,
   onTranscribe,
   onSummarize,
   t
@@ -194,6 +203,8 @@ function SessionsTab({
   const [detailDraftName, setDetailDraftName] = useState<string>("");
   const [transcriptViewMode, setTranscriptViewMode] = useState<ViewMode>("readable");
   const [summaryViewMode, setSummaryViewMode] = useState<ViewMode>("readable");
+  const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("transcription");
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const skipListBlurRef = useRef(false);
 
   useEffect(() => {
@@ -205,6 +216,7 @@ function SessionsTab({
 
   useEffect(() => {
     setDetailDraftName(activeSession?.name ?? "");
+    setActiveDetailTab("transcription");
   }, [activeSession?.id, activeSession?.name]);
 
   function handleTemplateChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -271,17 +283,32 @@ function SessionsTab({
           </button>
 
           {!isListCollapsed && (
-            <button
-              type="button"
-              className="btn-secondary sessions-toolbar-btn"
-              onClick={onRefresh}
-              aria-label={t("sessions.refresh")}
-              title={t("sessions.refresh")}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20 12a8 8 0 10-2.34 5.66M20 12V6m0 6h-6" />
-              </svg>
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn-secondary sessions-toolbar-btn"
+                onClick={onRefresh}
+                aria-label={t("sessions.refresh")}
+                title={t("sessions.refresh")}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20 12a8 8 0 10-2.34 5.66M20 12V6m0 6h-6" />
+                </svg>
+              </button>
+
+              <button
+                type="button"
+                className="btn-secondary sessions-toolbar-btn"
+                onClick={() => setShowConfirmDelete(true)}
+                disabled={!activeSessionId}
+                aria-label={t("sessions.delete")}
+                title={t("sessions.delete")}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" style={{ stroke: "var(--danger)" }}>
+                  <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />
+                </svg>
+              </button>
+            </>
           )}
         </div>
 
@@ -396,160 +423,259 @@ function SessionsTab({
         {activeSession && (
           <>
             <section className="panel session-detail-panel">
-              <h2>{t("sessionDetail.title")}</h2>
-
-              <label>
-                {t("sessionDetail.name")}
-                <input
-                  type="text"
-                  value={detailDraftName}
-                  placeholder={t("sessionDetail.renamePlaceholder")}
-                  onChange={(event) => setDetailDraftName(event.target.value)}
-                  onBlur={submitDetailRename}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      event.currentTarget.blur();
-                    }
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      setDetailDraftName(activeSession.name ?? "");
-                    }
-                  }}
-                />
-              </label>
-
-              <div className="session-meta-grid">
-                <p>
-                  <strong>{t("sessionDetail.id")}:</strong> {activeSession.id}
-                </p>
-                <p>
-                  <strong>{t("sessionDetail.status")}:</strong> {activeSession.status}
-                </p>
-                <p>
-                  <strong>{t("sessionDetail.audioSegments")}:</strong> {activeSession.audioSegments.length}
-                </p>
-                <p>
-                  <strong>{t("recorder.duration")}:</strong> {formatDuration(activeSession.elapsedMs)}
-                </p>
-                <p>
-                  <strong>{t("recorder.quality")}:</strong> {activeSession.qualityPreset}
-                </p>
-                <p>
-                  <strong>{t("sessionDetail.audioSegmentPaths")}:</strong>{" "}
-                  {activeSession.audioSegments.length > 0 ? activeSession.audioSegments[0] : "-"}
-                </p>
-              </div>
-
-              <div className="button-grid">
-                <button type="button" onClick={onTranscribe}>
-                  {t("sessionDetail.runTranscription")}
+              <div className="session-detail-tabs-header">
+                <button
+                  type="button"
+                  className={`session-detail-tab-btn${activeDetailTab === "transcription" ? " active" : ""}`}
+                  onClick={() => setActiveDetailTab("transcription")}
+                >
+                  {t("sessionDetail.transcriptionTab")}
                 </button>
-                <button type="button" onClick={onSummarize}>
-                  {t("sessionDetail.generateSummary")}
+                <button
+                  type="button"
+                  className={`session-detail-tab-btn${activeDetailTab === "meta" ? " active" : ""}`}
+                  onClick={() => setActiveDetailTab("meta")}
+                >
+                  {t("sessionDetail.metaTab")}
+                </button>
+                <button
+                  type="button"
+                  className={`session-detail-tab-btn${activeDetailTab === "tasks" ? " active" : ""}`}
+                  onClick={() => setActiveDetailTab("tasks")}
+                >
+                  {t("sessionDetail.tasksTab")}
                 </button>
               </div>
 
-              <label>
-                {t("sessionDetail.summaryTemplate")}
-                <select value={summaryTemplateId} onChange={handleTemplateChange}>
-                  {templates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.name} ({template.id})
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {activeDetailTab === "transcription" && (
+                <div className="session-actions-row">
+                  <button
+                    type="button"
+                    className={`action-btn${isTranscribing ? " loading" : ""}`}
+                    onClick={onTranscribe}
+                    disabled={isTranscribing}
+                  >
+                    {isTranscribing && <span className="spinner" />}
+                    {isTranscribing ? t("status.transcriptionRunning", { elapsed: "" }) : t("sessionDetail.runTranscription")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`action-btn${isSummarizing ? " loading" : ""}`}
+                    onClick={onSummarize}
+                    disabled={isSummarizing}
+                  >
+                    {isSummarizing && <span className="spinner" />}
+                    {isSummarizing ? t("status.summaryRunning", { elapsed: "" }) : t("sessionDetail.generateSummary")}
+                  </button>
+                  <div className="summary-template-inline">
+                    <span>{t("sessionDetail.summaryTemplate")}</span>
+                    <select value={summaryTemplateId} onChange={handleTemplateChange}>
+                      {templates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {activeDetailTab === "meta" && (
+                <div className="session-meta-grid">
+                  <label style={{ gridColumn: "1 / -1", marginBottom: "12px" }}>
+                    {t("sessionDetail.name")}
+                    <input
+                      type="text"
+                      value={detailDraftName}
+                      placeholder={t("sessionDetail.renamePlaceholder")}
+                      onChange={(event) => setDetailDraftName(event.target.value)}
+                      onBlur={submitDetailRename}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          event.currentTarget.blur();
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setDetailDraftName(activeSession.name ?? "");
+                        }
+                      }}
+                    />
+                  </label>
+                  <p>
+                    <strong>{t("sessionDetail.id")}:</strong> {activeSession.id}
+                  </p>
+                  <p>
+                    <strong>{t("sessionDetail.status")}:</strong> {activeSession.status}
+                  </p>
+                  <p>
+                    <strong>{t("sessionDetail.audioSegments")}:</strong> {activeSession.audioSegments.length}
+                  </p>
+                  <p>
+                    <strong>{t("recorder.duration")}:</strong> {formatDuration(activeSession.elapsedMs)}
+                  </p>
+                  <p>
+                    <strong>{t("recorder.quality")}:</strong> {activeSession.qualityPreset}
+                  </p>
+                  <p>
+                    <strong>{t("sessionDetail.audioSegmentPaths")}:</strong>{" "}
+                    {activeSession.audioSegments.length > 0 ? activeSession.audioSegments[0] : "-"}
+                  </p>
+                </div>
+              )}
+
+              {activeDetailTab === "tasks" && (
+                <div className="session-tasks-list">
+                  {sessionJobs.length === 0 && (
+                    <p className="empty-hint">{t("sessionDetail.tasksEmpty")}</p>
+                  )}
+                  {sessionJobs.length > 0 && (
+                    <table className="tasks-table">
+                      <thead>
+                        <tr>
+                          <th>{t("sessionDetail.taskKind")}</th>
+                          <th>{t("sessionDetail.taskStatus")}</th>
+                          <th>{t("sessionDetail.taskTime")}</th>
+                          <th>{t("sessionDetail.taskError")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sessionJobs.map(job => (
+                          <tr key={job.id}>
+                            <td>{job.kind}</td>
+                            <td className={`status-${job.status.toLowerCase()}`}>{job.status}</td>
+                            <td>{formatDateTime(job.updatedAt)}</td>
+                            <td className="task-error-text" title={job.error ?? ""}>
+                              {job.error ?? "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
             </section>
 
-            <div className="session-results-grid">
-              <section className="panel session-result-panel">
-                <div className="session-result-header">
-                  <h3>{t("sessionDetail.transcript")}</h3>
-                  <div className="view-switch">
-                    <button
-                      type="button"
-                      className={`view-switch-btn${transcriptViewMode === "readable" ? " active" : ""}`}
-                      onClick={() => setTranscriptViewMode("readable")}
-                    >
-                      {t("sessionDetail.readableView")}
-                    </button>
-                    <button
-                      type="button"
-                      className={`view-switch-btn${transcriptViewMode === "raw" ? " active" : ""}`}
-                      onClick={() => setTranscriptViewMode("raw")}
-                    >
-                      {t("sessionDetail.rawView")}
-                    </button>
+            {activeDetailTab === "transcription" && (
+              <div className="session-results-grid">
+                <section className="panel session-result-panel">
+                  <div className="session-result-header">
+                    <h3>{t("sessionDetail.transcript")}</h3>
+                    <div className="view-switch">
+                      <button
+                        type="button"
+                        className={`view-switch-btn${transcriptViewMode === "readable" ? " active" : ""}`}
+                        onClick={() => setTranscriptViewMode("readable")}
+                      >
+                        {t("sessionDetail.readableView")}
+                      </button>
+                      <button
+                        type="button"
+                        className={`view-switch-btn${transcriptViewMode === "raw" ? " active" : ""}`}
+                        onClick={() => setTranscriptViewMode("raw")}
+                      >
+                        {t("sessionDetail.rawView")}
+                      </button>
+                    </div>
                   </div>
-                </div>
 
-                {transcriptViewMode === "raw" && (
-                  <pre>{JSON.stringify(activeSession.transcript, null, 2)}</pre>
-                )}
+                  {transcriptViewMode === "raw" && (
+                    <pre>{JSON.stringify(activeSession.transcript, null, 2)}</pre>
+                  )}
 
-                {transcriptViewMode === "readable" && activeSession.transcript.length === 0 && (
-                  <p className="empty-hint">{t("sessionDetail.transcriptEmpty")}</p>
-                )}
+                  {transcriptViewMode === "readable" && activeSession.transcript.length === 0 && (
+                    <p className="empty-hint">{t("sessionDetail.transcriptEmpty")}</p>
+                  )}
 
-                {transcriptViewMode === "readable" && activeSession.transcript.length > 0 && (
-                  <ul className="transcript-list">
-                    {activeSession.transcript.map((segment, index) => (
-                      <li key={`${index}-${segment.startMs}-${segment.endMs}`} className="transcript-item">
-                        <div className="transcript-item-header">
-                          <span>
-                            {formatSegmentTime(segment.startMs)} - {formatSegmentTime(segment.endMs)}
-                          </span>
-                          {typeof segment.confidence === "number" && (
-                            <span>{Math.round(segment.confidence * 100)}%</span>
-                          )}
-                        </div>
-                        <p>{segment.text}</p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+                  {transcriptViewMode === "readable" && activeSession.transcript.length > 0 && (
+                    <ul className="transcript-list">
+                      {activeSession.transcript.map((segment, index) => (
+                        <li key={`${index}-${segment.startMs}-${segment.endMs}`} className="transcript-item">
+                          <div className="transcript-item-header">
+                            <span>
+                              {formatSegmentTime(segment.startMs)} - {formatSegmentTime(segment.endMs)}
+                            </span>
+                            {typeof segment.confidence === "number" && (
+                              <span>{Math.round(segment.confidence * 100)}%</span>
+                            )}
+                          </div>
+                          <p>{segment.text}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
 
-              <section className="panel session-result-panel">
-                <div className="session-result-header">
-                  <h3>{t("sessionDetail.summary")}</h3>
-                  <div className="view-switch">
-                    <button
-                      type="button"
-                      className={`view-switch-btn${summaryViewMode === "readable" ? " active" : ""}`}
-                      onClick={() => setSummaryViewMode("readable")}
-                    >
-                      {t("sessionDetail.readableView")}
-                    </button>
-                    <button
-                      type="button"
-                      className={`view-switch-btn${summaryViewMode === "raw" ? " active" : ""}`}
-                      onClick={() => setSummaryViewMode("raw")}
-                    >
-                      {t("sessionDetail.rawView")}
-                    </button>
+                <section className="panel session-result-panel">
+                  <div className="session-result-header">
+                    <h3>{t("sessionDetail.summary")}</h3>
+                    <div className="view-switch">
+                      <button
+                        type="button"
+                        className={`view-switch-btn${summaryViewMode === "readable" ? " active" : ""}`}
+                        onClick={() => setSummaryViewMode("readable")}
+                      >
+                        {t("sessionDetail.readableView")}
+                      </button>
+                      <button
+                        type="button"
+                        className={`view-switch-btn${summaryViewMode === "raw" ? " active" : ""}`}
+                        onClick={() => setSummaryViewMode("raw")}
+                      >
+                        {t("sessionDetail.rawView")}
+                      </button>
+                    </div>
                   </div>
-                </div>
 
-                {summaryViewMode === "raw" && (
-                  <pre>{JSON.stringify(activeSession.summary ?? null, null, 2)}</pre>
-                )}
+                  {summaryViewMode === "raw" && (
+                    <pre>{JSON.stringify(activeSession.summary ?? null, null, 2)}</pre>
+                  )}
 
-                {summaryViewMode === "readable" && !activeSession.summary && (
-                  <p className="empty-hint">{t("sessionDetail.summaryEmpty")}</p>
-                )}
+                  {summaryViewMode === "readable" && !activeSession.summary && (
+                    <p className="empty-hint">{t("sessionDetail.summaryEmpty")}</p>
+                  )}
 
-                {summaryViewMode === "readable" && activeSession.summary && (
-                  <div className="summary-markdown-view">
-                    {renderSimpleMarkdown(activeSession.summary.rawMarkdown)}
-                  </div>
-                )}
-              </section>
-            </div>
+                  {summaryViewMode === "readable" && activeSession.summary && (
+                    <div className="summary-markdown-view">
+                      {renderSimpleMarkdown(activeSession.summary.rawMarkdown)}
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
           </>
         )}
       </section>
+
+      {showConfirmDelete && (
+        <div className="modal-overlay">
+          <div className="modal-content panel">
+            <h3>{t("sessions.delete")}</h3>
+            <p>{t("sessions.deleteConfirm")}</p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowConfirmDelete(false)}
+              >
+                {t("action.cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ background: "var(--danger)", color: "#fff" }}
+                onClick={() => {
+                  setShowConfirmDelete(false);
+                  if (activeSessionId) onDeleteSession(activeSessionId);
+                }}
+              >
+                {t("action.confirm")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
