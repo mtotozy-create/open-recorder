@@ -73,8 +73,16 @@ npm run tauri:build -- --bundles app
 - `Aliyun AccessKey Secret`
 - `Aliyun Tingwu AppKey`
 - `Aliyun Tingwu Endpoint`（默认 `https://tingwu.cn-beijing.aliyuncs.com`）
-- `Aliyun Source Language`（默认 `cn`）
-- `Aliyun FileUrl Prefix`（公网 URL 前缀）
+- `Aliyun Source Language`（`cn` 或 `en`，默认 `cn`）
+- `Aliyun Language Hints`（可选，逗号分隔，例如 `cn,en`）
+- `Aliyun FileUrl Prefix`（兜底公网 URL 前缀，可选）
+- `NormalizationEnabled`（默认开启）
+- `ParagraphEnabled`（默认开启）
+- `PunctuationPredictionEnabled`（默认开启）
+- `DisfluencyRemovalEnabled`（默认关闭）
+- `SpeakerDiarizationEnabled`（默认开启）
+- `Aliyun Poll Interval`（默认 `60` 秒，范围 `60-300`）
+- `Aliyun Max Polling Time`（默认 `180` 分钟，范围 `5-720`）
 
 ## 转写流程说明
 ### Bailian
@@ -85,10 +93,13 @@ npm run tauri:build -- --bundles app
 5. 轮询任务结果并回填 transcript
 
 ### Aliyun Tingwu
-1. 组装 `FileUrl`
-2. 创建离线任务
-3. 轮询任务状态
-4. 解析结果文本
+1. 复用 Bailian OSS 配置上传本地分片并生成签名 URL（若已配置）
+2. 组装 `FileUrl`（优先签名 URL，未配置 OSS 时退回 `Aliyun FileUrl Prefix`）
+3. 创建离线任务
+4. 轮询任务状态
+5. 解析结果文本
+
+说明：`QueryTaskInfo` 轮询已按听悟文档建议调整为可配置频率（默认 60 秒），并优先解析 `Data.Result.Transcription` 结果地址。
 
 ## 常见问题排查
 ### 1) `input must contain file_urls`

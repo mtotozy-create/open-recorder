@@ -542,6 +542,7 @@ pub fn recorder_start(
             session_id.clone(),
             Session {
                 id: session_id.clone(),
+                name: None,
                 status: SessionStatus::Recording,
                 created_at: now.clone(),
                 updated_at: now,

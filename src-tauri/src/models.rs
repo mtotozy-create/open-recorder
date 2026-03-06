@@ -121,6 +121,14 @@ pub struct Settings {
     pub aliyun_endpoint: String,
     pub aliyun_source_language: String,
     pub aliyun_file_url_prefix: Option<String>,
+    pub aliyun_language_hints: Option<String>,
+    pub aliyun_transcription_normalization_enabled: bool,
+    pub aliyun_transcription_paragraph_enabled: bool,
+    pub aliyun_transcription_punctuation_prediction_enabled: bool,
+    pub aliyun_transcription_disfluency_removal_enabled: bool,
+    pub aliyun_transcription_speaker_diarization_enabled: bool,
+    pub aliyun_poll_interval_seconds: u64,
+    pub aliyun_max_polling_minutes: u64,
     pub default_template_id: String,
     pub templates: Vec<PromptTemplate>,
 }
@@ -145,6 +153,14 @@ impl Default for Settings {
             aliyun_endpoint: "https://tingwu.cn-beijing.aliyuncs.com".to_string(),
             aliyun_source_language: "cn".to_string(),
             aliyun_file_url_prefix: None,
+            aliyun_language_hints: None,
+            aliyun_transcription_normalization_enabled: true,
+            aliyun_transcription_paragraph_enabled: true,
+            aliyun_transcription_punctuation_prediction_enabled: true,
+            aliyun_transcription_disfluency_removal_enabled: false,
+            aliyun_transcription_speaker_diarization_enabled: true,
+            aliyun_poll_interval_seconds: 60,
+            aliyun_max_polling_minutes: 180,
             default_template_id: "meeting-default".to_string(),
             templates: vec![PromptTemplate {
                 id: "meeting-default".to_string(),
@@ -163,6 +179,7 @@ impl Default for Settings {
 #[serde(default, rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
+    pub name: Option<String>,
     pub status: SessionStatus,
     pub created_at: String,
     pub updated_at: String,
@@ -183,6 +200,7 @@ impl Default for Session {
     fn default() -> Self {
         Self {
             id: String::new(),
+            name: None,
             status: SessionStatus::Stopped,
             created_at: String::new(),
             updated_at: String::new(),
@@ -205,6 +223,7 @@ impl Default for Session {
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
     pub id: String,
+    pub name: Option<String>,
     pub status: SessionStatus,
     pub created_at: String,
     pub updated_at: String,
@@ -216,6 +235,7 @@ impl From<&Session> for SessionSummary {
     fn from(value: &Session) -> Self {
         Self {
             id: value.id.clone(),
+            name: value.name.clone(),
             status: value.status.clone(),
             created_at: value.created_at.clone(),
             updated_at: value.updated_at.clone(),
@@ -286,6 +306,14 @@ pub struct SettingsPatch {
     pub aliyun_endpoint: Option<String>,
     pub aliyun_source_language: Option<String>,
     pub aliyun_file_url_prefix: Option<Option<String>>,
+    pub aliyun_language_hints: Option<Option<String>>,
+    pub aliyun_transcription_normalization_enabled: Option<bool>,
+    pub aliyun_transcription_paragraph_enabled: Option<bool>,
+    pub aliyun_transcription_punctuation_prediction_enabled: Option<bool>,
+    pub aliyun_transcription_disfluency_removal_enabled: Option<bool>,
+    pub aliyun_transcription_speaker_diarization_enabled: Option<bool>,
+    pub aliyun_poll_interval_seconds: Option<u64>,
+    pub aliyun_max_polling_minutes: Option<u64>,
     pub default_template_id: Option<String>,
     pub templates: Option<Vec<PromptTemplate>>,
 }

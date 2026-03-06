@@ -19,6 +19,19 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339()
 }
 
+fn parse_language_hints(raw: Option<&str>) -> Vec<String> {
+    raw.map(|value| {
+        let normalized = value.replace('，', ",");
+        normalized
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default()
+}
+
 enum ActiveTranscriptionConfig {
     Bailian(BailianConfig),
     AliyunTingwu(AliyunTingwuConfig),
@@ -157,6 +170,31 @@ pub fn transcribe_enqueue(
                         .is_some();
 
                 if has_full_credential {
+                    let has_oss_credential = settings
+                        .bailian_oss_access_key_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .is_some()
+                        && settings
+                            .bailian_oss_access_key_secret
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .is_some()
+                        && settings
+                            .bailian_oss_endpoint
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .is_some()
+                        && settings
+                            .bailian_oss_bucket
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .is_some();
+
                     ActiveTranscriptionConfig::AliyunTingwu(AliyunTingwuConfig {
                         access_key_id: settings.aliyun_access_key_id.unwrap_or_default(),
                         access_key_secret: settings.aliyun_access_key_secret.unwrap_or_default(),
@@ -164,6 +202,35 @@ pub fn transcribe_enqueue(
                         endpoint: settings.aliyun_endpoint.clone(),
                         source_language: settings.aliyun_source_language.clone(),
                         file_url_prefix: settings.aliyun_file_url_prefix.clone(),
+                        oss: has_oss_credential.then(|| AliyunOssConfig {
+                            access_key_id: settings
+                                .bailian_oss_access_key_id
+                                .clone()
+                                .unwrap_or_default(),
+                            access_key_secret: settings
+                                .bailian_oss_access_key_secret
+                                .clone()
+                                .unwrap_or_default(),
+                            endpoint: settings.bailian_oss_endpoint.clone().unwrap_or_default(),
+                            bucket: settings.bailian_oss_bucket.clone().unwrap_or_default(),
+                            path_prefix: settings.bailian_oss_path_prefix.clone(),
+                            signed_url_ttl_seconds: settings.bailian_oss_signed_url_ttl_seconds,
+                        }),
+                        language_hints: parse_language_hints(
+                            settings.aliyun_language_hints.as_deref(),
+                        ),
+                        transcription_normalization_enabled: settings
+                            .aliyun_transcription_normalization_enabled,
+                        transcription_paragraph_enabled: settings
+                            .aliyun_transcription_paragraph_enabled,
+                        transcription_punctuation_prediction_enabled: settings
+                            .aliyun_transcription_punctuation_prediction_enabled,
+                        transcription_disfluency_removal_enabled: settings
+                            .aliyun_transcription_disfluency_removal_enabled,
+                        transcription_speaker_diarization_enabled: settings
+                            .aliyun_transcription_speaker_diarization_enabled,
+                        poll_interval_seconds: settings.aliyun_poll_interval_seconds.clamp(60, 300),
+                        max_polling_minutes: settings.aliyun_max_polling_minutes.clamp(5, 720),
                     })
                 } else {
                     ActiveTranscriptionConfig::Mock
@@ -183,7 +250,7 @@ pub fn transcribe_enqueue(
             &session_id,
         ),
         ActiveTranscriptionConfig::AliyunTingwu(config) => {
-            transcribe_with_aliyun_tingwu(&segment_paths, &config, &segment_meta)
+            transcribe_with_aliyun_tingwu(&segment_paths, &config, &segment_meta, &session_id)
         }
         ActiveTranscriptionConfig::Mock => Ok(mock_transcript(&segment_paths, &segment_meta)),
     };

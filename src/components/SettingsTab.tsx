@@ -252,11 +252,22 @@ function SettingsTab({
         </label>
         <label>
           {t("settings.aliyunSourceLanguage")}
-          <input
+          <select
             value={settings.aliyunSourceLanguage}
             onChange={(event) => onSettingsChange({ aliyunSourceLanguage: event.target.value })}
+          >
+            <option value="cn">{t("settings.aliyunSourceLanguage.cn")}</option>
+            <option value="en">{t("settings.aliyunSourceLanguage.en")}</option>
+          </select>
+        </label>
+        <label>
+          {t("settings.aliyunLanguageHints")}
+          <input
+            value={settings.aliyunLanguageHints ?? ""}
+            onChange={(event) => onSettingsChange({ aliyunLanguageHints: event.target.value })}
           />
         </label>
+        <p>{t("settings.aliyunLanguageHintsHint")}</p>
         <label>
           {t("settings.aliyunFileUrlPrefix")}
           <input
@@ -264,6 +275,106 @@ function SettingsTab({
             onChange={(event) => onSettingsChange({ aliyunFileUrlPrefix: event.target.value })}
           />
         </label>
+        <p>{t("settings.aliyunOssReuseHint")}</p>
+        <label>
+          {t("settings.aliyunNormalizationEnabled")}
+          <select
+            value={String(settings.aliyunTranscriptionNormalizationEnabled)}
+            onChange={(event) =>
+              onSettingsChange({
+                aliyunTranscriptionNormalizationEnabled: event.target.value === "true"
+              })
+            }
+          >
+            <option value="true">{t("settings.option.enabled")}</option>
+            <option value="false">{t("settings.option.disabled")}</option>
+          </select>
+        </label>
+        <label>
+          {t("settings.aliyunParagraphEnabled")}
+          <select
+            value={String(settings.aliyunTranscriptionParagraphEnabled)}
+            onChange={(event) =>
+              onSettingsChange({
+                aliyunTranscriptionParagraphEnabled: event.target.value === "true"
+              })
+            }
+          >
+            <option value="true">{t("settings.option.enabled")}</option>
+            <option value="false">{t("settings.option.disabled")}</option>
+          </select>
+        </label>
+        <label>
+          {t("settings.aliyunPunctuationPredictionEnabled")}
+          <select
+            value={String(settings.aliyunTranscriptionPunctuationPredictionEnabled)}
+            onChange={(event) =>
+              onSettingsChange({
+                aliyunTranscriptionPunctuationPredictionEnabled: event.target.value === "true"
+              })
+            }
+          >
+            <option value="true">{t("settings.option.enabled")}</option>
+            <option value="false">{t("settings.option.disabled")}</option>
+          </select>
+        </label>
+        <label>
+          {t("settings.aliyunDisfluencyRemovalEnabled")}
+          <select
+            value={String(settings.aliyunTranscriptionDisfluencyRemovalEnabled)}
+            onChange={(event) =>
+              onSettingsChange({
+                aliyunTranscriptionDisfluencyRemovalEnabled: event.target.value === "true"
+              })
+            }
+          >
+            <option value="false">{t("settings.option.disabled")}</option>
+            <option value="true">{t("settings.option.enabled")}</option>
+          </select>
+        </label>
+        <label>
+          {t("settings.aliyunSpeakerDiarizationEnabled")}
+          <select
+            value={String(settings.aliyunTranscriptionSpeakerDiarizationEnabled)}
+            onChange={(event) =>
+              onSettingsChange({
+                aliyunTranscriptionSpeakerDiarizationEnabled: event.target.value === "true"
+              })
+            }
+          >
+            <option value="true">{t("settings.option.enabled")}</option>
+            <option value="false">{t("settings.option.disabled")}</option>
+          </select>
+        </label>
+        <label>
+          {t("settings.aliyunPollIntervalSeconds")}
+          <input
+            type="number"
+            min={60}
+            max={300}
+            value={settings.aliyunPollIntervalSeconds}
+            onChange={(event) =>
+              onSettingsChange({
+                aliyunPollIntervalSeconds: Number.parseInt(event.target.value || "0", 10) || 60
+              })
+            }
+          />
+        </label>
+        <label>
+          {t("settings.aliyunMaxPollingMinutes")}
+          <input
+            type="number"
+            min={5}
+            max={720}
+            value={settings.aliyunMaxPollingMinutes}
+            onChange={(event) =>
+              onSettingsChange({
+                aliyunMaxPollingMinutes: Number.parseInt(event.target.value || "0", 10) || 180
+              })
+            }
+          />
+        </label>
+        <p>{t("settings.aliyunPollingHint")}</p>
         <p>{t("settings.aliyunFileUrlPrefixHint")}</p>
         {!isAliyunSelected && <p>{t("settings.aliyunOnlyForTranscription")}</p>}
       </div>
@@ -364,7 +475,7 @@ function SettingsTab({
         </button>
       </div>
 
-      <button type="button" onClick={onSave}>
+      <button type="button" onClick={onSave} style={{ marginTop: "4px" }}>
         {t("settings.save")}
       </button>
     </section>

@@ -125,10 +125,10 @@ function RecorderTab({
 
     context.clearRect(0, 0, width, height);
 
-    context.fillStyle = "#eef4ff";
+    context.fillStyle = "#f1f5f9";
     context.fillRect(0, 0, width, height);
 
-    context.strokeStyle = "#b5cbef";
+    context.strokeStyle = "#cbd5e1";
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(0, height / 2);
@@ -140,7 +140,7 @@ function RecorderTab({
     }
 
     const step = width / Math.max(1, waveformPoints.length - 1);
-    context.strokeStyle = "#1f64cf";
+    context.strokeStyle = "#2563eb";
     context.lineWidth = 2;
     context.beginPath();
 
@@ -165,35 +165,34 @@ function RecorderTab({
           <h2>{t("recorder.title")}</h2>
           <p>{t("recorder.subtitle")}</p>
         </div>
-        <div className="recorder-metric-card">
-          <span>{t("recorder.duration")}</span>
-          <strong>{durationLabel}</strong>
+        <div className="recorder-controls-row" style={{ margin: 0 }}>
+          <label className="quality-select">
+            <span>{t("recorder.quality")}</span>
+            <select
+              value={qualityPreset}
+              onChange={(event) => onQualityChange(event.target.value as RecordingQualityPreset)}
+              disabled={hasRecording}
+            >
+              <option value="standard">{t("recorder.quality.standard")}</option>
+              <option value="hd">{t("recorder.quality.hd")}</option>
+              <option value="hifi">{t("recorder.quality.hifi")}</option>
+            </select>
+          </label>
+          <p className="segment-hint">{t("recorder.segmentLength")}</p>
         </div>
       </header>
 
-      <div className="recorder-controls-row">
-        <label className="quality-select">
-          <span>{t("recorder.quality")}</span>
-          <select
-            value={qualityPreset}
-            onChange={(event) => onQualityChange(event.target.value as RecordingQualityPreset)}
-            disabled={hasRecording}
-          >
-            <option value="standard">{t("recorder.quality.standard")}</option>
-            <option value="hd">{t("recorder.quality.hd")}</option>
-            <option value="hifi">{t("recorder.quality.hifi")}</option>
-          </select>
-        </label>
-
-        <p className="segment-hint">{t("recorder.segmentLength")}</p>
+      <div className="recorder-timer-section">
+        <div className="recorder-duration">{durationLabel}</div>
+        <div className="recorder-status-row">
+          <span className="status-chip">{statusMessage}</span>
+        </div>
       </div>
 
       <div className="waveform-panel" role="img" aria-label={t("recorder.waveform")}>
         <div className="waveform-header">{t("recorder.waveform")}</div>
         <canvas ref={canvasRef} />
       </div>
-
-      <p className="status-chip">{statusMessage}</p>
 
       <div className="icon-button-grid">
         <button

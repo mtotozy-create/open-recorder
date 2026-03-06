@@ -56,6 +56,10 @@ export async function getSession(sessionId: string): Promise<SessionDetail> {
   return invoke("session_get", { sessionId });
 }
 
+export async function renameSession(sessionId: string, name: string): Promise<void> {
+  await invoke("session_rename", { sessionId, name });
+}
+
 export async function enqueueTranscription(sessionId: string): Promise<string> {
   const response = await invoke<{ jobId: string }>("transcribe_enqueue", {
     sessionId
@@ -63,15 +67,10 @@ export async function enqueueTranscription(sessionId: string): Promise<string> {
   return response.jobId;
 }
 
-export async function enqueueSummary(
-  sessionId: string,
-  templateId?: string,
-  promptOverride?: string
-): Promise<string> {
+export async function enqueueSummary(sessionId: string, templateId?: string): Promise<string> {
   const response = await invoke<{ jobId: string }>("summary_enqueue", {
     sessionId,
-    templateId,
-    promptOverride
+    templateId
   });
   return response.jobId;
 }

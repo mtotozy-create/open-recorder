@@ -13,6 +13,7 @@ import {
   getSettings,
   listSessions,
   pauseRecording,
+  renameSession,
   resumeRecording,
   startRecording,
   stopRecording,
@@ -42,6 +43,13 @@ const emptySettings: Settings = {
   bailianOssSignedUrlTtlSeconds: 1800,
   aliyunEndpoint: "https://tingwu.cn-beijing.aliyuncs.com",
   aliyunSourceLanguage: "cn",
+  aliyunTranscriptionNormalizationEnabled: true,
+  aliyunTranscriptionParagraphEnabled: true,
+  aliyunTranscriptionPunctuationPredictionEnabled: true,
+  aliyunTranscriptionDisfluencyRemovalEnabled: false,
+  aliyunTranscriptionSpeakerDiarizationEnabled: true,
+  aliyunPollIntervalSeconds: 60,
+  aliyunMaxPollingMinutes: 180,
   defaultTemplateId: "meeting-default",
   templates: [],
   bailianApiKey: ""
@@ -71,10 +79,18 @@ function normalizeSettings(input: Settings): Settings {
   const ttl = Number.isFinite(input.bailianOssSignedUrlTtlSeconds)
     ? Math.min(86400, Math.max(60, Math.floor(input.bailianOssSignedUrlTtlSeconds)))
     : 1800;
+  const aliyunPollIntervalSeconds = Number.isFinite(input.aliyunPollIntervalSeconds)
+    ? Math.min(300, Math.max(60, Math.floor(input.aliyunPollIntervalSeconds)))
+    : 60;
+  const aliyunMaxPollingMinutes = Number.isFinite(input.aliyunMaxPollingMinutes)
+    ? Math.min(720, Math.max(5, Math.floor(input.aliyunMaxPollingMinutes)))
+    : 180;
 
   return {
     ...input,
     bailianOssSignedUrlTtlSeconds: ttl,
+    aliyunPollIntervalSeconds,
+    aliyunMaxPollingMinutes,
     templates,
     defaultTemplateId: defaultExists ? input.defaultTemplateId : templates[0].id
   };
@@ -93,7 +109,6 @@ function App() {
   const [settings, setSettings] = useState<Settings>(initialSettings);
   const [summaryTemplateId, setSummaryTemplateId] = useState<string>(initialSettings.defaultTemplateId);
   const [statusState, setStatusState] = useState<StatusState>({ key: "status.ready" });
-  const [summaryPromptOverride, setSummaryPromptOverride] = useState<string>("");
 
   const t = useMemo(() => createTranslator(locale), [locale]);
   const statusMessage = t(statusState.key, statusState.params);
@@ -110,7 +125,12 @@ function App() {
   async function refreshSessions() {
     const data = await listSessions();
     setSessions(data);
-    if (!activeSessionId && data.length > 0) {
+    if (data.length === 0) {
+      setActiveSessionId(undefined);
+      setActiveSession(undefined);
+      return;
+    }
+    if (!activeSessionId || !data.some((session) => session.id === activeSessionId)) {
       setActiveSessionId(data[0].id);
     }
   }
@@ -139,11 +159,13 @@ function App() {
   }, [locale]);
 
   useEffect(() => {
-    if (activeSessionId) {
-      void refreshSessionDetail(activeSessionId).catch((error) => {
-        setStatus("status.sessionsLoadFailed", { error: String(error) });
-      });
+    if (!activeSessionId) {
+      setActiveSession(undefined);
+      return;
     }
+    void refreshSessionDetail(activeSessionId).catch((error) => {
+      setStatus("status.sessionsLoadFailed", { error: String(error) });
+    });
   }, [activeSessionId]);
 
   useEffect(() => {
@@ -282,16 +304,40 @@ function App() {
     if (!activeSessionId) return;
 
     try {
-      const jobId = await enqueueSummary(
-        activeSessionId,
-        summaryTemplateId || settings.defaultTemplateId,
-        summaryPromptOverride || undefined
-      );
+      const jobId = await enqueueSummary(activeSessionId, summaryTemplateId || settings.defaultTemplateId);
       setStatus("status.summaryFinished", { jobId });
       await refreshSessionDetail(activeSessionId);
       await refreshSessions();
     } catch (error) {
       setStatus("status.summaryFailed", { error: String(error) });
+    }
+  }
+
+  async function onRenameSession(sessionId: string, name: string) {
+    const normalized = name.trim();
+    const nextName = normalized.length > 0 ? normalized : undefined;
+    setSessions((previous) =>
+      previous.map((session) =>
+        session.id === sessionId ? { ...session, name: nextName } : session
+      )
+    );
+    setActiveSession((previous) =>
+      previous && previous.id === sessionId ? { ...previous, name: nextName } : previous
+    );
+
+    try {
+      await renameSession(sessionId, name);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionRenameFinished");
+    } catch (error) {
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionRenameFailed", { error: String(error) });
     }
   }
 
@@ -314,11 +360,11 @@ function App() {
   return (
     <main className="app-shell">
       <header className="app-header panel">
-        <TabNav activeTab={activeTab} onChange={setActiveTab} t={t} />
-        <div>
+        <div className="app-header-top">
           <h1>{t("app.title")}</h1>
-          <p className="status-chip">{statusMessage}</p>
+          <span className="status-badge">{statusMessage}</span>
         </div>
+        <TabNav activeTab={activeTab} onChange={setActiveTab} t={t} />
       </header>
 
       {activeTab === "recorder" && (
@@ -348,15 +394,14 @@ function App() {
           activeSessionId={activeSessionId}
           activeSession={activeSession}
           summaryTemplateId={summaryTemplateId}
-          summaryPromptOverride={summaryPromptOverride}
           onSummaryTemplateChange={setSummaryTemplateId}
-          onSummaryPromptChange={setSummaryPromptOverride}
           onRefresh={() =>
             void refreshSessions().catch((error) => {
               setStatus("status.sessionsLoadFailed", { error: String(error) });
             })
           }
           onSelectSession={setActiveSessionId}
+          onRenameSession={(sessionId, name) => void onRenameSession(sessionId, name)}
           onTranscribe={() => void onTranscribe()}
           onSummarize={() => void onSummarize()}
           t={t}

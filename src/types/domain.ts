@@ -55,12 +55,21 @@ export type Settings = {
   aliyunEndpoint: string;
   aliyunSourceLanguage: string;
   aliyunFileUrlPrefix?: string;
+  aliyunLanguageHints?: string;
+  aliyunTranscriptionNormalizationEnabled: boolean;
+  aliyunTranscriptionParagraphEnabled: boolean;
+  aliyunTranscriptionPunctuationPredictionEnabled: boolean;
+  aliyunTranscriptionDisfluencyRemovalEnabled: boolean;
+  aliyunTranscriptionSpeakerDiarizationEnabled: boolean;
+  aliyunPollIntervalSeconds: number;
+  aliyunMaxPollingMinutes: number;
   defaultTemplateId: string;
   templates: PromptTemplate[];
 };
 
 export type SessionSummary = {
   id: string;
+  name?: string;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;

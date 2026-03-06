@@ -1,9 +1,14 @@
+use chrono::Utc;
 use tauri::State;
 
 use crate::{
     models::{Session, SessionSummary},
     state::AppState,
 };
+
+fn now_iso() -> String {
+    Utc::now().to_rfc3339()
+}
 
 #[tauri::command]
 pub fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionSummary>, String> {
@@ -33,4 +38,31 @@ pub fn session_get(session_id: String, state: State<'_, AppState>) -> Result<Ses
         .get(&session_id)
         .cloned()
         .ok_or_else(|| "session not found".to_string())
+}
+
+#[tauri::command]
+pub fn session_rename(
+    session_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+
+    let normalized = name.trim();
+    let session = storage
+        .data
+        .sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| "session not found".to_string())?;
+    session.name = if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.to_string())
+    };
+    session.updated_at = now_iso();
+    storage.save()?;
+    Ok(())
 }

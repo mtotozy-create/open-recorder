@@ -302,7 +302,6 @@ pub fn summarize_with_bailian(
     transcript: &[TranscriptSegment],
     system_prompt: &str,
     user_prompt: &str,
-    prompt_override: Option<&str>,
     config: &BailianConfig,
 ) -> Result<SummaryResult, String> {
     let transcript_text = transcript
@@ -311,31 +310,16 @@ pub fn summarize_with_bailian(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let merged_prompt = match prompt_override {
-        Some(value) if !value.trim().is_empty() => format!("{user_prompt}\n\n{value}"),
-        _ => user_prompt.to_string(),
-    };
-
-    let json_contract = r#"Respond in strict JSON only (no markdown fences):
-{
-  "title": "",
-  "decisions": [""],
-  "actionItems": [""],
-  "risks": [""],
-  "timeline": [""],
-  "rawMarkdown": ""
-}"#;
-
     let request = ChatCompletionsRequest {
         model: config.summary_model.clone(),
         messages: vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: format!("{system_prompt}\n\n{json_contract}"),
+                content: system_prompt.to_string(),
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: format!("{}\n\nTranscript:\n{}", merged_prompt, transcript_text),
+                content: format!("{user_prompt}\n\n{transcript_text}"),
             },
         ],
         temperature: 0.2,
@@ -375,16 +359,24 @@ pub fn summarize_with_bailian(
         .to_string();
 
     let json_text = extract_json(&raw_content);
-    let summary: SummaryPayload = serde_json::from_str(json_text)
-        .map_err(|error| format!("failed to parse summary JSON: {error}; body={raw_content}"))?;
+    if let Ok(summary) = serde_json::from_str::<SummaryPayload>(json_text) {
+        return Ok(SummaryResult {
+            title: summary.title,
+            decisions: summary.decisions,
+            action_items: summary.action_items,
+            risks: summary.risks,
+            timeline: summary.timeline,
+            raw_markdown: summary.raw_markdown,
+        });
+    }
 
     Ok(SummaryResult {
-        title: summary.title,
-        decisions: summary.decisions,
-        action_items: summary.action_items,
-        risks: summary.risks,
-        timeline: summary.timeline,
-        raw_markdown: summary.raw_markdown,
+        title: derive_summary_title(&raw_content),
+        decisions: vec![],
+        action_items: vec![],
+        risks: vec![],
+        timeline: vec![],
+        raw_markdown: raw_content,
     })
 }
 
@@ -497,6 +489,22 @@ fn extract_json(raw: &str) -> &str {
     }
 
     trimmed
+}
+
+fn derive_summary_title(raw: &str) -> String {
+    let first_line = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .trim_start_matches('#')
+        .trim();
+
+    if first_line.is_empty() {
+        "Meeting Summary".to_string()
+    } else {
+        first_line.to_string()
+    }
 }
 
 fn build_endpoint(base_url: &str, path: &str) -> String {

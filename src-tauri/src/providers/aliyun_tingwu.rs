@@ -12,15 +12,16 @@ use serde_json::{json, Value};
 use sha1::Sha1;
 use uuid::Uuid;
 
-use crate::models::{AudioSegmentMeta, TranscriptSegment};
+use crate::{
+    models::{AudioSegmentMeta, TranscriptSegment},
+    providers::aliyun_oss::{upload_segments_and_sign_urls, AliyunOssConfig},
+};
 
 type HmacSha1 = Hmac<Sha1>;
 
 const ALIYUN_API_VERSION: &str = "2023-09-30";
 const ALIYUN_SIGNATURE_METHOD: &str = "HMAC-SHA1";
 const ALIYUN_SIGNATURE_VERSION: &str = "1.0";
-const MAX_POLL_COUNT: usize = 120;
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct AliyunTingwuConfig {
@@ -30,12 +31,22 @@ pub struct AliyunTingwuConfig {
     pub endpoint: String,
     pub source_language: String,
     pub file_url_prefix: Option<String>,
+    pub oss: Option<AliyunOssConfig>,
+    pub language_hints: Vec<String>,
+    pub transcription_normalization_enabled: bool,
+    pub transcription_paragraph_enabled: bool,
+    pub transcription_punctuation_prediction_enabled: bool,
+    pub transcription_disfluency_removal_enabled: bool,
+    pub transcription_speaker_diarization_enabled: bool,
+    pub poll_interval_seconds: u64,
+    pub max_polling_minutes: u64,
 }
 
 pub fn transcribe_with_aliyun_tingwu(
     segment_paths: &[String],
     config: &AliyunTingwuConfig,
     segment_meta: &[AudioSegmentMeta],
+    session_id: &str,
 ) -> Result<Vec<TranscriptSegment>, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(90))
@@ -46,21 +57,29 @@ pub fn transcribe_with_aliyun_tingwu(
     let create_path = "/openapi/tingwu/v2/tasks";
     let create_query = "type=offline";
     let create_resource = format!("{create_path}?{create_query}");
+    let file_urls = resolve_segment_file_urls(segment_paths, config, session_id)?;
 
     let mut transcript = Vec::with_capacity(segment_paths.len());
-    for (index, segment_path) in segment_paths.iter().enumerate() {
-        let file_url =
-            resolve_file_url(segment_path, config.file_url_prefix.as_deref()).map_err(|error| {
-                format!("segment {index} cannot be used for aliyun tingwu: {error}")
-            })?;
+    for (index, file_url) in file_urls.iter().enumerate() {
+        let mut input = json!({
+            "SourceLanguage": config.source_language,
+            "TaskKey": format!("open-recorder-{}", Uuid::new_v4()),
+            "FileUrl": file_url,
+            "Transcription": {
+                "NormalizationEnabled": config.transcription_normalization_enabled,
+                "ParagraphEnabled": config.transcription_paragraph_enabled,
+                "PunctuationPredictionEnabled": config.transcription_punctuation_prediction_enabled,
+                "DisfluencyRemovalEnabled": config.transcription_disfluency_removal_enabled,
+                "SpeakerDiarizationEnabled": config.transcription_speaker_diarization_enabled
+            }
+        });
+        if !config.language_hints.is_empty() {
+            input["LanguageHints"] = json!(config.language_hints);
+        }
 
         let create_body = json!({
             "AppKey": config.app_key,
-            "Input": {
-                "SourceLanguage": config.source_language,
-                "TaskKey": format!("open-recorder-{}", Uuid::new_v4()),
-                "FileUrl": file_url
-            }
+            "Input": input
         });
 
         let create_url = format!("{endpoint}{create_path}?{create_query}");
@@ -236,7 +255,10 @@ fn poll_task_result_url(
     segment_index: usize,
     task_id: &str,
 ) -> Result<String, String> {
-    for _ in 0..MAX_POLL_COUNT {
+    let poll_interval = Duration::from_secs(config.poll_interval_seconds.clamp(60, 300));
+    let max_poll_count = max_poll_count(config);
+
+    for _ in 0..max_poll_count {
         let payload = send_signed_json_request(
             client,
             Method::GET,
@@ -261,19 +283,19 @@ fn poll_task_result_url(
         .to_ascii_uppercase();
 
         if is_success_status(&status_value) {
-            if let Some(result) = extract_string(
-                &payload,
-                &[
-                    "/Data/Result",
-                    "/Data/result",
-                    "/Data/TranscriptionResult",
-                    "/TranscriptionResult",
-                    "/Result",
-                    "/result",
-                ],
-            ) {
+            if let Some(result) = extract_task_result_ref(&payload) {
                 return Ok(result);
             }
+
+            if let Some(result_payload) = payload
+                .pointer("/Data/Result")
+                .or_else(|| payload.pointer("/Data/result"))
+            {
+                if let Some(text) = extract_text_from_payload(result_payload) {
+                    return Ok(text);
+                }
+            }
+
             return Err(format!(
                 "task completed but result url missing for segment {segment_index}, task {task_id}: {payload}"
             ));
@@ -285,12 +307,39 @@ fn poll_task_result_url(
             ));
         }
 
-        thread::sleep(POLL_INTERVAL);
+        thread::sleep(poll_interval);
     }
 
     Err(format!(
         "aliyun tingwu polling timed out for segment {segment_index}, task {task_id}"
     ))
+}
+
+fn max_poll_count(config: &AliyunTingwuConfig) -> usize {
+    let interval = config.poll_interval_seconds.clamp(60, 300);
+    let total_seconds = config.max_polling_minutes.clamp(5, 720).saturating_mul(60);
+    let count = total_seconds / interval.max(1);
+    count.max(1) as usize
+}
+
+fn extract_task_result_ref(payload: &Value) -> Option<String> {
+    extract_string(
+        payload,
+        &[
+            "/Data/Result/Transcription",
+            "/Data/result/transcription",
+            "/Data/Result",
+            "/Data/result",
+            "/Result/Transcription",
+            "/result/transcription",
+            "/Data/Result/TranscriptionResult",
+            "/Data/result/transcriptionResult",
+            "/Data/TranscriptionResult",
+            "/TranscriptionResult",
+            "/Result",
+            "/result",
+        ],
+    )
 }
 
 fn fetch_or_extract_transcript_text(client: &Client, result_ref: &str) -> Result<String, String> {
@@ -328,8 +377,62 @@ fn fetch_or_extract_transcript_text(client: &Client, result_ref: &str) -> Result
     }
 }
 
+fn resolve_segment_file_urls(
+    segment_paths: &[String],
+    config: &AliyunTingwuConfig,
+    session_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut resolved = vec![String::new(); segment_paths.len()];
+    let mut pending_local_paths = vec![];
+    let mut pending_local_indexes = vec![];
+
+    for (index, segment_path) in segment_paths.iter().enumerate() {
+        if is_http_url(segment_path) {
+            resolved[index] = segment_path.clone();
+            continue;
+        }
+
+        if config.oss.is_some() {
+            pending_local_paths.push(segment_path.clone());
+            pending_local_indexes.push(index);
+            continue;
+        }
+
+        resolved[index] = resolve_file_url(segment_path, config.file_url_prefix.as_deref())
+            .map_err(|error| {
+                format!("segment {index} cannot be used for aliyun tingwu: {error}")
+            })?;
+    }
+
+    if !pending_local_paths.is_empty() {
+        let oss = config.oss.as_ref().ok_or_else(|| {
+            "aliyun tingwu requires public FileUrl: configure Bailian OSS for auto upload or set aliyunFileUrlPrefix".to_string()
+        })?;
+        let signed_urls = upload_segments_and_sign_urls(&pending_local_paths, session_id, oss)?;
+        if signed_urls.len() != pending_local_indexes.len() {
+            return Err("aliyun tingwu failed to map signed OSS urls to segment list".to_string());
+        }
+        for (index, url) in pending_local_indexes
+            .into_iter()
+            .zip(signed_urls.into_iter())
+        {
+            resolved[index] = url;
+        }
+    }
+
+    if resolved.iter().any(|item| item.trim().is_empty()) {
+        return Err("aliyun tingwu segment file url resolution incomplete".to_string());
+    }
+
+    Ok(resolved)
+}
+
+fn is_http_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
+}
+
 fn resolve_file_url(segment_path: &str, file_url_prefix: Option<&str>) -> Result<String, String> {
-    if segment_path.starts_with("http://") || segment_path.starts_with("https://") {
+    if is_http_url(segment_path) {
         return Ok(segment_path.to_string());
     }
 

@@ -104,6 +104,66 @@ pub fn settings_update(
         storage.data.settings.aliyun_file_url_prefix = trim_to_option(aliyun_file_url_prefix);
     }
 
+    if let Some(aliyun_language_hints) = request.aliyun_language_hints {
+        storage.data.settings.aliyun_language_hints = trim_to_option(aliyun_language_hints);
+    }
+
+    if let Some(aliyun_transcription_normalization_enabled) =
+        request.aliyun_transcription_normalization_enabled
+    {
+        storage
+            .data
+            .settings
+            .aliyun_transcription_normalization_enabled =
+            aliyun_transcription_normalization_enabled;
+    }
+
+    if let Some(aliyun_transcription_paragraph_enabled) =
+        request.aliyun_transcription_paragraph_enabled
+    {
+        storage.data.settings.aliyun_transcription_paragraph_enabled =
+            aliyun_transcription_paragraph_enabled;
+    }
+
+    if let Some(aliyun_transcription_punctuation_prediction_enabled) =
+        request.aliyun_transcription_punctuation_prediction_enabled
+    {
+        storage
+            .data
+            .settings
+            .aliyun_transcription_punctuation_prediction_enabled =
+            aliyun_transcription_punctuation_prediction_enabled;
+    }
+
+    if let Some(aliyun_transcription_disfluency_removal_enabled) =
+        request.aliyun_transcription_disfluency_removal_enabled
+    {
+        storage
+            .data
+            .settings
+            .aliyun_transcription_disfluency_removal_enabled =
+            aliyun_transcription_disfluency_removal_enabled;
+    }
+
+    if let Some(aliyun_transcription_speaker_diarization_enabled) =
+        request.aliyun_transcription_speaker_diarization_enabled
+    {
+        storage
+            .data
+            .settings
+            .aliyun_transcription_speaker_diarization_enabled =
+            aliyun_transcription_speaker_diarization_enabled;
+    }
+
+    if let Some(aliyun_poll_interval_seconds) = request.aliyun_poll_interval_seconds {
+        storage.data.settings.aliyun_poll_interval_seconds =
+            aliyun_poll_interval_seconds.clamp(60, 300);
+    }
+
+    if let Some(aliyun_max_polling_minutes) = request.aliyun_max_polling_minutes {
+        storage.data.settings.aliyun_max_polling_minutes = aliyun_max_polling_minutes.clamp(5, 720);
+    }
+
     if let Some(default_template_id) = request.default_template_id {
         storage.data.settings.default_template_id = default_template_id;
     }

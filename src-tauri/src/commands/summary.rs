@@ -19,7 +19,6 @@ fn now_iso() -> String {
 pub fn summary_enqueue(
     session_id: String,
     template_id: Option<String>,
-    prompt_override: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<JobEnqueueResponse, String> {
     let job_id = Uuid::new_v4().to_string();
@@ -100,11 +99,10 @@ pub fn summary_enqueue(
             &transcript,
             &template.system_prompt,
             &template.user_prompt,
-            prompt_override.as_deref(),
             &config,
         )
     } else {
-        Ok(mock_summary(&transcript, prompt_override.as_deref()))
+        Ok(mock_summary(&transcript))
     };
 
     let mut storage = state
@@ -154,7 +152,7 @@ fn resolve_template<'a>(
     templates.iter().find(|template| template.id == template_id)
 }
 
-fn mock_summary(transcript: &[TranscriptSegment], prompt_override: Option<&str>) -> SummaryResult {
+fn mock_summary(transcript: &[TranscriptSegment]) -> SummaryResult {
     let transcript_size = transcript.len();
 
     SummaryResult {
@@ -169,9 +167,6 @@ fn mock_summary(transcript: &[TranscriptSegment], prompt_override: Option<&str>)
             .into_iter()
             .map(str::to_string)
             .collect(),
-        raw_markdown: format!(
-            "# Meeting Summary\n\nTranscript segments: {transcript_size}\n\nPrompt override: {}\n",
-            prompt_override.unwrap_or("<none>")
-        ),
+        raw_markdown: format!("# Meeting Summary\n\nTranscript segments: {transcript_size}\n"),
     }
 }
