@@ -82,6 +82,48 @@ function normalizeSessionName(name?: string): string {
   return (name ?? "").trim();
 }
 
+function logPlaybackDebug(scope: string, payload?: Record<string, unknown>) {
+  const message = `[playback-debug] ${scope}`;
+  if (payload) {
+    console.info(message, payload);
+    return;
+  }
+  console.info(message);
+}
+
+function isAutoplayBlockedError(error: unknown): boolean {
+  const message = String(error);
+  return message.includes("NotAllowedError");
+}
+
+function resolveSinglePlayablePath(session?: SessionDetail): string | undefined {
+  if (!session) {
+    return undefined;
+  }
+  const candidates = [
+    session.exportedM4aPath,
+    session.exportedMp3Path,
+    session.exportedWavPath,
+    ...session.audioSegmentMeta.map((meta) => meta.path),
+    ...session.audioSegments
+  ]
+    .map((path) => (path ?? "").trim())
+    .filter((path) => path.length > 0);
+  const uniquePaths = Array.from(new Set(candidates));
+  return uniquePaths.length === 1 ? uniquePaths[0] : undefined;
+}
+
+function resolvePreferredPlaybackPath(session?: SessionDetail): string | undefined {
+  if (!session) {
+    return undefined;
+  }
+  const singlePath = resolveSinglePlayablePath(session);
+  if (singlePath) {
+    return singlePath;
+  }
+  return session.exportedM4aPath || session.exportedMp3Path || session.exportedWavPath;
+}
+
 function getDisplayName(
   session: Pick<SessionSummary, "id" | "name" | "createdAt">,
   t: Translator
@@ -182,16 +224,76 @@ function SessionsTab({
     setIsTranscriptCollapsed(!!activeSession?.summary);
   }, [activeSession?.id, activeSession?.name, !!activeSession?.summary]);
 
+  function setAndPlayAudio(path: string) {
+    try {
+      const src = convertFileSrc(path);
+      logPlaybackDebug("set-source", { path, src });
+      setPlaybackAudioPath(path);
+      setPlaybackAudioSrc(src);
+      if (!playbackAudioRef.current) {
+        logPlaybackDebug("audio-ref-missing", { path });
+        return;
+      }
+      playbackAudioRef.current.src = src;
+      playbackAudioRef.current.load();
+      void playbackAudioRef.current.play().then(() => {
+        logPlaybackDebug("play-invoked", { path });
+      }).catch((error) => {
+        if (isAutoplayBlockedError(error)) {
+          logPlaybackDebug("play-autoplay-blocked", { path, src, error: String(error) });
+          return;
+        }
+        console.error("[playback-debug] audio.play failed", { path, src, error: String(error) });
+      });
+    } catch (error) {
+      console.error("[playback-debug] convertFileSrc failed", {
+        path,
+        error: String(error)
+      });
+      throw error;
+    }
+  }
+
   useEffect(() => {
-    const initialPath = activeSession?.exportedM4aPath || activeSession?.exportedMp3Path;
+    const initialPath = resolvePreferredPlaybackPath(activeSession);
     if (!initialPath) {
+      logPlaybackDebug("initial-path-empty", {
+        activeSessionId: activeSession?.id,
+        exportedM4aPath: activeSession?.exportedM4aPath,
+        exportedMp3Path: activeSession?.exportedMp3Path,
+        exportedWavPath: activeSession?.exportedWavPath,
+        segmentCount: activeSession?.audioSegments.length ?? 0
+      });
       setPlaybackAudioPath(undefined);
       setPlaybackAudioSrc(undefined);
       return;
     }
-    setPlaybackAudioPath(initialPath);
-    setPlaybackAudioSrc(convertFileSrc(initialPath));
-  }, [activeSession?.id, activeSession?.exportedM4aPath, activeSession?.exportedMp3Path]);
+    try {
+      const src = convertFileSrc(initialPath);
+      logPlaybackDebug("initial-path-resolved", {
+        activeSessionId: activeSession?.id,
+        initialPath,
+        src
+      });
+      setPlaybackAudioPath(initialPath);
+      setPlaybackAudioSrc(src);
+    } catch (error) {
+      console.error("[playback-debug] initial convertFileSrc failed", {
+        activeSessionId: activeSession?.id,
+        initialPath,
+        error: String(error)
+      });
+      setPlaybackAudioPath(undefined);
+      setPlaybackAudioSrc(undefined);
+    }
+  }, [
+    activeSession?.id,
+    activeSession?.exportedM4aPath,
+    activeSession?.exportedMp3Path,
+    activeSession?.exportedWavPath,
+    activeSession?.audioSegments,
+    activeSession?.audioSegmentMeta
+  ]);
 
   function handleTemplateChange(event: ChangeEvent<HTMLSelectElement>) {
     onSummaryTemplateChange(event.target.value);
@@ -245,26 +347,46 @@ function SessionsTab({
 
   async function handlePreparePlaybackAudio() {
     if (isPreparingPlaybackAudio) {
+      logPlaybackDebug("prepare-skipped-busy");
       return;
     }
     setIsPreparingPlaybackAudio(true);
     try {
+      const currentPath = playbackAudioPath?.trim();
+      if (currentPath) {
+        logPlaybackDebug("prepare-branch-current-path", { currentPath });
+        setAndPlayAudio(currentPath);
+        return;
+      }
+      const preferredPath = resolvePreferredPlaybackPath(activeSession);
+      if (preferredPath) {
+        logPlaybackDebug("prepare-branch-preferred", { preferredPath });
+        setAndPlayAudio(preferredPath);
+        return;
+      }
+      const singlePath = resolveSinglePlayablePath(activeSession);
+      logPlaybackDebug("prepare-click", {
+        activeSessionId: activeSession?.id,
+        singlePath,
+        exportedM4aPath: activeSession?.exportedM4aPath,
+        exportedMp3Path: activeSession?.exportedMp3Path,
+        exportedWavPath: activeSession?.exportedWavPath,
+        segmentCount: activeSession?.audioSegments.length ?? 0
+      });
+      if (singlePath) {
+        logPlaybackDebug("prepare-branch-single", { singlePath });
+        setAndPlayAudio(singlePath);
+        return;
+      }
+      logPlaybackDebug("prepare-branch-backend");
       const path = await onPreparePlaybackAudio();
-      const src = convertFileSrc(path);
-      setPlaybackAudioPath(path);
-      setPlaybackAudioSrc(src);
-      window.setTimeout(() => {
-        if (!playbackAudioRef.current) {
-          return;
-        }
-        playbackAudioRef.current.src = src;
-        playbackAudioRef.current.load();
-        void playbackAudioRef.current.play().catch(() => {
-          // 浏览器自动播放策略可能拒绝，保留 controls 供用户手动播放。
-        });
-      }, 0);
-    } catch {
-      // 状态提示由上层 App 统一处理，这里避免未捕获 Promise。
+      logPlaybackDebug("prepare-backend-success", { path });
+      setAndPlayAudio(path);
+    } catch (error) {
+      console.error("[playback-debug] prepare flow failed", {
+        activeSessionId: activeSession?.id,
+        error: String(error)
+      });
     } finally {
       setIsPreparingPlaybackAudio(false);
     }
@@ -583,7 +705,22 @@ function SessionsTab({
                     </div>
                     {playbackAudioSrc ? (
                       <>
-                        <audio ref={playbackAudioRef} className="session-audio-player" controls preload="metadata" src={playbackAudioSrc} />
+                        <audio
+                          ref={playbackAudioRef}
+                          className="session-audio-player"
+                          controls
+                          preload="metadata"
+                          src={playbackAudioSrc}
+                          onError={(event) => {
+                            const mediaError = event.currentTarget.error;
+                            console.error("[playback-debug] audio element error", {
+                              path: playbackAudioPath,
+                              src: playbackAudioSrc,
+                              mediaErrorCode: mediaError?.code,
+                              mediaErrorMessage: mediaError?.message
+                            });
+                          }}
+                        />
                         {playbackAudioPath && (
                           <p style={{ marginTop: "8px", wordBreak: "break-all", fontSize: "0.85em", color: "var(--text-secondary)" }}>
                             <strong>{t("sessionDetail.audioSegmentPath")}:</strong> {playbackAudioPath}

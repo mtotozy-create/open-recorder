@@ -19,7 +19,16 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/**",
+          "$HOME/Library/Application Support/Open Recorder/**",
+          "$HOME/.open-recorder-data/**",
+          "$TEMP/open-recorder-data/**"
+        ]
+      }
     }
   },
   "bundle": {

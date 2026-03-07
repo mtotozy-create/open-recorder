@@ -351,6 +351,19 @@ pub fn session_prepare_transcription_audio(
         )
     };
 
+    let raw_segment_count = raw_segment_paths.len();
+    let raw_segment_meta_count = raw_segment_meta.len();
+    let exported_m4a_present = exported_m4a_path.is_some();
+    let exported_mp3_present = exported_mp3_path.is_some();
+    eprintln!(
+        "[playback-debug] session_prepare_transcription_audio start session_id={} raw_segments={} raw_segment_meta={} exported_m4a_present={} exported_mp3_present={} export_dir={}",
+        session_id,
+        raw_segment_count,
+        raw_segment_meta_count,
+        exported_m4a_present,
+        exported_mp3_present,
+        export_dir.display()
+    );
     let prepared = resolve_transcription_audio_input(
         &session_id,
         raw_segment_paths,
@@ -361,9 +374,29 @@ pub fn session_prepare_transcription_audio(
         exported_m4a_path,
         exported_mp3_path,
         &export_dir,
-        false,
+        true,
         &|_| {},
-    )?;
+    )
+    .map_err(|error| {
+        eprintln!(
+            "[playback-debug] session_prepare_transcription_audio failed session_id={} raw_segments={} exported_m4a_present={} exported_mp3_present={} error={}",
+            session_id,
+            raw_segment_count,
+            exported_m4a_present,
+            exported_mp3_present,
+            error
+        );
+        error
+    })?;
+
+    eprintln!(
+        "[playback-debug] session_prepare_transcription_audio resolved session_id={} selected_path={} selected_format={} merged={} merged_size={:?}",
+        session_id,
+        prepared.selected_path,
+        prepared.selected_format,
+        prepared.merged,
+        prepared.merged_file_size_bytes
+    );
 
     if prepared.merged {
         let mut storage = state

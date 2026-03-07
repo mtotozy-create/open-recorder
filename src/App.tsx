@@ -505,12 +505,29 @@ function App() {
     }
 
     try {
+      console.info("[playback-debug] request prepareTranscriptionAudio", {
+        activeSessionId,
+        audioSegmentCount: activeSession?.audioSegments.length ?? 0,
+        exportedM4aPath: activeSession?.exportedM4aPath,
+        exportedMp3Path: activeSession?.exportedMp3Path,
+        exportedWavPath: activeSession?.exportedWavPath
+      });
       const response = await prepareTranscriptionAudio(activeSessionId);
+      console.info("[playback-debug] prepareTranscriptionAudio response", {
+        activeSessionId,
+        path: response.path,
+        format: response.format,
+        merged: response.merged
+      });
       await refreshSessionDetail(activeSessionId);
       await refreshSessions();
       return response.path;
     } catch (error) {
-      setStatus("status.exportFailed", { error: String(error) });
+      console.error("[playback-debug] prepareTranscriptionAudio failed", {
+        activeSessionId,
+        error: String(error)
+      });
+      setStatus("status.preparePlaybackAudioFailed", { error: String(error) });
       throw error;
     }
   }
