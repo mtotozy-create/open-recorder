@@ -1,6 +1,7 @@
 export type SessionStatus =
   | "recording"
   | "paused"
+  | "processing"
   | "stopped"
   | "transcribing"
   | "summarizing"
@@ -145,6 +146,8 @@ export type SessionDetail = SessionSummary & {
   summary?: SummaryResult;
 };
 
+export type RecorderPhase = "idle" | "recording" | "paused" | "processing" | "error";
+
 export type RecorderRuntimeStatus = {
   sessionId: string;
   elapsedMs: number;
@@ -152,6 +155,16 @@ export type RecorderRuntimeStatus = {
   qualityPreset: RecordingQualityPreset;
   rms: number;
   peak: number;
+  phase: RecorderPhase;
+  pendingJobs: number;
+  lastProcessingError?: string;
+};
+
+export type RecorderProcessingStatus = {
+  sessionId: string;
+  phase: RecorderPhase;
+  pendingJobs: number;
+  lastProcessingError?: string;
 };
 
 export type JobInfo = {

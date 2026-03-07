@@ -12,6 +12,7 @@ const DEFAULT_R2_OSS_CONFIG_ID: &str = "oss-r2-default";
 pub enum SessionStatus {
     Recording,
     Paused,
+    Processing,
     Stopped,
     Transcribing,
     Summarizing,
@@ -1116,6 +1117,28 @@ pub struct RecorderStatus {
     pub quality_preset: RecordingQualityPreset,
     pub rms: f32,
     pub peak: f32,
+    pub phase: RecorderPhase,
+    pub pending_jobs: usize,
+    pub last_processing_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecorderPhase {
+    Idle,
+    Recording,
+    Paused,
+    Processing,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecorderProcessingStatus {
+    pub session_id: String,
+    pub phase: RecorderPhase,
+    pub pending_jobs: usize,
+    pub last_processing_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

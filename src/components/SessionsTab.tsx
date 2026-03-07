@@ -15,7 +15,9 @@ import type { JobInfo, PromptTemplate, SessionDetail, SessionSummary } from "../
 
 type DetailTab = "transcription" | "meta" | "tasks";
 type ViewMode = "readable" | "raw";
+type CopyStatus = "idle" | "success" | "error";
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+const COPY_STATUS_RESET_MS = 1800;
 
 type SessionsTabProps = {
   sessions: SessionSummary[];
@@ -76,6 +78,24 @@ function formatSegmentTime(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function parseTimestampMs(value?: string): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function resolveRunningElapsedMs(
+  nowMs: number,
+  runningJob?: JobInfo,
+  fallbackStartMs?: number
+): number {
+  const jobStartMs = parseTimestampMs(runningJob?.createdAt);
+  const effectiveStartMs = jobStartMs ?? fallbackStartMs ?? nowMs;
+  return Math.max(0, nowMs - effectiveStartMs);
 }
 
 function normalizeSessionName(name?: string): string {
@@ -164,6 +184,32 @@ function toSafeHref(rawHref?: string): string | undefined {
   }
 }
 
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document !== "undefined") {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    textarea.setAttribute("readonly", "true");
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    if (copied) {
+      return;
+    }
+  }
+
+  throw new Error("clipboard is unavailable");
+}
+
 function SessionsTab({
   sessions,
   templates,
@@ -204,12 +250,36 @@ function SessionsTab({
   const [isPreparingPlaybackAudio, setIsPreparingPlaybackAudio] = useState(false);
   const [playbackAudioPath, setPlaybackAudioPath] = useState<string>();
   const [playbackAudioSrc, setPlaybackAudioSrc] = useState<string>();
+  const [runningNowMs, setRunningNowMs] = useState<number>(() => Date.now());
+  const [transcriptionStartMs, setTranscriptionStartMs] = useState<number>();
+  const [summaryStartMs, setSummaryStartMs] = useState<number>();
+  const [summaryCopyStatus, setSummaryCopyStatus] = useState<CopyStatus>("idle");
   const skipListBlurRef = useRef(false);
   const audioFileInputRef = useRef<HTMLInputElement>(null);
   const playbackAudioRef = useRef<HTMLAudioElement>(null);
+  const summaryCopyResetTimerRef = useRef<number | undefined>(undefined);
 
   const runningTranscribeJob = sessionJobs?.find((j) => j.kind === "transcription" && j.status === "running");
   const runningSummaryJob = sessionJobs?.find((j) => j.kind === "summary" && j.status === "running");
+  const transcriptionElapsedLabel = formatDuration(
+    resolveRunningElapsedMs(runningNowMs, runningTranscribeJob, transcriptionStartMs)
+  );
+  const summaryElapsedLabel = formatDuration(
+    resolveRunningElapsedMs(runningNowMs, runningSummaryJob, summaryStartMs)
+  );
+  const transcriptionRunningLabel = runningTranscribeJob?.progressMsg
+    ? `${t("status.transcriptionRunning", { elapsed: transcriptionElapsedLabel })} (${runningTranscribeJob.progressMsg})`
+    : t("status.transcriptionRunning", { elapsed: transcriptionElapsedLabel });
+  const summaryRunningLabel = runningSummaryJob?.progressMsg
+    ? `${t("status.summaryRunning", { elapsed: summaryElapsedLabel })} (${runningSummaryJob.progressMsg})`
+    : t("status.summaryRunning", { elapsed: summaryElapsedLabel });
+  const summaryCopyText = activeSession?.summary?.rawMarkdown?.trim() ?? "";
+  const canCopySummary = summaryViewMode === "readable" && summaryCopyText.length > 0;
+  const summaryCopyLabel = summaryCopyStatus === "success"
+    ? t("sessionDetail.copySummarySuccess")
+    : summaryCopyStatus === "error"
+      ? t("sessionDetail.copySummaryFailed")
+      : t("sessionDetail.copySummary");
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -223,6 +293,63 @@ function SessionsTab({
     setActiveDetailTab("transcription");
     setIsTranscriptCollapsed(!!activeSession?.summary);
   }, [activeSession?.id, activeSession?.name, !!activeSession?.summary]);
+
+  useEffect(() => {
+    setSummaryCopyStatus("idle");
+    if (summaryCopyResetTimerRef.current) {
+      window.clearTimeout(summaryCopyResetTimerRef.current);
+      summaryCopyResetTimerRef.current = undefined;
+    }
+  }, [activeSession?.id, activeSession?.summary?.rawMarkdown, summaryViewMode]);
+
+  useEffect(() => {
+    return () => {
+      if (summaryCopyResetTimerRef.current) {
+        window.clearTimeout(summaryCopyResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTranscribing && !isSummarizing) {
+      return;
+    }
+    setRunningNowMs(Date.now());
+    const timer = window.setInterval(() => {
+      setRunningNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isTranscribing, isSummarizing]);
+
+  useEffect(() => {
+    if (isTranscribing) {
+      setTranscriptionStartMs((current) => current ?? Date.now());
+      return;
+    }
+    setTranscriptionStartMs(undefined);
+  }, [isTranscribing]);
+
+  useEffect(() => {
+    if (isSummarizing) {
+      setSummaryStartMs((current) => current ?? Date.now());
+      return;
+    }
+    setSummaryStartMs(undefined);
+  }, [isSummarizing]);
+
+  function handleTranscribeClick() {
+    if (!isTranscribing) {
+      setTranscriptionStartMs(Date.now());
+    }
+    onTranscribe();
+  }
+
+  function handleSummarizeClick() {
+    if (!isSummarizing) {
+      setSummaryStartMs(Date.now());
+    }
+    onSummarize();
+  }
 
   function setAndPlayAudio(path: string) {
     try {
@@ -390,6 +517,30 @@ function SessionsTab({
     } finally {
       setIsPreparingPlaybackAudio(false);
     }
+  }
+
+  function queueSummaryCopyStatusReset() {
+    if (summaryCopyResetTimerRef.current) {
+      window.clearTimeout(summaryCopyResetTimerRef.current);
+    }
+    summaryCopyResetTimerRef.current = window.setTimeout(() => {
+      setSummaryCopyStatus("idle");
+      summaryCopyResetTimerRef.current = undefined;
+    }, COPY_STATUS_RESET_MS);
+  }
+
+  async function handleCopySummary() {
+    if (!canCopySummary) {
+      return;
+    }
+    try {
+      await copyTextToClipboard(summaryCopyText);
+      setSummaryCopyStatus("success");
+    } catch (error) {
+      console.warn("[summary-copy] failed to copy summary", { error: String(error) });
+      setSummaryCopyStatus("error");
+    }
+    queueSummaryCopyStatusReset();
   }
 
   const canShowCurrentShortcut = Boolean(activeSessionId);
@@ -605,24 +756,20 @@ function SessionsTab({
                   <button
                     type="button"
                     className={`action-btn${isTranscribing ? " loading" : ""}`}
-                    onClick={onTranscribe}
+                    onClick={handleTranscribeClick}
                     disabled={isTranscribing}
                   >
                     {isTranscribing && <span className="spinner" />}
-                    {isTranscribing
-                      ? runningTranscribeJob?.progressMsg || t("status.transcriptionRunning", { elapsed: "" })
-                      : t("sessionDetail.runTranscription")}
+                    {isTranscribing ? transcriptionRunningLabel : t("sessionDetail.runTranscription")}
                   </button>
                   <button
                     type="button"
                     className={`action-btn${isSummarizing ? " loading" : ""}`}
-                    onClick={onSummarize}
+                    onClick={handleSummarizeClick}
                     disabled={isSummarizing}
                   >
                     {isSummarizing && <span className="spinner" />}
-                    {isSummarizing
-                      ? runningSummaryJob?.progressMsg || t("status.summaryRunning", { elapsed: "" })
-                      : t("sessionDetail.generateSummary")}
+                    {isSummarizing ? summaryRunningLabel : t("sessionDetail.generateSummary")}
                   </button>
                   <div className="summary-template-inline">
                     <span>{t("sessionDetail.summaryTemplate")}</span>
@@ -898,21 +1045,44 @@ function SessionsTab({
                 <section className="panel session-result-panel">
                   <div className="session-result-header">
                     <h3>{t("sessionDetail.summary")}</h3>
-                    <div className="view-switch">
-                      <button
-                        type="button"
-                        className={`view-switch-btn${summaryViewMode === "readable" ? " active" : ""}`}
-                        onClick={() => setSummaryViewMode("readable")}
-                      >
-                        {t("sessionDetail.readableView")}
-                      </button>
-                      <button
-                        type="button"
-                        className={`view-switch-btn${summaryViewMode === "raw" ? " active" : ""}`}
-                        onClick={() => setSummaryViewMode("raw")}
-                      >
-                        {t("sessionDetail.rawView")}
-                      </button>
+                    <div className="session-result-actions">
+                      {summaryViewMode === "readable" && (
+                        <button
+                          type="button"
+                          className={`summary-copy-btn${summaryCopyStatus === "success" ? " success" : ""}${summaryCopyStatus === "error" ? " error" : ""}`}
+                          onClick={() => void handleCopySummary()}
+                          disabled={!canCopySummary}
+                          aria-label={summaryCopyLabel}
+                          title={summaryCopyLabel}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            {summaryCopyStatus === "success" ? (
+                              <path d="M20 7l-11 11-5-5" />
+                            ) : summaryCopyStatus === "error" ? (
+                              <path d="M18 6L6 18M6 6l12 12" />
+                            ) : (
+                              <path d="M9 9V4a1 1 0 011-1h9a1 1 0 011 1v11a1 1 0 01-1 1h-5M9 9H5a1 1 0 00-1 1v10a1 1 0 001 1h9a1 1 0 001-1v-4M9 9h6a1 1 0 011 1v6" />
+                            )}
+                          </svg>
+                          <span>{summaryCopyLabel}</span>
+                        </button>
+                      )}
+                      <div className="view-switch">
+                        <button
+                          type="button"
+                          className={`view-switch-btn${summaryViewMode === "readable" ? " active" : ""}`}
+                          onClick={() => setSummaryViewMode("readable")}
+                        >
+                          {t("sessionDetail.readableView")}
+                        </button>
+                        <button
+                          type="button"
+                          className={`view-switch-btn${summaryViewMode === "raw" ? " active" : ""}`}
+                          onClick={() => setSummaryViewMode("raw")}
+                        >
+                          {t("sessionDetail.rawView")}
+                        </button>
+                      </div>
                     </div>
                   </div>
 

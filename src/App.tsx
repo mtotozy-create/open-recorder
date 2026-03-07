@@ -38,6 +38,7 @@ import type {
   ProviderCapability,
   ProviderConfig,
   PromptTemplate,
+  RecorderPhase,
   RecordingQualityPreset,
   SessionDetail,
   SessionSummary,
@@ -289,6 +290,7 @@ function App() {
   const [activeSession, setActiveSession] = useState<SessionDetail>();
   const [sessionJobs, setSessionJobs] = useState<JobInfo[]>([]);
   const [currentRecording, setCurrentRecording] = useState<string>();
+  const [recorderPhase, setRecorderPhase] = useState<RecorderPhase>("idle");
   const [recordingQuality, setRecordingQuality] = useState<RecordingQualityPreset>("standard");
   const [recordingElapsedMs, setRecordingElapsedMs] = useState<number>(0);
   const [waveformPoints, setWaveformPoints] = useState<number[]>([]);
@@ -302,8 +304,18 @@ function App() {
   const t = useMemo(() => createTranslator(locale), [locale]);
   const statusMessage = t(statusState.key, statusState.params);
   const canRecord = useMemo(() => !currentRecording, [currentRecording]);
+  const hasRecording = useMemo(
+    () => Boolean(currentRecording && (recorderPhase === "recording" || recorderPhase === "paused")),
+    [currentRecording, recorderPhase]
+  );
   const canExport = useMemo(
-    () => Boolean(activeSessionId && activeSession && activeSession.audioSegments.length > 0),
+    () =>
+      Boolean(
+        activeSessionId &&
+          activeSession &&
+          activeSession.audioSegments.length > 0 &&
+          activeSession.status !== "processing"
+      ),
     [activeSession, activeSessionId]
   );
 
@@ -401,13 +413,30 @@ function App() {
           return;
         }
         setRecordingElapsedMs(status.elapsedMs);
-        setWaveformPoints((previous) => {
-          const next = [...previous, status.rms];
-          if (next.length > WAVEFORM_CAPACITY) {
-            next.splice(0, next.length - WAVEFORM_CAPACITY);
-          }
-          return next;
-        });
+        setRecorderPhase(status.phase);
+        if (status.phase === "recording") {
+          setWaveformPoints((previous) => {
+            const next = [...previous, status.rms];
+            if (next.length > WAVEFORM_CAPACITY) {
+              next.splice(0, next.length - WAVEFORM_CAPACITY);
+            }
+            return next;
+          });
+        }
+        if (status.phase === "processing") {
+          setStatus("status.recordingProcessing", { pending: String(status.pendingJobs) });
+        }
+        if (status.phase === "error" && status.lastProcessingError) {
+          setStatus("status.recorderError", { error: status.lastProcessingError });
+        }
+        if (status.phase === "idle") {
+          setCurrentRecording(undefined);
+          setWaveformPoints([]);
+          setRecorderPhase("idle");
+          setStatus("status.recordingPostProcessDone");
+          await refreshSessionDetail(currentRecording);
+          await refreshSessions();
+        }
       } catch (error) {
         if (!disposed && !failureNotified) {
           failureNotified = true;
@@ -431,6 +460,7 @@ function App() {
     try {
       const sessionId = await startRecording(undefined, recordingQuality);
       setCurrentRecording(sessionId);
+      setRecorderPhase("recording");
       setActiveSessionId(sessionId);
       setRecordingElapsedMs(0);
       setWaveformPoints([]);
@@ -446,6 +476,7 @@ function App() {
     if (!currentRecording) return;
     try {
       await pauseRecording(currentRecording);
+      setRecorderPhase("paused");
       setStatus("status.recordingPaused");
       await refreshSessionDetail(currentRecording);
       await refreshSessions();
@@ -458,6 +489,7 @@ function App() {
     if (!currentRecording) return;
     try {
       await resumeRecording(currentRecording);
+      setRecorderPhase("recording");
       setStatus("status.recordingResumed");
       await refreshSessionDetail(currentRecording);
       await refreshSessions();
@@ -473,14 +505,12 @@ function App() {
 
     try {
       await stopRecording(currentRecording);
-      setStatus("status.recordingStopped");
+      setRecorderPhase("processing");
+      setStatus("status.recordingProcessing", { pending: "..." });
       await refreshSessionDetail(currentRecording);
       await refreshSessions();
     } catch (error) {
       setStatus("status.stopRecordingFailed", { error: String(error) });
-    } finally {
-      setCurrentRecording(undefined);
-      setWaveformPoints([]);
     }
   }
 
@@ -773,7 +803,7 @@ function App() {
         <RecorderTab
           statusMessage={statusMessage}
           canRecord={canRecord}
-          hasRecording={Boolean(currentRecording)}
+          hasRecording={hasRecording}
           canExport={canExport}
           elapsedMs={recordingElapsedMs}
           waveformPoints={waveformPoints}

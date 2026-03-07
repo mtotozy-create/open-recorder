@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     io::BufWriter,
     path::{Path, PathBuf},
@@ -19,8 +20,8 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        AudioSegmentMeta, RecorderExportResponse, RecorderStatus, RecordingQualityPreset, Session,
-        SessionStatus, StartSessionResponse,
+        AudioSegmentMeta, RecorderExportResponse, RecorderPhase, RecorderProcessingStatus,
+        RecorderStatus, RecordingQualityPreset, Session, SessionStatus, StartSessionResponse,
     },
     state::AppState,
     storage::Storage,
@@ -44,6 +45,7 @@ struct OpenSegment {
 
 struct RecorderShared {
     session_id: String,
+    segment_dir: PathBuf,
     sample_rate: u32,
     channels: u16,
     chunk_frames: u64,
@@ -55,6 +57,27 @@ struct RecorderShared {
     last_rms: f32,
     last_peak: f32,
     last_error: Option<String>,
+}
+
+struct PendingSegmentTask {
+    session_id: String,
+    path: String,
+    sequence: u32,
+    started_at: String,
+    start_elapsed_ms: u64,
+    finished_elapsed_ms: u64,
+    sample_rate: u32,
+    channels: u16,
+}
+
+struct ProcessingState {
+    pending_jobs: usize,
+    finalizing: bool,
+    last_error: Option<String>,
+}
+
+enum SegmentProcessorCommand {
+    Process(PendingSegmentTask),
 }
 
 type CommandReply = mpsc::Sender<Result<(), String>>;
@@ -79,6 +102,30 @@ enum RecorderRuntime {
 fn recorder_runtime() -> &'static Mutex<RecorderRuntime> {
     static RUNTIME: OnceLock<Mutex<RecorderRuntime>> = OnceLock::new();
     RUNTIME.get_or_init(|| Mutex::new(RecorderRuntime::Idle))
+}
+
+fn processing_registry() -> &'static Mutex<HashMap<String, ProcessingState>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, ProcessingState>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn segment_processor_tx(
+    storage: Arc<Mutex<Storage>>,
+) -> &'static mpsc::Sender<SegmentProcessorCommand> {
+    static TX: OnceLock<mpsc::Sender<SegmentProcessorCommand>> = OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<SegmentProcessorCommand>();
+        thread::spawn(move || {
+            while let Ok(command) = rx.recv() {
+                match command {
+                    SegmentProcessorCommand::Process(task) => {
+                        process_segment_task(task, &storage);
+                    }
+                }
+            }
+        });
+        tx
+    })
 }
 
 fn now_iso() -> String {
@@ -179,6 +226,213 @@ fn encode_wav_to_m4a(wav_path: &Path, bitrate: &str) -> Result<PathBuf, String> 
     }
 }
 
+fn processing_snapshot(session_id: &str) -> (usize, bool, Option<String>) {
+    let registry = match processing_registry().lock() {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                0,
+                false,
+                Some("failed to acquire processing lock".to_string()),
+            )
+        }
+    };
+
+    if let Some(state) = registry.get(session_id) {
+        return (
+            state.pending_jobs,
+            state.finalizing,
+            state.last_error.clone(),
+        );
+    }
+    (0, false, None)
+}
+
+fn increase_pending_jobs(session_id: &str) -> Result<(), String> {
+    let mut registry = processing_registry()
+        .lock()
+        .map_err(|_| "failed to acquire processing lock".to_string())?;
+    let state = registry
+        .entry(session_id.to_string())
+        .or_insert(ProcessingState {
+            pending_jobs: 0,
+            finalizing: false,
+            last_error: None,
+        });
+    state.pending_jobs = state.pending_jobs.saturating_add(1);
+    Ok(())
+}
+
+fn mark_finalizing(session_id: &str) -> Result<(usize, Option<String>), String> {
+    let mut registry = processing_registry()
+        .lock()
+        .map_err(|_| "failed to acquire processing lock".to_string())?;
+    let state = registry
+        .entry(session_id.to_string())
+        .or_insert(ProcessingState {
+            pending_jobs: 0,
+            finalizing: false,
+            last_error: None,
+        });
+    state.finalizing = true;
+    Ok((state.pending_jobs, state.last_error.clone()))
+}
+
+fn complete_pending_job(
+    session_id: &str,
+    task_error: Option<String>,
+) -> Result<(usize, bool, Option<String>), String> {
+    let mut registry = processing_registry()
+        .lock()
+        .map_err(|_| "failed to acquire processing lock".to_string())?;
+    let state = registry
+        .entry(session_id.to_string())
+        .or_insert(ProcessingState {
+            pending_jobs: 0,
+            finalizing: false,
+            last_error: None,
+        });
+
+    if state.pending_jobs > 0 {
+        state.pending_jobs -= 1;
+    }
+    if task_error.is_some() {
+        state.last_error = task_error.clone();
+    }
+
+    let should_remove = state.pending_jobs == 0 && !state.finalizing;
+    let snapshot = (
+        state.pending_jobs,
+        state.finalizing,
+        state.last_error.clone(),
+    );
+    if should_remove {
+        registry.remove(session_id);
+    }
+    Ok(snapshot)
+}
+
+fn clear_processing_state(session_id: &str) {
+    if let Ok(mut registry) = processing_registry().lock() {
+        registry.remove(session_id);
+    }
+}
+
+fn has_active_finalizing_session() -> bool {
+    let registry = match processing_registry().lock() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    registry
+        .values()
+        .any(|state| state.finalizing && state.pending_jobs > 0)
+}
+
+fn persist_segment_meta(
+    task: &PendingSegmentTask,
+    storage: &Arc<Mutex<Storage>>,
+) -> Result<(), String> {
+    let bitrate = aac_bitrate_for_quality(task.sample_rate, task.channels);
+    let wav_path = Path::new(&task.path);
+    let (final_path, final_format) = match encode_wav_to_m4a(wav_path, bitrate) {
+        Ok(m4a_path) => (m4a_path.to_string_lossy().to_string(), "m4a".to_string()),
+        Err(_) => (task.path.clone(), "wav".to_string()),
+    };
+    let duration_ms = task
+        .finished_elapsed_ms
+        .saturating_sub(task.start_elapsed_ms);
+    let file_size_bytes = fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
+
+    let meta = AudioSegmentMeta {
+        path: final_path.clone(),
+        sequence: task.sequence,
+        started_at: task.started_at.clone(),
+        ended_at: now_iso(),
+        duration_ms,
+        sample_rate: task.sample_rate,
+        channels: task.channels,
+        format: final_format,
+        file_size_bytes,
+    };
+
+    let mut state = storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let session = state
+        .data
+        .sessions
+        .get_mut(&task.session_id)
+        .ok_or_else(|| "session not found".to_string())?;
+    session.audio_segments.push(meta.path.clone());
+    session.audio_segment_meta.push(meta);
+    session.elapsed_ms = task.finished_elapsed_ms;
+    session.sample_rate = task.sample_rate;
+    session.channels = task.channels;
+    session.updated_at = now_iso();
+    state.save()?;
+    Ok(())
+}
+
+fn update_finalizing_session_status(
+    session_id: &str,
+    status: SessionStatus,
+    error: Option<String>,
+    storage: &Arc<Mutex<Storage>>,
+) -> Result<(), String> {
+    let mut state = storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let session = state
+        .data
+        .sessions
+        .get_mut(session_id)
+        .ok_or_else(|| "session not found".to_string())?;
+    session.status = status;
+    session.updated_at = now_iso();
+    if let Some(reason) = error {
+        eprintln!(
+            "[recorder] processing failed for session {}: {}",
+            session_id, reason
+        );
+    }
+    state.save()?;
+    Ok(())
+}
+
+fn process_segment_task(task: PendingSegmentTask, storage: &Arc<Mutex<Storage>>) {
+    let task_result = persist_segment_meta(&task, storage);
+    let task_error = task_result.err();
+
+    let (pending_jobs, finalizing, last_error) =
+        match complete_pending_job(&task.session_id, task_error.clone()) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                eprintln!(
+                    "[recorder] failed to update processing state for {}: {}",
+                    task.session_id, error
+                );
+                return;
+            }
+        };
+
+    if finalizing && pending_jobs == 0 {
+        let status = if last_error.is_some() {
+            SessionStatus::Failed
+        } else {
+            SessionStatus::Stopped
+        };
+        if let Err(error) =
+            update_finalizing_session_status(&task.session_id, status, last_error.clone(), storage)
+        {
+            eprintln!(
+                "[recorder] failed to update session status for {}: {}",
+                task.session_id, error
+            );
+        }
+        clear_processing_state(&task.session_id);
+    }
+}
+
 fn frames_to_ms(frames: u64, sample_rate: u32) -> u64 {
     if sample_rate == 0 {
         return 0;
@@ -191,23 +445,18 @@ fn elapsed_ms(shared: &RecorderShared) -> u64 {
     frames_to_ms(shared.total_frames, shared.sample_rate)
 }
 
-fn segment_file_path(
-    storage: &Storage,
-    session_id: &str,
-    sequence: u32,
-) -> Result<PathBuf, String> {
-    let segment_dir = storage.session_audio_dir(session_id)?;
+fn segment_file_path(segment_dir: &Path, sequence: u32) -> PathBuf {
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    Ok(segment_dir.join(format!("segment-{timestamp}-{sequence:06}.wav")))
+    segment_dir.join(format!("segment-{timestamp}-{sequence:06}.wav"))
 }
 
-fn open_next_segment(shared: &mut RecorderShared, storage: &Storage) -> Result<(), String> {
+fn open_next_segment(shared: &mut RecorderShared) -> Result<(), String> {
     if shared.writer.is_some() {
         return Ok(());
     }
 
     let sequence = shared.next_sequence;
-    let segment_path = segment_file_path(storage, &shared.session_id, sequence)?;
+    let segment_path = segment_file_path(&shared.segment_dir, sequence);
     let wav_spec = WavSpec {
         channels: shared.channels,
         sample_rate: shared.sample_rate,
@@ -237,7 +486,7 @@ fn open_next_segment(shared: &mut RecorderShared, storage: &Storage) -> Result<(
 
 fn close_open_segment(
     shared: &mut RecorderShared,
-    storage: &Arc<Mutex<Storage>>,
+    processor_tx: &mpsc::Sender<SegmentProcessorCommand>,
 ) -> Result<(), String> {
     let writer = match shared.writer.take() {
         Some(writer) => writer,
@@ -254,84 +503,55 @@ fn close_open_segment(
     };
 
     let finished_elapsed_ms = elapsed_ms(shared);
-    let duration_ms = finished_elapsed_ms.saturating_sub(open_segment.start_elapsed_ms);
-
-    // WAV 写入完成后，转码为 M4A
-    let bitrate = aac_bitrate_for_quality(shared.sample_rate, shared.channels);
-    let wav_path = Path::new(&open_segment.path);
-    let (final_path, final_format) = match encode_wav_to_m4a(wav_path, bitrate) {
-        Ok(m4a_path) => (m4a_path.to_string_lossy().to_string(), "m4a".to_string()),
-        Err(_) => {
-            // 转码失败时保留 WAV 作为降级
-            (open_segment.path.clone(), "wav".to_string())
-        }
-    };
-
-    let file_size_bytes = fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
-
-    let meta = AudioSegmentMeta {
-        path: final_path.clone(),
+    let task = PendingSegmentTask {
+        session_id: shared.session_id.clone(),
+        path: open_segment.path,
         sequence: open_segment.sequence,
         started_at: open_segment.started_at,
-        ended_at: now_iso(),
-        duration_ms,
+        start_elapsed_ms: open_segment.start_elapsed_ms,
+        finished_elapsed_ms,
         sample_rate: shared.sample_rate,
         channels: shared.channels,
-        format: final_format,
-        file_size_bytes,
     };
-
-    let mut state = storage
-        .lock()
-        .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-    let session = state
-        .data
-        .sessions
-        .get_mut(&shared.session_id)
-        .ok_or_else(|| "session not found".to_string())?;
-
-    session.audio_segments.push(meta.path.clone());
-    session.audio_segment_meta.push(meta);
-    session.elapsed_ms = finished_elapsed_ms;
-    session.sample_rate = shared.sample_rate;
-    session.channels = shared.channels;
-    session.updated_at = now_iso();
-
-    state.save()?;
+    increase_pending_jobs(&task.session_id)?;
+    if processor_tx
+        .send(SegmentProcessorCommand::Process(task))
+        .is_err()
+    {
+        let _ = complete_pending_job(
+            &shared.session_id,
+            Some("failed to enqueue segment processing task".to_string()),
+        );
+        return Err("failed to enqueue segment processing task".to_string());
+    }
 
     Ok(())
 }
 
-fn rotate_segment_if_needed(shared: &mut RecorderShared, storage: &Arc<Mutex<Storage>>) {
+fn rotate_segment_if_needed(
+    shared: &mut RecorderShared,
+    storage: &Arc<Mutex<Storage>>,
+    processor_tx: &mpsc::Sender<SegmentProcessorCommand>,
+) {
     if shared.current_segment_frames < shared.chunk_frames {
         return;
     }
 
-    if let Err(error) = close_open_segment(shared, storage) {
+    if let Err(error) = close_open_segment(shared, processor_tx) {
         shared.last_error = Some(error);
         return;
     }
 
-    let mut storage_lock = match storage.lock() {
-        Ok(value) => value,
-        Err(_) => {
-            shared.last_error = Some("failed to acquire storage lock".to_string());
-            return;
+    if let Err(error) = open_next_segment(shared) {
+        shared.last_error = Some(error);
+        return;
+    }
+
+    if let Ok(mut storage_lock) = storage.lock() {
+        if let Some(session) = storage_lock.data.sessions.get_mut(&shared.session_id) {
+            session.updated_at = now_iso();
+            let _ = storage_lock.save();
         }
-    };
-
-    if let Err(error) = open_next_segment(shared, &storage_lock) {
-        shared.last_error = Some(error);
-        return;
-    }
-
-    if let Some(session) = storage_lock.data.sessions.get_mut(&shared.session_id) {
-        session.updated_at = now_iso();
-    }
-
-    if let Err(error) = storage_lock.save() {
-        shared.last_error = Some(error);
     }
 }
 
@@ -339,6 +559,7 @@ fn process_i16_samples(
     data: &[i16],
     shared: &Arc<Mutex<RecorderShared>>,
     storage: &Arc<Mutex<Storage>>,
+    processor_tx: &mpsc::Sender<SegmentProcessorCommand>,
 ) {
     if data.is_empty() {
         return;
@@ -383,13 +604,14 @@ fn process_i16_samples(
     };
     state.last_peak = peak;
 
-    rotate_segment_if_needed(&mut state, storage);
+    rotate_segment_if_needed(&mut state, storage, processor_tx);
 }
 
 fn process_f32_samples(
     data: &[f32],
     shared: &Arc<Mutex<RecorderShared>>,
     storage: &Arc<Mutex<Storage>>,
+    processor_tx: &mpsc::Sender<SegmentProcessorCommand>,
 ) {
     let converted: Vec<i16> = data
         .iter()
@@ -398,19 +620,20 @@ fn process_f32_samples(
             (clamped * i16::MAX as f32) as i16
         })
         .collect();
-    process_i16_samples(&converted, shared, storage);
+    process_i16_samples(&converted, shared, storage, processor_tx);
 }
 
 fn process_u16_samples(
     data: &[u16],
     shared: &Arc<Mutex<RecorderShared>>,
     storage: &Arc<Mutex<Storage>>,
+    processor_tx: &mpsc::Sender<SegmentProcessorCommand>,
 ) {
     let converted: Vec<i16> = data
         .iter()
         .map(|sample| ((*sample as i32) - 32768) as i16)
         .collect();
-    process_i16_samples(&converted, shared, storage);
+    process_i16_samples(&converted, shared, storage, processor_tx);
 }
 
 fn select_stream_config(
@@ -469,6 +692,7 @@ fn send_control_command(
 fn start_audio_thread(
     shared: Arc<Mutex<RecorderShared>>,
     storage: Arc<Mutex<Storage>>,
+    processor_tx: mpsc::Sender<SegmentProcessorCommand>,
     stream_config: cpal::StreamConfig,
     sample_format: SampleFormat,
 ) -> Result<mpsc::Sender<AudioThreadCommand>, String> {
@@ -487,6 +711,7 @@ fn start_audio_thread(
 
         let shared_for_data = Arc::clone(&shared);
         let storage_for_data = Arc::clone(&storage);
+        let processor_tx_for_data = processor_tx.clone();
         let shared_for_error = Arc::clone(&shared);
 
         let error_callback = move |error: cpal::StreamError| {
@@ -499,7 +724,12 @@ fn start_audio_thread(
             SampleFormat::F32 => device.build_input_stream(
                 &stream_config,
                 move |data: &[f32], _| {
-                    process_f32_samples(data, &shared_for_data, &storage_for_data)
+                    process_f32_samples(
+                        data,
+                        &shared_for_data,
+                        &storage_for_data,
+                        &processor_tx_for_data,
+                    )
                 },
                 error_callback,
                 None,
@@ -507,6 +737,7 @@ fn start_audio_thread(
             SampleFormat::I16 => {
                 let shared_for_data = Arc::clone(&shared);
                 let storage_for_data = Arc::clone(&storage);
+                let processor_tx_for_data = processor_tx.clone();
                 let shared_for_error = Arc::clone(&shared);
                 let error_callback = move |error: cpal::StreamError| {
                     if let Ok(mut shared_state) = shared_for_error.lock() {
@@ -517,7 +748,12 @@ fn start_audio_thread(
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[i16], _| {
-                        process_i16_samples(data, &shared_for_data, &storage_for_data)
+                        process_i16_samples(
+                            data,
+                            &shared_for_data,
+                            &storage_for_data,
+                            &processor_tx_for_data,
+                        )
                     },
                     error_callback,
                     None,
@@ -526,6 +762,7 @@ fn start_audio_thread(
             SampleFormat::U16 => {
                 let shared_for_data = Arc::clone(&shared);
                 let storage_for_data = Arc::clone(&storage);
+                let processor_tx_for_data = processor_tx.clone();
                 let shared_for_error = Arc::clone(&shared);
                 let error_callback = move |error: cpal::StreamError| {
                     if let Ok(mut shared_state) = shared_for_error.lock() {
@@ -536,7 +773,12 @@ fn start_audio_thread(
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[u16], _| {
-                        process_u16_samples(data, &shared_for_data, &storage_for_data)
+                        process_u16_samples(
+                            data,
+                            &shared_for_data,
+                            &storage_for_data,
+                            &processor_tx_for_data,
+                        )
                     },
                     error_callback,
                     None,
@@ -608,6 +850,9 @@ pub fn recorder_start(
     if matches!(*runtime, RecorderRuntime::Active(_)) {
         return Err("another recording session is already active".to_string());
     }
+    if has_active_finalizing_session() {
+        return Err("previous session is still processing; try again shortly".to_string());
+    }
 
     let target_quality = quality_preset.unwrap_or_default();
     let target_config = quality_config(&target_quality);
@@ -624,6 +869,13 @@ pub fn recorder_start(
     let now = now_iso();
     let actual_sample_rate = stream_config.sample_rate.0;
     let actual_channels = stream_config.channels;
+    let segment_dir = {
+        let storage = state
+            .storage
+            .lock()
+            .map_err(|_| "failed to acquire storage lock".to_string())?;
+        storage.session_audio_dir(&session_id)?
+    };
 
     {
         let mut storage = state
@@ -661,10 +913,12 @@ pub fn recorder_start(
         );
         storage.save()?;
     }
+    clear_processing_state(&session_id);
 
     let chunk_frames = SEGMENT_DURATION_SECS.saturating_mul(u64::from(actual_sample_rate));
     let shared = Arc::new(Mutex::new(RecorderShared {
         session_id: session_id.clone(),
+        segment_dir,
         sample_rate: actual_sample_rate,
         channels: actual_channels,
         chunk_frames,
@@ -682,16 +936,14 @@ pub fn recorder_start(
         let mut shared_state = shared
             .lock()
             .map_err(|_| "failed to acquire recorder state lock".to_string())?;
-        let storage = state
-            .storage
-            .lock()
-            .map_err(|_| "failed to acquire storage lock".to_string())?;
-        open_next_segment(&mut shared_state, &storage)?;
+        open_next_segment(&mut shared_state)?;
     }
 
+    let processor_tx = segment_processor_tx(Arc::clone(&state.storage)).clone();
     let control_tx = start_audio_thread(
         Arc::clone(&shared),
         Arc::clone(&state.storage),
+        processor_tx,
         stream_config,
         sample_format,
     )?;
@@ -729,11 +981,12 @@ pub fn recorder_pause(session_id: String, state: State<'_, AppState>) -> Result<
         .recv_timeout(COMMAND_TIMEOUT)
         .map_err(|_| "pause command timed out".to_string())??;
 
+    let processor_tx = segment_processor_tx(Arc::clone(&state.storage)).clone();
     let elapsed_ms = {
         let mut shared = shared_ref
             .lock()
             .map_err(|_| "failed to acquire recorder state lock".to_string())?;
-        close_open_segment(&mut shared, &state.storage)?;
+        close_open_segment(&mut shared, &processor_tx)?;
         elapsed_ms(&shared)
     };
 
@@ -768,11 +1021,7 @@ pub fn recorder_resume(session_id: String, state: State<'_, AppState>) -> Result
         let mut shared = shared_ref
             .lock()
             .map_err(|_| "failed to acquire recorder state lock".to_string())?;
-        let storage = state
-            .storage
-            .lock()
-            .map_err(|_| "failed to acquire storage lock".to_string())?;
-        open_next_segment(&mut shared, &storage)?;
+        open_next_segment(&mut shared)?;
         elapsed_ms(&shared)
     };
 
@@ -813,21 +1062,31 @@ pub fn recorder_stop(session_id: String, state: State<'_, AppState>) -> Result<(
         .recv_timeout(COMMAND_TIMEOUT)
         .map_err(|_| "stop command timed out".to_string())??;
 
+    let processor_tx = segment_processor_tx(Arc::clone(&state.storage)).clone();
     let elapsed_ms = {
         let mut shared = active
             .shared
             .lock()
             .map_err(|_| "failed to acquire recorder state lock".to_string())?;
-        close_open_segment(&mut shared, &state.storage)?;
+        close_open_segment(&mut shared, &processor_tx)?;
         elapsed_ms(&shared)
     };
 
-    update_session_status(
-        &state.storage,
-        &session_id,
-        SessionStatus::Stopped,
-        elapsed_ms,
-    )?;
+    let (pending_jobs, last_error) = mark_finalizing(&session_id)?;
+    let status = if pending_jobs == 0 {
+        if last_error.is_some() {
+            SessionStatus::Failed
+        } else {
+            SessionStatus::Stopped
+        }
+    } else {
+        SessionStatus::Processing
+    };
+
+    update_session_status(&state.storage, &session_id, status, elapsed_ms)?;
+    if pending_jobs == 0 {
+        clear_processing_state(&session_id);
+    }
     Ok(())
 }
 
@@ -840,24 +1099,29 @@ pub fn recorder_status(
         .lock()
         .map_err(|_| "failed to acquire recorder runtime lock".to_string())?;
 
-    let (elapsed_ms_runtime, rms, peak, pending_segment) = match &*runtime {
-        RecorderRuntime::Active(active) if active.session_id == session_id => {
-            let shared = active
-                .shared
-                .lock()
-                .map_err(|_| "failed to acquire recorder state lock".to_string())?;
-            if let Some(error) = &shared.last_error {
-                return Err(error.clone());
+    let (elapsed_ms_runtime, rms, peak, pending_segment, runtime_phase, runtime_error) =
+        match &*runtime {
+            RecorderRuntime::Active(active) if active.session_id == session_id => {
+                let shared = active
+                    .shared
+                    .lock()
+                    .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+                let runtime_phase = if matches!(shared.last_error, Some(_)) {
+                    RecorderPhase::Error
+                } else {
+                    RecorderPhase::Recording
+                };
+                (
+                    elapsed_ms(&shared),
+                    shared.last_rms,
+                    shared.last_peak,
+                    usize::from(shared.open_segment.is_some()),
+                    runtime_phase,
+                    shared.last_error.clone(),
+                )
             }
-            (
-                elapsed_ms(&shared),
-                shared.last_rms,
-                shared.last_peak,
-                usize::from(shared.open_segment.is_some()),
-            )
-        }
-        _ => (0, 0.0, 0.0, 0),
-    };
+            _ => (0, 0.0, 0.0, 0, RecorderPhase::Idle, None),
+        };
 
     let storage = state
         .storage
@@ -868,14 +1132,48 @@ pub fn recorder_status(
         .sessions
         .get(&session_id)
         .ok_or_else(|| "session not found".to_string())?;
+    let (pending_jobs, finalizing, last_processing_error) = processing_snapshot(&session_id);
+    let phase = if matches!(runtime_phase, RecorderPhase::Error) {
+        RecorderPhase::Error
+    } else if matches!(runtime_phase, RecorderPhase::Recording) {
+        match session.status {
+            SessionStatus::Paused => RecorderPhase::Paused,
+            _ => RecorderPhase::Recording,
+        }
+    } else if finalizing || matches!(session.status, SessionStatus::Processing) {
+        RecorderPhase::Processing
+    } else if matches!(session.status, SessionStatus::Failed) {
+        RecorderPhase::Error
+    } else {
+        RecorderPhase::Idle
+    };
+    let pending_jobs_total = pending_jobs + pending_segment;
+    let last_processing_error = runtime_error.or(last_processing_error);
 
     Ok(RecorderStatus {
         session_id,
         elapsed_ms: elapsed_ms_runtime.max(session.elapsed_ms),
-        segment_count: session.audio_segments.len() + pending_segment,
+        segment_count: session.audio_segments.len() + pending_jobs_total,
         quality_preset: session.quality_preset.clone(),
         rms,
         peak,
+        phase,
+        pending_jobs: pending_jobs_total,
+        last_processing_error,
+    })
+}
+
+#[tauri::command]
+pub fn recorder_processing_status(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<RecorderProcessingStatus, String> {
+    let status = recorder_status(session_id.clone(), state)?;
+    Ok(RecorderProcessingStatus {
+        session_id,
+        phase: status.phase,
+        pending_jobs: status.pending_jobs,
+        last_processing_error: status.last_processing_error,
     })
 }
 
@@ -900,6 +1198,12 @@ pub fn recorder_export(
             .sessions
             .get(&session_id)
             .ok_or_else(|| "session not found".to_string())?;
+        if matches!(session.status, SessionStatus::Processing) {
+            return Err(
+                "session is still processing segments; export is temporarily unavailable"
+                    .to_string(),
+            );
+        }
         if session.audio_segments.is_empty() {
             return Err("no audio segments available to export".to_string());
         }

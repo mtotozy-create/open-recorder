@@ -21,7 +21,7 @@ type SettingsTabProps = {
   t: Translator;
 };
 
-type SettingsSubTab = "general" | "provider" | "oss" | "templates";
+type SettingsSubTab = "general" | "provider" | "oss" | "templates" | "about";
 
 type SettingsSubTabItem = {
   id: SettingsSubTab;
@@ -32,7 +32,8 @@ const settingsSubTabs: SettingsSubTabItem[] = [
   { id: "general", labelKey: "settings.tabs.general" },
   { id: "provider", labelKey: "settings.tabs.provider" },
   { id: "oss", labelKey: "settings.tabs.oss" },
-  { id: "templates", labelKey: "settings.tabs.templates" }
+  { id: "templates", labelKey: "settings.tabs.templates" },
+  { id: "about", labelKey: "settings.tabs.about" }
 ];
 
 function buildTemplateId(name: string, index: number): string {
@@ -956,6 +957,19 @@ function SettingsTab({
             <button type="button" className="settings-inline-btn" onClick={addTemplate}>
               {t("settings.addTemplate")}
             </button>
+          </div>
+        )}
+
+        {activeSubTab === "about" && (
+          <div className="settings-section">
+            <h3>{t("settings.tabs.about")}</h3>
+            <p>
+              <strong>{t("settings.about.author")}:</strong> renx
+            </p>
+            <p>
+              <strong>{t("settings.about.version")}:</strong>{" "}
+              {t("settings.about.versionValue", { version: __APP_VERSION__ })}
+            </p>
           </div>
         )}
       </div>

@@ -59,7 +59,8 @@ pub fn transcribe_with_aliyun_tingwu(
     let create_path = "/openapi/tingwu/v2/tasks";
     let create_query = "type=offline";
     let create_resource = format!("{create_path}?{create_query}");
-    let file_urls = resolve_segment_file_urls(segment_paths, config, session_id, progress_callback)?;
+    let file_urls =
+        resolve_segment_file_urls(segment_paths, config, session_id, progress_callback)?;
 
     let mut transcript = Vec::with_capacity(segment_paths.len());
     for (index, file_url) in file_urls.iter().enumerate() {

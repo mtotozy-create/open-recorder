@@ -739,6 +739,62 @@ p {
   gap: 10px;
 }
 
+.session-result-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.summary-copy-btn {
+  width: auto;
+  min-height: 30px;
+  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+}
+
+.summary-copy-btn:hover:not(:disabled) {
+  background: var(--primary-soft);
+  border-color: #bfdbfe;
+  color: var(--primary);
+}
+
+.summary-copy-btn.success {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.summary-copy-btn.error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.summary-copy-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.summary-copy-btn span {
+  font-size: 0.75rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .view-switch {
   display: inline-flex;
   gap: 6px;
@@ -845,6 +901,12 @@ p {
 .session-badge.recording {
   background: #dbeafe;
   color: #1d4ed8;
+}
+
+.session-badge.paused,
+.session-badge.processing {
+  background: #e0f2fe;
+  color: #075985;
 }
 
 .session-badge.completed {

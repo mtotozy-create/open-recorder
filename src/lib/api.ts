@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   JobInfo,
+  RecorderProcessingStatus,
   RecorderRuntimeStatus,
   RecordingQualityPreset,
   SessionDetail,
@@ -33,6 +34,14 @@ export async function stopRecording(sessionId: string): Promise<void> {
 
 export async function getRecorderStatus(sessionId: string): Promise<RecorderRuntimeStatus> {
   return invoke("recorder_status", {
+    sessionId
+  });
+}
+
+export async function getRecorderProcessingStatus(
+  sessionId: string
+): Promise<RecorderProcessingStatus> {
+  return invoke("recorder_processing_status", {
     sessionId
   });
 }

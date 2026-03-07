@@ -7,8 +7,8 @@ mod storage;
 use commands::{
     job::{job_get, session_jobs},
     recorder::{
-        recorder_export, recorder_pause, recorder_resume, recorder_start, recorder_status,
-        recorder_stop,
+        recorder_export, recorder_pause, recorder_processing_status, recorder_resume,
+        recorder_start, recorder_status, recorder_stop,
     },
     session::{
         session_create_from_audio, session_delete, session_get, session_list, session_rename,
@@ -30,6 +30,7 @@ pub fn run() {
             recorder_resume,
             recorder_stop,
             recorder_status,
+            recorder_processing_status,
             recorder_export,
             session_list,
             session_get,

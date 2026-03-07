@@ -1,141 +1,177 @@
 # Open Recorder
 
-Open Recorder 是一个本地优先（local-first）的桌面录音工具，支持会后转写与会议纪要生成。
+Open Recorder 是一个本地优先（local-first）的桌面录音工具，基于 Tauri + React + Rust，支持录音、导出、转写和会议纪要生成。
 
 ## 技术栈
 - Tauri v2
-- React 19 + TypeScript
+- React 19 + TypeScript + Vite
 - Rust（录音、存储、转写与摘要核心逻辑）
 
 ## 核心能力
-- 持续录音，按 10 分钟自动切片（优先 M4A，失败回退 WAV）。
-- 录音状态轮询（时长、波形 RMS/Peak）。
-- 导出 M4A / MP3（均为合并后导出，MP3 依赖 `ffmpeg`）。
-- 录音会话、任务、设置持久化到本地 `state.json`。
+- 本地持续录音，按 **2 分钟**自动切片。
+- 录音质量可选：
+  - Standard（16k 单声道）
+  - HD（24k 单声道）
+  - Hi-Fi（48k 双声道）
+- 实时状态与波形展示（时长、RMS、Peak）。
+- 会话管理：重命名、删除、查看音频分段与任务状态。
+- 支持从本地音频文件导入创建会话（如 wav/m4a/mp3/aac/flac/ogg/opus/webm/mp4/m4b）。
+- 导出音频：M4A / MP3（按会话合并后导出）。
 - 转写 Provider 可切换：
   - Bailian（百炼）
   - Aliyun Tingwu（听悟离线任务）
-- 支持多 OSS 配置并可切换“当前生效 OSS”：
+- 摘要 Provider 可切换：
+  - Bailian（兼容 Chat Completions）
+  - OpenRouter（Chat Completions）
+- 支持多 OSS 配置并选择“当前生效 OSS”：
   - Aliyun OSS
   - Cloudflare R2（S3 兼容）
-- 摘要使用 Bailian 兼容 Chat Completions 接口。
-- 未配置 API Key 时，转写/摘要自动回退到 mock 结果。
+- 支持摘要模板（Prompt Templates）与默认模板配置。
 
-## 数据目录
-- 默认（macOS）：`~/Library/Application Support/Open Recorder`
-- 可通过环境变量覆盖：`OPEN_RECORDER_DATA_DIR=/your/path`
-- 关键文件：
-  - `state.json`：会话、任务、设置
-  - `audio/<session_id>/segments/*.{m4a,wav}`：录音切片
-  - `exports/<session_id>/`：导出文件
+## 项目结构
+- `src/`：前端界面与调用层（React + TS）
+- `src-tauri/`：Rust 后端命令、录音与 Provider 实现
+- `docs/`：设计与规划文档
 
 ## 开发运行
 ### 前置依赖
 - Node.js 20+
 - Rust toolchain
-- Tauri 运行依赖（macOS）
+- Tauri 运行依赖
+- `ffmpeg`（建议安装；MP3 导出与部分音频转换依赖）
 
-### 启动开发模式
+### 启动桌面开发模式
 ```bash
 npm install
 npm run tauri:dev
 ```
 
-### 构建发布（macOS `.app`）
+### 仅启动前端（Web）
 ```bash
-npm run tauri:build -- --bundles app
+npm run dev
 ```
 
-产物路径：
+默认端口：`1420`
+
+### 构建
+```bash
+npm run tauri:build
+```
+
+macOS `.app` 产物通常位于：
 `src-tauri/target/release/bundle/macos/Open Recorder.app`
 
+## NPM Scripts
+- `npm run dev`：启动 Vite 前端开发服务
+- `npm run build`：构建前端静态资源
+- `npm run preview`：预览前端构建产物
+- `npm run tauri:dev`：启动 Tauri 桌面开发模式
+- `npm run tauri:build`：构建 Tauri 桌面应用
+
 ## 配置说明
-应用设置页支持以下参数。
+设置页主要分为 General / Provider / OSS / Templates / About。
 
-### 1) Provider（转写/摘要）
-- `Transcription Provider`：从可用转写 Provider 中选择
-- `Summary Provider`：从可用摘要 Provider 中选择
+### 1) Provider
+- `Transcription Provider`：选择当前转写 Provider
+- `Summary Provider`：选择当前摘要 Provider
 
-### 2) Bailian（百炼）
-- `Bailian API Key`
-- `Bailian Base URL`（默认 `https://dashscope.aliyuncs.com`）
-- `Bailian Transcription Model`（默认 `paraformer-v2`）
-- `Bailian Summary Model`（默认 `qwen-plus`）
+#### Bailian
+- `API Key`
+- `Base URL`（默认 `https://dashscope.aliyuncs.com`）
+- `Transcription Model`（默认 `paraformer-v2`）
+- `Summary Model`（默认 `qwen-plus`）
 
-### 3) Aliyun Tingwu（听悟）
-- `Aliyun AccessKey ID`
-- `Aliyun AccessKey Secret`
-- `Aliyun Tingwu AppKey`
-- `Aliyun Tingwu Endpoint`（默认 `https://tingwu.cn-beijing.aliyuncs.com`）
-- `Aliyun Source Language`（`cn` 或 `en`，默认 `cn`）
-- `Aliyun Language Hints`（可选，逗号分隔，例如 `cn,en`）
-- `Aliyun FileUrl Prefix`（兜底公网 URL 前缀，可选）
-- `NormalizationEnabled`（默认开启）
-- `ParagraphEnabled`（默认开启）
-- `PunctuationPredictionEnabled`（默认开启）
-- `DisfluencyRemovalEnabled`（默认关闭）
-- `SpeakerDiarizationEnabled`（默认开启）
-- `Aliyun Poll Interval`（默认 `60` 秒，范围 `60-300`）
-- `Aliyun Max Polling Time`（默认 `180` 分钟，范围 `5-720`）
+#### Aliyun Tingwu
+- `AccessKey ID`
+- `AccessKey Secret`
+- `AppKey`
+- `Endpoint`（默认 `https://tingwu.cn-beijing.aliyuncs.com`）
+- `Source Language`（`cn` / `en`）
+- `Language Hints`（可选，逗号分隔）
+- `FileUrl Prefix`（兜底前缀，可选）
+- `NormalizationEnabled`
+- `ParagraphEnabled`
+- `PunctuationPredictionEnabled`
+- `DisfluencyRemovalEnabled`
+- `SpeakerDiarizationEnabled`
+- `Poll Interval`（秒，`60-300`）
+- `Max Polling Time`（分钟，`5-720`）
 
-### 4) OSS（多配置）
-> 转写链路统一使用“当前选择 OSS”进行上传和签名 URL 生成。未完整配置时会直接报错。
+#### OpenRouter（摘要）
+- `API Key`
+- `Base URL`（默认 `https://openrouter.ai/api/v1`）
+- `Summary Model`（默认 `qwen/qwen-plus`）
 
-- `Current OSS`：当前生效 OSS 配置
-- `OSS Provider`：`aliyun` 或 `r2`
-- `OSS AccessKey ID`
-- `OSS AccessKey Secret`
-- `OSS Endpoint`
+### 2) OSS（多配置）
+> 转写链路统一使用“当前选择 OSS”进行上传与签名 URL 生成。
+
+- `Current OSS`：当前生效 OSS
+- `OSS Provider`：`aliyun` / `r2`
+- `AccessKey ID`
+- `AccessKey Secret`
+- `Endpoint`
   - Aliyun 示例：`https://oss-cn-beijing.aliyuncs.com`
   - R2 示例：`https://<accountid>.r2.cloudflarestorage.com`
-- `OSS Bucket`
-- `OSS Path Prefix`（默认 `open-recorder`）
-- `OSS Signed URL TTL`（默认 `1800` 秒）
+- `Bucket`
+- `Path Prefix`（默认 `open-recorder`）
+- `Signed URL TTL`（秒，`60-86400`）
 
-## 转写流程说明
-### Bailian
-1. 读取本地切片 `segment-*.wav`
-2. 使用当前 OSS 上传分片
-3. 生成签名下载 URL
-4. 调用百炼转写接口（异步）
-5. 轮询任务结果并回填 transcript
+### 3) Templates
+- 管理摘要模板：`Template ID` / `Template Name`
+- 配置 `System Prompt` / `User Prompt` / `Variables`
+- 选择默认模板 `Default Template ID`
 
-### Aliyun Tingwu
-1. 使用当前 OSS 上传本地分片并生成签名 URL
-2. 组装 `FileUrl`（优先签名 URL）
-3. 创建离线任务
-4. 轮询任务状态
-5. 解析结果文本
+## 数据存储
+应用状态与音频文件默认落在本地目录。
 
-说明：`QueryTaskInfo` 轮询已按听悟文档建议调整为可配置频率（默认 60 秒），并优先解析 `Data.Result.Transcription` 结果地址。
+数据目录候选顺序：
+1. `OPEN_RECORDER_DATA_DIR`（若设置）
+2. macOS：`~/Library/Application Support/Open Recorder`
+3. `~/.open-recorder-data`
+4. `<项目目录>/.open-recorder-data`
+5. 系统临时目录下的 `open-recorder-data`
 
-## 常见问题排查
-### 1) `input must contain file_urls`
-原因：请求体未携带可访问的 `file_urls`。  
-处理：检查当前选择 OSS 参数是否完整、正确。
+关键文件结构：
+- `state.json`：会话、任务、设置
+- `audio/<session_id>/segments/`：录音切片或导入音频
+- `exports/<session_id>/`：导出与合并后的音频
 
-### 2) `current user api does not support synchronous calls`
-原因：账号不支持同步转写。  
-处理：项目已改为异步模式；请使用最新构建版本。
+## 转写与摘要流程
+### 转写
+1. 读取会话音频（优先已有导出音频，否则按分段处理）
+2. 必要时自动合并音频
+3. 使用当前 OSS 上传并生成签名 URL
+4. 调用所选转写 Provider（Bailian / Tingwu）
+5. 轮询任务并回写 transcript
 
-### 3) `failed to upload segment ...`
-常见原因：
-- OSS Endpoint 错误（例如写成无效域名）
-- AK/SK 无权限
-- Bucket 区域与 Endpoint 不匹配
+### 摘要
+1. 读取 transcript
+2. 读取当前摘要 Provider 与模板
+3. 调用 Chat Completions 接口生成结构化摘要
+4. 回写 `title/decisions/actionItems/risks/timeline/rawMarkdown`
 
-建议先确认 `OSS Endpoint` 是否为正确域名（Aliyun 示例：`https://oss-cn-beijing.aliyuncs.com`）。
-如使用 R2，请确认 Endpoint 为 `https://<accountid>.r2.cloudflarestorage.com` 且 Bucket 名称正确。
+## 常见问题
+### 1) `selected OSS config ... is incomplete`
+原因：当前 OSS 配置缺少必填参数（AK/SK、Endpoint、Bucket）。
+处理：在设置页补全当前 OSS 配置。
 
-### 4) 在哪里看错误详情
-- 应用状态文件：`~/Library/Application Support/Open Recorder/state.json`
-  - 查看 `jobs.<jobId>.error`
-- 终端启动应用可看到更多运行输出：
-```bash
-"/path/to/Open Recorder.app/Contents/MacOS/open_recorder"
-```
+### 2) `provider ... requires API key`
+原因：所选 Provider 未配置 API Key。
+处理：在设置页补全对应 Provider 的 API Key。
 
-## 后续计划
-1. 增加转写重试与退避策略。
-2. 增加请求级别诊断日志（可选落盘）。
-3. 将状态存储由 JSON 升级到 SQLite。
+### 3) `session is still processing segments`
+原因：录音刚停止，后处理未完成。
+处理：稍后重试转写/导出。
+
+### 4) `failed to run ffmpeg for export`
+原因：本机缺少 `ffmpeg` 或不可执行。
+处理：安装并确认 `ffmpeg` 可在命令行执行。
+
+### 5) 查看任务错误详情
+- 数据文件：`state.json` 中的 `jobs.<jobId>.error`
+- 前端任务面板：会话详情页 `Tasks` 标签
+
+## 当前状态
+- 当前版本：`0.1.0`
+- 主要场景：本地会议录音、转写、纪要产出
+- 后续可扩展方向：重试/退避策略、更细粒度诊断日志、状态存储升级（如 SQLite）

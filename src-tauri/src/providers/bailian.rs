@@ -181,7 +181,14 @@ fn resolve_transcription_text(
     })?;
 
     progress_callback("正在轮询结果...");
-    let task_payload = poll_bailian_task(client, base_url, api_key, &task_id, segment_index, progress_callback)?;
+    let task_payload = poll_bailian_task(
+        client,
+        base_url,
+        api_key,
+        &task_id,
+        segment_index,
+        progress_callback,
+    )?;
     if let Some(text) = extract_transcription_text(&task_payload) {
         return Ok(text);
     }
