@@ -32,9 +32,10 @@ import {
 import { type Locale, type TranslationKey } from "./i18n/messages";
 import type {
   JobInfo,
+  OssConfig,
+  OssProviderKind,
   ProviderCapability,
   ProviderConfig,
-  ProviderOssSettings,
   PromptTemplate,
   RecordingQualityPreset,
   SessionDetail,
@@ -46,9 +47,13 @@ const DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID = "bailian-transcription-default
 const DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID = "aliyun-transcription-default";
 const DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID = "bailian-summary-default";
 const DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID = "openrouter-summary-default";
+const DEFAULT_OSS_CONFIG_ID = "oss-aliyun-default";
 
-function createDefaultOssSettings(): ProviderOssSettings {
+function createDefaultOssConfig(kind: OssProviderKind = "aliyun"): OssConfig {
   return {
+    id: kind === "r2" ? "oss-r2-default" : DEFAULT_OSS_CONFIG_ID,
+    name: kind === "r2" ? "Cloudflare R2" : "Aliyun OSS",
+    kind,
     accessKeyId: "",
     accessKeySecret: "",
     endpoint: "",
@@ -56,6 +61,10 @@ function createDefaultOssSettings(): ProviderOssSettings {
     pathPrefix: "open-recorder",
     signedUrlTtlSeconds: 1800
   };
+}
+
+function createDefaultOssConfigs(): OssConfig[] {
+  return [createDefaultOssConfig("aliyun"), createDefaultOssConfig("r2")];
 }
 
 function createDefaultProviders(): ProviderConfig[] {
@@ -126,7 +135,8 @@ function createDefaultProviders(): ProviderConfig[] {
 
 const emptySettings: Settings = {
   providers: createDefaultProviders(),
-  oss: createDefaultOssSettings(),
+  ossConfigs: createDefaultOssConfigs(),
+  selectedOssConfigId: DEFAULT_OSS_CONFIG_ID,
   selectedTranscriptionProviderId: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID,
   selectedSummaryProviderId: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID,
   defaultTemplateId: "meeting-default",
@@ -159,14 +169,35 @@ function supportsCapability(
 }
 
 function normalizeSettings(input: Settings): Settings {
-  const defaultOss = createDefaultOssSettings();
-  const oss = {
-    ...defaultOss,
-    ...(input.oss ?? {}),
-    signedUrlTtlSeconds: Number.isFinite(input.oss?.signedUrlTtlSeconds)
-      ? Math.min(86400, Math.max(60, Math.floor(input.oss.signedUrlTtlSeconds)))
-      : defaultOss.signedUrlTtlSeconds
-  };
+  const ossConfigs = (input.ossConfigs.length > 0 ? input.ossConfigs : createDefaultOssConfigs()).map(
+    (config, index): OssConfig => {
+      const fallback = createDefaultOssConfig(config.kind ?? "aliyun");
+      return {
+        ...fallback,
+        ...config,
+        id: config.id?.trim() || `oss-${index + 1}`,
+        name:
+          config.name?.trim() ||
+          (config.kind === "r2" ? "Cloudflare R2" : "Aliyun OSS"),
+        kind: config.kind ?? "aliyun",
+        signedUrlTtlSeconds: Number.isFinite(config.signedUrlTtlSeconds)
+          ? Math.min(86400, Math.max(60, Math.floor(config.signedUrlTtlSeconds)))
+          : fallback.signedUrlTtlSeconds
+      };
+    }
+  );
+  if (!ossConfigs.some((config) => config.kind === "aliyun")) {
+    ossConfigs.push(createDefaultOssConfig("aliyun"));
+  }
+  if (!ossConfigs.some((config) => config.kind === "r2")) {
+    ossConfigs.push(createDefaultOssConfig("r2"));
+  }
+
+  const selectedOssConfigId =
+    ossConfigs.find((config) => config.id === input.selectedOssConfigId)?.id ??
+    ossConfigs[0]?.id ??
+    "";
+
   const templates = input.templates.length > 0 ? input.templates : [createDefaultTemplate()];
   const defaultExists = templates.some((template) => template.id === input.defaultTemplateId);
   const providers = (input.providers.length > 0 ? input.providers : createDefaultProviders()).map(
@@ -236,7 +267,8 @@ function normalizeSettings(input: Settings): Settings {
 
   return {
     providers,
-    oss,
+    ossConfigs,
+    selectedOssConfigId,
     selectedTranscriptionProviderId,
     selectedSummaryProviderId,
     templates,

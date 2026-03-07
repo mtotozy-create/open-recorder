@@ -936,7 +936,9 @@ pub fn recorder_export(
             .sessions
             .get_mut(&session_id)
             .ok_or_else(|| "session not found".to_string())?;
-        let file_size_bytes = std::fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+        let file_size_bytes = std::fs::metadata(&output_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
         match format.as_str() {
             "wav" => {
                 session.exported_wav_path = Some(output_path.to_string_lossy().to_string());

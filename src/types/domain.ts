@@ -39,7 +39,12 @@ export type ProviderKind = "bailian" | "aliyun_tingwu" | "openrouter";
 
 export type ProviderCapability = "transcription" | "summary";
 
-export type ProviderOssSettings = {
+export type OssProviderKind = "aliyun" | "r2";
+
+export type OssConfig = {
+  id: string;
+  name: string;
+  kind: OssProviderKind;
   accessKeyId?: string;
   accessKeySecret?: string;
   endpoint?: string;
@@ -91,7 +96,8 @@ export type ProviderConfig = {
 
 export type Settings = {
   providers: ProviderConfig[];
-  oss: ProviderOssSettings;
+  ossConfigs: OssConfig[];
+  selectedOssConfigId: string;
   selectedTranscriptionProviderId: string;
   selectedSummaryProviderId: string;
   defaultTemplateId: string;

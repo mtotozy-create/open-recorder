@@ -4,6 +4,8 @@ const DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID: &str = "bailian-transcription-d
 const DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID: &str = "aliyun-transcription-default";
 const DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID: &str = "bailian-summary-default";
 const DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID: &str = "openrouter-summary-default";
+const DEFAULT_SELECTED_OSS_CONFIG_ID: &str = "oss-aliyun-default";
+const DEFAULT_R2_OSS_CONFIG_ID: &str = "oss-r2-default";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +52,44 @@ pub enum ProviderCapability {
     Summary,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OssProviderKind {
+    Aliyun,
+    R2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OssConfig {
+    pub id: String,
+    pub name: String,
+    pub kind: OssProviderKind,
+    pub access_key_id: Option<String>,
+    pub access_key_secret: Option<String>,
+    pub endpoint: Option<String>,
+    pub bucket: Option<String>,
+    pub path_prefix: Option<String>,
+    pub signed_url_ttl_seconds: u64,
+}
+
+impl Default for OssConfig {
+    fn default() -> Self {
+        Self {
+            id: DEFAULT_SELECTED_OSS_CONFIG_ID.to_string(),
+            name: "Aliyun OSS".to_string(),
+            kind: OssProviderKind::Aliyun,
+            access_key_id: None,
+            access_key_secret: None,
+            endpoint: None,
+            bucket: None,
+            path_prefix: Some("open-recorder".to_string()),
+            signed_url_ttl_seconds: 1800,
+        }
+    }
+}
+
+/// Legacy single-OSS schema retained for backward-compatible settings migration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProviderOssSettings {
@@ -182,7 +222,10 @@ impl Default for ProviderConfig {
             id: String::new(),
             name: "Bailian".to_string(),
             kind: ProviderKind::Bailian,
-            capabilities: vec![ProviderCapability::Transcription, ProviderCapability::Summary],
+            capabilities: vec![
+                ProviderCapability::Transcription,
+                ProviderCapability::Summary,
+            ],
             enabled: true,
             bailian: Some(BailianProviderSettings::default()),
             aliyun_tingwu: None,
@@ -272,11 +315,15 @@ impl Default for AudioSegmentMeta {
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub providers: Vec<ProviderConfig>,
-    pub oss: ProviderOssSettings,
+    pub oss_configs: Vec<OssConfig>,
+    pub selected_oss_config_id: String,
     pub selected_transcription_provider_id: String,
     pub selected_summary_provider_id: String,
     pub default_template_id: String,
     pub templates: Vec<PromptTemplate>,
+
+    #[serde(rename = "oss", default, skip_serializing)]
+    pub legacy_oss: Option<ProviderOssSettings>,
 
     // Legacy fields (read-only for migration)
     #[serde(rename = "transcriptionProvider", default, skip_serializing)]
@@ -321,7 +368,11 @@ pub struct Settings {
         skip_serializing
     )]
     pub legacy_aliyun_transcription_normalization_enabled: Option<bool>,
-    #[serde(rename = "aliyunTranscriptionParagraphEnabled", default, skip_serializing)]
+    #[serde(
+        rename = "aliyunTranscriptionParagraphEnabled",
+        default,
+        skip_serializing
+    )]
     pub legacy_aliyun_transcription_paragraph_enabled: Option<bool>,
     #[serde(
         rename = "aliyunTranscriptionPunctuationPredictionEnabled",
@@ -351,12 +402,15 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             providers: create_default_providers(),
-            oss: ProviderOssSettings::default(),
+            oss_configs: create_default_oss_configs(),
+            selected_oss_config_id: DEFAULT_SELECTED_OSS_CONFIG_ID.to_string(),
             selected_transcription_provider_id: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID
                 .to_string(),
             selected_summary_provider_id: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID.to_string(),
             default_template_id: "meeting-default".to_string(),
             templates: vec![create_default_template()],
+
+            legacy_oss: None,
 
             legacy_transcription_provider: None,
             legacy_bailian_api_key: None,
@@ -399,20 +453,38 @@ impl Settings {
                 _ => DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID.to_string(),
             };
             self.selected_summary_provider_id = DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID.to_string();
-            if !oss_has_user_value(&self.oss) {
-                self.oss = legacy_oss;
-            }
-        } else if !oss_has_user_value(&self.oss) {
-            if let Some(legacy_oss) = find_legacy_provider_oss(&self.providers) {
-                self.oss = legacy_oss;
+            if self.legacy_oss.is_none() {
+                self.legacy_oss = Some(legacy_oss);
             }
         }
-
-        normalize_oss_settings(&mut self.oss);
 
         for provider in &mut self.providers {
             normalize_provider(provider);
         }
+
+        if self.oss_configs.is_empty() {
+            if let Some(legacy_oss) = self
+                .legacy_oss
+                .clone()
+                .filter(legacy_oss_has_user_value)
+                .or_else(|| find_legacy_provider_oss(&self.providers))
+            {
+                self.oss_configs.push(legacy_oss_to_config(
+                    &legacy_oss,
+                    DEFAULT_SELECTED_OSS_CONFIG_ID,
+                    "Aliyun OSS",
+                ));
+            }
+        }
+        if self.oss_configs.is_empty() {
+            self.oss_configs = create_default_oss_configs();
+        }
+        for config in &mut self.oss_configs {
+            normalize_oss_config(config);
+        }
+        ensure_default_oss_kinds(&mut self.oss_configs);
+        self.selected_oss_config_id =
+            resolve_selected_oss_config_id(&self.oss_configs, &self.selected_oss_config_id);
 
         if self.templates.is_empty() {
             self.templates.push(create_default_template());
@@ -585,6 +657,31 @@ fn create_default_template() -> PromptTemplate {
     }
 }
 
+fn create_default_oss_configs() -> Vec<OssConfig> {
+    vec![
+        create_default_aliyun_oss_config(),
+        create_default_r2_oss_config(),
+    ]
+}
+
+fn create_default_aliyun_oss_config() -> OssConfig {
+    OssConfig::default()
+}
+
+fn create_default_r2_oss_config() -> OssConfig {
+    OssConfig {
+        id: DEFAULT_R2_OSS_CONFIG_ID.to_string(),
+        name: "Cloudflare R2".to_string(),
+        kind: OssProviderKind::R2,
+        access_key_id: None,
+        access_key_secret: None,
+        endpoint: None,
+        bucket: None,
+        path_prefix: Some("open-recorder".to_string()),
+        signed_url_ttl_seconds: 1800,
+    }
+}
+
 fn create_default_providers() -> Vec<ProviderConfig> {
     vec![
         ProviderConfig {
@@ -671,7 +768,10 @@ fn normalize_provider(provider: &mut ProviderConfig) {
 
 fn default_capabilities_for_kind(kind: &ProviderKind) -> Vec<ProviderCapability> {
     match kind {
-        ProviderKind::Bailian => vec![ProviderCapability::Transcription, ProviderCapability::Summary],
+        ProviderKind::Bailian => vec![
+            ProviderCapability::Transcription,
+            ProviderCapability::Summary,
+        ],
         ProviderKind::AliyunTingwu => vec![ProviderCapability::Transcription],
         ProviderKind::Openrouter => vec![ProviderCapability::Summary],
     }
@@ -686,9 +786,9 @@ fn resolve_selected_provider_id(
     current: &str,
     capability: ProviderCapability,
 ) -> String {
-    let current_exists = providers
-        .iter()
-        .any(|provider| provider.id == current && provider_supports_capability(provider, capability.clone()));
+    let current_exists = providers.iter().any(|provider| {
+        provider.id == current && provider_supports_capability(provider, capability.clone())
+    });
     if current_exists {
         return current.to_string();
     }
@@ -734,7 +834,37 @@ fn ensure_capability_provider(providers: &mut Vec<ProviderConfig>, capability: P
     providers.push(fallback);
 }
 
-fn oss_has_user_value(oss: &ProviderOssSettings) -> bool {
+fn oss_config_has_user_value(oss: &OssConfig) -> bool {
+    let default_oss = OssConfig::default();
+    oss.access_key_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        || oss
+            .access_key_secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        || oss
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        || oss
+            .bucket
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        || oss.path_prefix.as_deref().map(str::trim)
+            != default_oss.path_prefix.as_deref().map(str::trim)
+        || oss.signed_url_ttl_seconds != default_oss.signed_url_ttl_seconds
+}
+
+fn legacy_oss_has_user_value(oss: &ProviderOssSettings) -> bool {
     let default_oss = ProviderOssSettings::default();
     oss.access_key_id
         .as_deref()
@@ -764,7 +894,39 @@ fn oss_has_user_value(oss: &ProviderOssSettings) -> bool {
         || oss.signed_url_ttl_seconds != default_oss.signed_url_ttl_seconds
 }
 
-fn normalize_oss_settings(oss: &mut ProviderOssSettings) {
+fn normalize_oss_config(oss: &mut OssConfig) {
+    if oss.id.trim().is_empty() {
+        oss.id = format!("oss-{}", oss.kind_name());
+    }
+    if oss.name.trim().is_empty() {
+        oss.name = match oss.kind {
+            OssProviderKind::Aliyun => "Aliyun OSS".to_string(),
+            OssProviderKind::R2 => "Cloudflare R2".to_string(),
+        };
+    }
+    if oss.path_prefix.is_none() {
+        oss.path_prefix = OssConfig::default().path_prefix;
+    }
+    oss.signed_url_ttl_seconds = oss.signed_url_ttl_seconds.clamp(60, 86_400);
+}
+
+fn ensure_default_oss_kinds(configs: &mut Vec<OssConfig>) {
+    let has_aliyun = configs
+        .iter()
+        .any(|config| config.kind == OssProviderKind::Aliyun);
+    if !has_aliyun {
+        configs.push(create_default_aliyun_oss_config());
+    }
+
+    let has_r2 = configs
+        .iter()
+        .any(|config| config.kind == OssProviderKind::R2);
+    if !has_r2 {
+        configs.push(create_default_r2_oss_config());
+    }
+}
+
+fn normalize_legacy_oss_settings(oss: &mut ProviderOssSettings) {
     if oss.path_prefix.is_none() {
         oss.path_prefix = ProviderOssSettings::default().path_prefix;
     }
@@ -787,9 +949,40 @@ fn find_legacy_provider_oss(providers: &[ProviderConfig]) -> Option<ProviderOssS
                 })
         })
         .map(|mut oss| {
-            normalize_oss_settings(&mut oss);
+            normalize_legacy_oss_settings(&mut oss);
             oss
         })
+}
+
+fn legacy_oss_to_config(legacy: &ProviderOssSettings, id: &str, name: &str) -> OssConfig {
+    let mut config = OssConfig {
+        id: id.to_string(),
+        name: name.to_string(),
+        kind: OssProviderKind::Aliyun,
+        access_key_id: legacy.access_key_id.clone(),
+        access_key_secret: legacy.access_key_secret.clone(),
+        endpoint: legacy.endpoint.clone(),
+        bucket: legacy.bucket.clone(),
+        path_prefix: legacy.path_prefix.clone(),
+        signed_url_ttl_seconds: legacy.signed_url_ttl_seconds,
+    };
+    normalize_oss_config(&mut config);
+    config
+}
+
+fn resolve_selected_oss_config_id(configs: &[OssConfig], current: &str) -> String {
+    let current_exists = configs
+        .iter()
+        .any(|config| config.id.trim() == current.trim());
+    if current_exists {
+        return current.to_string();
+    }
+    configs
+        .iter()
+        .find(|config| oss_config_has_user_value(config))
+        .or_else(|| configs.first())
+        .map(|config| config.id.clone())
+        .unwrap_or_default()
 }
 
 impl ProviderConfig {
@@ -798,6 +991,15 @@ impl ProviderConfig {
             ProviderKind::Bailian => "bailian",
             ProviderKind::AliyunTingwu => "aliyun_tingwu",
             ProviderKind::Openrouter => "openrouter",
+        }
+    }
+}
+
+impl OssConfig {
+    fn kind_name(&self) -> &'static str {
+        match self.kind {
+            OssProviderKind::Aliyun => "aliyun",
+            OssProviderKind::R2 => "r2",
         }
     }
 }
@@ -931,9 +1133,80 @@ pub struct JobEnqueueResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
     pub providers: Option<Vec<ProviderConfig>>,
-    pub oss: Option<ProviderOssSettings>,
+    pub oss_configs: Option<Vec<OssConfig>>,
+    pub selected_oss_config_id: Option<String>,
+    #[serde(rename = "oss", default, skip_serializing)]
+    pub legacy_oss: Option<ProviderOssSettings>,
     pub selected_transcription_provider_id: Option<String>,
     pub selected_summary_provider_id: Option<String>,
     pub default_template_id: Option<String>,
     pub templates: Option<Vec<PromptTemplate>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OssConfig, OssProviderKind, ProviderOssSettings, Settings};
+
+    #[test]
+    fn normalize_migrates_legacy_single_oss_to_oss_configs() {
+        let mut settings = Settings::default();
+        settings.oss_configs = vec![];
+        settings.selected_oss_config_id.clear();
+        settings.legacy_oss = Some(ProviderOssSettings {
+            access_key_id: Some("legacy-ak".to_string()),
+            access_key_secret: Some("legacy-sk".to_string()),
+            endpoint: Some("https://oss-cn-beijing.aliyuncs.com".to_string()),
+            bucket: Some("legacy-bucket".to_string()),
+            path_prefix: Some("legacy-prefix".to_string()),
+            signed_url_ttl_seconds: 1200,
+        });
+
+        settings.normalize();
+
+        assert_eq!(settings.oss_configs.len(), 2);
+        assert_eq!(settings.oss_configs[0].kind, OssProviderKind::Aliyun);
+        assert_eq!(
+            settings.oss_configs[0].access_key_id.as_deref(),
+            Some("legacy-ak")
+        );
+        assert_eq!(settings.selected_oss_config_id, settings.oss_configs[0].id);
+        assert!(settings
+            .oss_configs
+            .iter()
+            .any(|config| config.kind == OssProviderKind::R2));
+    }
+
+    #[test]
+    fn normalize_falls_back_to_first_oss_when_selected_id_missing() {
+        let mut settings = Settings::default();
+        settings.oss_configs = vec![
+            OssConfig {
+                id: "oss-a".to_string(),
+                name: "OSS A".to_string(),
+                kind: OssProviderKind::Aliyun,
+                access_key_id: Some("ak".to_string()),
+                access_key_secret: Some("sk".to_string()),
+                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".to_string()),
+                bucket: Some("bucket-a".to_string()),
+                path_prefix: Some("open-recorder".to_string()),
+                signed_url_ttl_seconds: 1800,
+            },
+            OssConfig {
+                id: "oss-b".to_string(),
+                name: "OSS B".to_string(),
+                kind: OssProviderKind::R2,
+                access_key_id: Some("ak2".to_string()),
+                access_key_secret: Some("sk2".to_string()),
+                endpoint: Some("https://example.r2.cloudflarestorage.com".to_string()),
+                bucket: Some("bucket-b".to_string()),
+                path_prefix: Some("open-recorder".to_string()),
+                signed_url_ttl_seconds: 1800,
+            },
+        ];
+        settings.selected_oss_config_id = "missing-id".to_string();
+
+        settings.normalize();
+
+        assert_eq!(settings.selected_oss_config_id, "oss-a");
+    }
 }

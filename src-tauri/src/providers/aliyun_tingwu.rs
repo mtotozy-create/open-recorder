@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     models::{AudioSegmentMeta, TranscriptSegment},
-    providers::aliyun_oss::{upload_segments_and_sign_urls, AliyunOssConfig},
+    providers::oss::{upload_segments_and_sign_urls, OssConfig},
 };
 
 type HmacSha1 = Hmac<Sha1>;
@@ -31,7 +31,7 @@ pub struct AliyunTingwuConfig {
     pub endpoint: String,
     pub source_language: String,
     pub file_url_prefix: Option<String>,
-    pub oss: Option<AliyunOssConfig>,
+    pub oss: Option<OssConfig>,
     pub language_hints: Vec<String>,
     pub transcription_normalization_enabled: bool,
     pub transcription_paragraph_enabled: bool,
@@ -422,7 +422,7 @@ fn resolve_segment_file_urls(
 
     if !pending_local_paths.is_empty() {
         let oss = config.oss.as_ref().ok_or_else(|| {
-            "aliyun tingwu requires public FileUrl: configure Bailian OSS for auto upload or set aliyunFileUrlPrefix".to_string()
+            "aliyun tingwu requires public FileUrl: configure current OSS for auto upload or set aliyunFileUrlPrefix".to_string()
         })?;
         let signed_urls = upload_segments_and_sign_urls(&pending_local_paths, session_id, oss)?;
         if signed_urls.len() != pending_local_indexes.len() {

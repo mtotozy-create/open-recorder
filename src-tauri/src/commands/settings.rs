@@ -29,12 +29,21 @@ pub fn settings_update(
         storage.data.settings.providers = providers;
     }
 
-    if let Some(oss) = request.oss {
-        storage.data.settings.oss = oss;
+    if let Some(oss_configs) = request.oss_configs {
+        storage.data.settings.oss_configs = oss_configs;
+    }
+
+    if let Some(selected_oss_config_id) = request.selected_oss_config_id {
+        storage.data.settings.selected_oss_config_id = selected_oss_config_id;
+    }
+
+    if let Some(legacy_oss) = request.legacy_oss {
+        storage.data.settings.legacy_oss = Some(legacy_oss);
     }
 
     if let Some(selected_transcription_provider_id) = request.selected_transcription_provider_id {
-        storage.data.settings.selected_transcription_provider_id = selected_transcription_provider_id;
+        storage.data.settings.selected_transcription_provider_id =
+            selected_transcription_provider_id;
     }
 
     if let Some(selected_summary_provider_id) = request.selected_summary_provider_id {

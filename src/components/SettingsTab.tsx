@@ -3,6 +3,8 @@ import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from "react
 import type { Translator } from "../i18n";
 import type { Locale, TranslationKey } from "../i18n/messages";
 import type {
+  OssConfig,
+  OssProviderKind,
   PromptTemplate,
   ProviderCapability,
   ProviderConfig,
@@ -126,6 +128,10 @@ function createProvider(kind: ProviderKind, index: number): ProviderConfig {
   };
 }
 
+function ossKindLabel(kind: OssProviderKind): string {
+  return kind === "r2" ? "Cloudflare R2" : "Aliyun OSS";
+}
+
 function SettingsTab({
   locale,
   settings,
@@ -137,6 +143,9 @@ function SettingsTab({
   const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>("general");
   const [activeProviderId, setActiveProviderId] = useState<string>(
     settings.providers[0]?.id ?? ""
+  );
+  const [activeOssConfigId, setActiveOssConfigId] = useState<string>(
+    settings.selectedOssConfigId || settings.ossConfigs[0]?.id || ""
   );
 
   useEffect(() => {
@@ -152,6 +161,19 @@ function SettingsTab({
       setActiveProviderId(settings.providers[0].id);
     }
   }, [settings.providers, activeProviderId]);
+
+  useEffect(() => {
+    if (settings.ossConfigs.length === 0) {
+      if (activeOssConfigId !== "") {
+        setActiveOssConfigId("");
+      }
+      return;
+    }
+    const hasActiveConfig = settings.ossConfigs.some((config) => config.id === activeOssConfigId);
+    if (!hasActiveConfig) {
+      setActiveOssConfigId(settings.selectedOssConfigId || settings.ossConfigs[0].id);
+    }
+  }, [settings.ossConfigs, settings.selectedOssConfigId, activeOssConfigId]);
 
   function handleLocaleChange(event: ChangeEvent<HTMLSelectElement>) {
     onLocaleChange(event.target.value as Locale);
@@ -234,6 +256,20 @@ function SettingsTab({
     const provider = createProvider("openrouter", settings.providers.length + 1);
     updateProviders([...settings.providers, provider]);
     setActiveProviderId(provider.id);
+  }
+
+  function updateOssConfigs(ossConfigs: OssConfig[]) {
+    onSettingsChange({
+      ossConfigs,
+      selectedOssConfigId: settings.selectedOssConfigId
+    });
+  }
+
+  function patchOssConfig(configId: string, next: (config: OssConfig) => OssConfig) {
+    const ossConfigs = settings.ossConfigs.map((config) =>
+      config.id === configId ? next(config) : config
+    );
+    updateOssConfigs(ossConfigs);
   }
 
   function renderProviderForm(provider: ProviderConfig) {
@@ -509,6 +545,7 @@ function SettingsTab({
     supportsCapability(provider, "summary")
   );
   const activeProvider = settings.providers.find((provider) => provider.id === activeProviderId);
+  const activeOssConfig = settings.ossConfigs.find((config) => config.id === activeOssConfigId);
 
   return (
     <section className="panel settings-panel">
@@ -680,84 +717,147 @@ function SettingsTab({
           <div className="settings-section">
             <h3>{t("settings.tabs.oss")}</h3>
 
-            <label>
-              {t("settings.ossAccessKeyId")}
-              <input
-                value={settings.oss.accessKeyId ?? ""}
-                onChange={(event) =>
-                  onSettingsChange({
-                    oss: { ...settings.oss, accessKeyId: event.target.value }
-                  })
-                }
-              />
-            </label>
+            <div className="provider-toolbar">
+              <label>
+                {t("settings.ossConfig")}
+                <select
+                  value={activeOssConfigId}
+                  onChange={(event) => setActiveOssConfigId(event.target.value)}
+                >
+                  {settings.ossConfigs.length === 0 && (
+                    <option value="">{t("settings.noOssConfig")}</option>
+                  )}
+                  {settings.ossConfigs.map((config) => (
+                    <option key={config.id} value={config.id}>
+                      {config.name} ({ossKindLabel(config.kind)})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
 
             <label>
-              {t("settings.ossAccessKeySecret")}
-              <input
-                type="password"
-                value={settings.oss.accessKeySecret ?? ""}
-                onChange={(event) =>
-                  onSettingsChange({
-                    oss: { ...settings.oss, accessKeySecret: event.target.value }
-                  })
-                }
-              />
+              {t("settings.selectedOssConfig")}
+              <select
+                value={settings.selectedOssConfigId}
+                onChange={(event) => onSettingsChange({ selectedOssConfigId: event.target.value })}
+              >
+                {settings.ossConfigs.length === 0 && (
+                  <option value="">{t("settings.noOssConfig")}</option>
+                )}
+                {settings.ossConfigs.map((config) => (
+                  <option key={config.id} value={config.id}>
+                    {config.name} ({ossKindLabel(config.kind)})
+                  </option>
+                ))}
+              </select>
             </label>
 
-            <label>
-              {t("settings.ossEndpoint")}
-              <input
-                value={settings.oss.endpoint ?? ""}
-                onChange={(event) =>
-                  onSettingsChange({
-                    oss: { ...settings.oss, endpoint: event.target.value }
-                  })
-                }
-              />
-            </label>
+            {activeOssConfig ? (
+              <article className="provider-editor">
+                <div className="provider-editor-header">
+                  <strong>{ossKindLabel(activeOssConfig.kind)}</strong>
+                </div>
 
-            <label>
-              {t("settings.ossBucket")}
-              <input
-                value={settings.oss.bucket ?? ""}
-                onChange={(event) =>
-                  onSettingsChange({
-                    oss: { ...settings.oss, bucket: event.target.value }
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              {t("settings.ossPathPrefix")}
-              <input
-                value={settings.oss.pathPrefix ?? ""}
-                onChange={(event) =>
-                  onSettingsChange({
-                    oss: { ...settings.oss, pathPrefix: event.target.value }
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              {t("settings.ossSignedUrlTtlSeconds")}
-              <input
-                type="number"
-                min={60}
-                max={86400}
-                value={settings.oss.signedUrlTtlSeconds}
-                onChange={(event) =>
-                  onSettingsChange({
-                    oss: {
-                      ...settings.oss,
-                      signedUrlTtlSeconds: Number.parseInt(event.target.value || "0", 10) || 1800
+                <label>
+                  {t("settings.ossConfigName")}
+                  <input
+                    value={activeOssConfig.name}
+                    onChange={(event) =>
+                      patchOssConfig(activeOssConfig.id, (current) => ({
+                        ...current,
+                        name: event.target.value
+                      }))
                     }
-                  })
-                }
-              />
-            </label>
+                  />
+                </label>
+
+                <label>
+                  {t("settings.ossAccessKeyId")}
+                  <input
+                    value={activeOssConfig.accessKeyId ?? ""}
+                    onChange={(event) =>
+                      patchOssConfig(activeOssConfig.id, (current) => ({
+                        ...current,
+                        accessKeyId: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  {t("settings.ossAccessKeySecret")}
+                  <input
+                    type="password"
+                    value={activeOssConfig.accessKeySecret ?? ""}
+                    onChange={(event) =>
+                      patchOssConfig(activeOssConfig.id, (current) => ({
+                        ...current,
+                        accessKeySecret: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  {t("settings.ossEndpoint")}
+                  <input
+                    value={activeOssConfig.endpoint ?? ""}
+                    onChange={(event) =>
+                      patchOssConfig(activeOssConfig.id, (current) => ({
+                        ...current,
+                        endpoint: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  {t("settings.ossBucket")}
+                  <input
+                    value={activeOssConfig.bucket ?? ""}
+                    onChange={(event) =>
+                      patchOssConfig(activeOssConfig.id, (current) => ({
+                        ...current,
+                        bucket: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  {t("settings.ossPathPrefix")}
+                  <input
+                    value={activeOssConfig.pathPrefix ?? ""}
+                    onChange={(event) =>
+                      patchOssConfig(activeOssConfig.id, (current) => ({
+                        ...current,
+                        pathPrefix: event.target.value
+                      }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  {t("settings.ossSignedUrlTtlSeconds")}
+                  <input
+                    type="number"
+                    min={60}
+                    max={86400}
+                    value={activeOssConfig.signedUrlTtlSeconds}
+                    onChange={(event) =>
+                      patchOssConfig(activeOssConfig.id, (current) => ({
+                        ...current,
+                        signedUrlTtlSeconds:
+                          Number.parseInt(event.target.value || "0", 10) || 1800
+                      }))
+                    }
+                  />
+                </label>
+              </article>
+            ) : (
+              <p className="provider-empty-hint">{t("settings.noOssConfig")}</p>
+            )}
           </div>
         )}
 

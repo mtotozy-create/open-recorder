@@ -23,7 +23,9 @@ fn provider_supports_summary(provider: &ProviderConfig) -> bool {
             .any(|item| *item == ProviderCapability::Summary)
 }
 
-fn resolve_summary_config(provider: &ProviderConfig) -> Result<ChatCompatibleSummaryConfig, String> {
+fn resolve_summary_config(
+    provider: &ProviderConfig,
+) -> Result<ChatCompatibleSummaryConfig, String> {
     match provider.kind {
         ProviderKind::Bailian => {
             let bailian = provider

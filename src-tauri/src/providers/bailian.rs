@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use crate::{
     models::{AudioSegmentMeta, SummaryResult, TranscriptSegment},
-    providers::aliyun_oss::{upload_segments_and_sign_urls, AliyunOssConfig},
+    providers::oss::{upload_segments_and_sign_urls, OssConfig},
 };
 
 // pub is needed for summary.rs
@@ -22,7 +22,7 @@ pub struct BailianConfig {
     pub base_url: String,
     pub api_key: String,
     pub transcription_model: String,
-    pub oss: Option<AliyunOssConfig>,
+    pub oss: Option<OssConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -358,12 +358,7 @@ pub fn summarize_with_chat_compatible(
 
     let payload: ChatCompletionsResponse = response
         .json()
-        .map_err(|error| {
-            format!(
-                "failed to parse {} response: {error}",
-                config.provider_name
-            )
-        })?;
+        .map_err(|error| format!("failed to parse {} response: {error}", config.provider_name))?;
 
     let raw_content = payload
         .choices

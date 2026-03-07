@@ -48,10 +48,7 @@ impl Storage {
             if !file_path.exists() {
                 let mut data = PersistedState::default();
                 data.settings.normalize();
-                return Ok(Self {
-                    file_path,
-                    data,
-                });
+                return Ok(Self { file_path, data });
             }
 
             match fs::read_to_string(&file_path) {

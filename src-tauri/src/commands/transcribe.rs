@@ -6,13 +6,13 @@ use uuid::Uuid;
 use crate::{
     commands::recorder::merge_segments_with_ffmpeg,
     models::{
-        AudioSegmentMeta, Job, JobEnqueueResponse, JobKind, JobStatus, ProviderCapability,
-        ProviderKind, ProviderOssSettings, SessionStatus,
+        AudioSegmentMeta, Job, JobEnqueueResponse, JobKind, JobStatus, OssConfig, OssProviderKind,
+        ProviderCapability, ProviderKind, SessionStatus, Settings,
     },
     providers::{
-        aliyun_oss::AliyunOssConfig,
         aliyun_tingwu::{transcribe_with_aliyun_tingwu, AliyunTingwuConfig},
         bailian::{transcribe_with_bailian, BailianConfig},
+        oss::{OssConfig as ProviderOssConfig, OssProviderKind as ProviderOssProviderKind},
     },
     state::AppState,
 };
@@ -44,7 +44,7 @@ fn provider_supports_transcription(
             .any(|item| *item == ProviderCapability::Transcription)
 }
 
-fn has_oss_credential(oss: &ProviderOssSettings) -> bool {
+fn has_oss_credential(oss: &OssConfig) -> bool {
     oss.access_key_id
         .as_deref()
         .map(str::trim)
@@ -68,6 +68,41 @@ fn has_oss_credential(oss: &ProviderOssSettings) -> bool {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .is_some()
+}
+
+fn resolve_selected_oss_config(settings: &Settings) -> Result<ProviderOssConfig, String> {
+    let selected = settings
+        .oss_configs
+        .iter()
+        .find(|config| config.id == settings.selected_oss_config_id)
+        .ok_or_else(|| {
+            format!(
+                "selected OSS config '{}' not found",
+                settings.selected_oss_config_id
+            )
+        })?;
+
+    if !has_oss_credential(selected) {
+        return Err(format!(
+            "selected OSS config '{}' is incomplete; access key id/secret, endpoint and bucket are required",
+            selected.name
+        ));
+    }
+
+    let kind = match selected.kind {
+        OssProviderKind::Aliyun => ProviderOssProviderKind::Aliyun,
+        OssProviderKind::R2 => ProviderOssProviderKind::R2,
+    };
+
+    Ok(ProviderOssConfig {
+        kind,
+        access_key_id: selected.access_key_id.clone().unwrap_or_default(),
+        access_key_secret: selected.access_key_secret.clone().unwrap_or_default(),
+        endpoint: selected.endpoint.clone().unwrap_or_default(),
+        bucket: selected.bucket.clone().unwrap_or_default(),
+        path_prefix: selected.path_prefix.clone(),
+        signed_url_ttl_seconds: selected.signed_url_ttl_seconds.clamp(60, 86_400),
+    })
 }
 
 enum ActiveTranscriptionConfig {
@@ -133,11 +168,12 @@ pub fn transcribe_enqueue(
             )
         };
 
-        let exported_audio_for_transcription = [exported_m4a_path.as_deref(), exported_mp3_path.as_deref()]
-            .into_iter()
-            .flatten()
-            .find(|path| Path::new(path).is_file())
-            .map(str::to_string);
+        let exported_audio_for_transcription =
+            [exported_m4a_path.as_deref(), exported_mp3_path.as_deref()]
+                .into_iter()
+                .flatten()
+                .find(|path| Path::new(path).is_file())
+                .map(str::to_string);
 
         if raw_segment_paths.is_empty() && exported_audio_for_transcription.is_none() {
             if let Some(session) = storage.data.sessions.get_mut(&session_id) {
@@ -160,7 +196,8 @@ pub fn transcribe_enqueue(
         }
 
         // 优先复用已导出的单文件（m4a > mp3），确保导出文件可直接用于后续转写。
-        let (segment_paths, segment_meta) = if let Some(exported_path) = exported_audio_for_transcription
+        let (segment_paths, segment_meta) = if let Some(exported_path) =
+            exported_audio_for_transcription
         {
             let total_duration_ms: u64 = raw_segment_meta.iter().map(|m| m.duration_ms).sum();
             let duration_ms = if total_duration_ms > 0 {
@@ -174,12 +211,24 @@ pub fn transcribe_enqueue(
                 .first()
                 .map(|m| m.sample_rate)
                 .filter(|rate| *rate > 0)
-                .unwrap_or_else(|| if session_sample_rate > 0 { session_sample_rate } else { 48_000 });
+                .unwrap_or_else(|| {
+                    if session_sample_rate > 0 {
+                        session_sample_rate
+                    } else {
+                        48_000
+                    }
+                });
             let channels = raw_segment_meta
                 .first()
                 .map(|m| m.channels)
                 .filter(|count| *count > 0)
-                .unwrap_or_else(|| if session_channels > 0 { session_channels } else { 1 });
+                .unwrap_or_else(|| {
+                    if session_channels > 0 {
+                        session_channels
+                    } else {
+                        1
+                    }
+                });
             let format = Path::new(&exported_path)
                 .extension()
                 .and_then(|ext| ext.to_str())
@@ -200,7 +249,9 @@ pub fn transcribe_enqueue(
                 sample_rate,
                 channels,
                 format,
-                file_size_bytes: std::fs::metadata(&exported_path).map(|m| m.len()).unwrap_or(0),
+                file_size_bytes: std::fs::metadata(&exported_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0),
             }];
             (vec![exported_path], exported_meta)
         } else if raw_segment_paths.len() <= 1 {
@@ -234,7 +285,9 @@ pub fn transcribe_enqueue(
                             .unwrap_or(48000),
                         channels: raw_segment_meta.first().map(|m| m.channels).unwrap_or(1),
                         format: "m4a".to_string(),
-                        file_size_bytes: std::fs::metadata(&merged_path).map(|m| m.len()).unwrap_or(0),
+                        file_size_bytes: std::fs::metadata(&merged_path)
+                            .map(|m| m.len())
+                            .unwrap_or(0),
                     }];
                     let merged_path_str = merged_path.to_string_lossy().to_string();
                     if let Some(session) = storage.data.sessions.get_mut(&session_id) {
@@ -271,14 +324,13 @@ pub fn transcribe_enqueue(
             ));
         }
 
-        let oss = &settings.oss;
+        let selected_oss_config = resolve_selected_oss_config(&settings)?;
 
         let config = match provider.kind {
             ProviderKind::Bailian => {
-                let bailian = provider
-                    .bailian
-                    .as_ref()
-                    .ok_or_else(|| format!("provider '{}' missing bailian config", provider.name))?;
+                let bailian = provider.bailian.as_ref().ok_or_else(|| {
+                    format!("provider '{}' missing bailian config", provider.name)
+                })?;
 
                 let api_key = bailian.api_key.clone().unwrap_or_default();
                 if api_key.trim().is_empty() {
@@ -288,20 +340,11 @@ pub fn transcribe_enqueue(
                     ));
                 }
 
-                let has_global_oss_credential = has_oss_credential(oss);
-
                 ActiveTranscriptionConfig::Bailian(BailianConfig {
                     base_url: bailian.base_url.clone(),
                     api_key,
                     transcription_model: bailian.transcription_model.clone(),
-                    oss: has_global_oss_credential.then(|| AliyunOssConfig {
-                        access_key_id: oss.access_key_id.clone().unwrap_or_default(),
-                        access_key_secret: oss.access_key_secret.clone().unwrap_or_default(),
-                        endpoint: oss.endpoint.clone().unwrap_or_default(),
-                        bucket: oss.bucket.clone().unwrap_or_default(),
-                        path_prefix: oss.path_prefix.clone(),
-                        signed_url_ttl_seconds: oss.signed_url_ttl_seconds.clamp(60, 86_400),
-                    }),
+                    oss: Some(selected_oss_config.clone()),
                 })
             }
             ProviderKind::AliyunTingwu => {
@@ -335,8 +378,6 @@ pub fn transcribe_enqueue(
                     ));
                 }
 
-                let has_global_oss_credential = has_oss_credential(oss);
-
                 ActiveTranscriptionConfig::AliyunTingwu(AliyunTingwuConfig {
                     access_key_id: aliyun.access_key_id.clone().unwrap_or_default(),
                     access_key_secret: aliyun.access_key_secret.clone().unwrap_or_default(),
@@ -344,14 +385,7 @@ pub fn transcribe_enqueue(
                     endpoint: aliyun.endpoint.clone(),
                     source_language: aliyun.source_language.clone(),
                     file_url_prefix: aliyun.file_url_prefix.clone(),
-                    oss: has_global_oss_credential.then(|| AliyunOssConfig {
-                        access_key_id: oss.access_key_id.clone().unwrap_or_default(),
-                        access_key_secret: oss.access_key_secret.clone().unwrap_or_default(),
-                        endpoint: oss.endpoint.clone().unwrap_or_default(),
-                        bucket: oss.bucket.clone().unwrap_or_default(),
-                        path_prefix: oss.path_prefix.clone(),
-                        signed_url_ttl_seconds: oss.signed_url_ttl_seconds.clamp(60, 86_400),
-                    }),
+                    oss: Some(selected_oss_config.clone()),
                     language_hints: parse_language_hints(aliyun.language_hints.as_deref()),
                     transcription_normalization_enabled: aliyun.transcription_normalization_enabled,
                     transcription_paragraph_enabled: aliyun.transcription_paragraph_enabled,
