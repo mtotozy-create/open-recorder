@@ -5,6 +5,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent
 } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -32,6 +33,9 @@ type SessionsTabProps = {
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => void;
   onDeleteSession: (sessionId: string) => void;
+  onPreparePlaybackAudio: () => Promise<string>;
+  onExportM4a: () => void;
+  onExportMp3: () => void;
   onTranscribe: () => void;
   onSummarize: () => void;
   t: Translator;
@@ -134,6 +138,9 @@ function SessionsTab({
   onSelectSession,
   onRenameSession,
   onDeleteSession,
+  onPreparePlaybackAudio,
+  onExportM4a,
+  onExportMp3,
   onTranscribe,
   onSummarize,
   t
@@ -152,8 +159,12 @@ function SessionsTab({
   const [summaryViewMode, setSummaryViewMode] = useState<ViewMode>("readable");
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("transcription");
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [isPreparingPlaybackAudio, setIsPreparingPlaybackAudio] = useState(false);
+  const [playbackAudioPath, setPlaybackAudioPath] = useState<string>();
+  const [playbackAudioSrc, setPlaybackAudioSrc] = useState<string>();
   const skipListBlurRef = useRef(false);
   const audioFileInputRef = useRef<HTMLInputElement>(null);
+  const playbackAudioRef = useRef<HTMLAudioElement>(null);
 
   const runningTranscribeJob = sessionJobs?.find((j) => j.kind === "transcription" && j.status === "running");
   const runningSummaryJob = sessionJobs?.find((j) => j.kind === "summary" && j.status === "running");
@@ -170,6 +181,17 @@ function SessionsTab({
     setActiveDetailTab("transcription");
     setIsTranscriptCollapsed(!!activeSession?.summary);
   }, [activeSession?.id, activeSession?.name, !!activeSession?.summary]);
+
+  useEffect(() => {
+    const initialPath = activeSession?.exportedM4aPath || activeSession?.exportedMp3Path;
+    if (!initialPath) {
+      setPlaybackAudioPath(undefined);
+      setPlaybackAudioSrc(undefined);
+      return;
+    }
+    setPlaybackAudioPath(initialPath);
+    setPlaybackAudioSrc(convertFileSrc(initialPath));
+  }, [activeSession?.id, activeSession?.exportedM4aPath, activeSession?.exportedMp3Path]);
 
   function handleTemplateChange(event: ChangeEvent<HTMLSelectElement>) {
     onSummaryTemplateChange(event.target.value);
@@ -219,6 +241,33 @@ function SessionsTab({
       return;
     }
     void onCreateSessionFromFile(file);
+  }
+
+  async function handlePreparePlaybackAudio() {
+    if (isPreparingPlaybackAudio) {
+      return;
+    }
+    setIsPreparingPlaybackAudio(true);
+    try {
+      const path = await onPreparePlaybackAudio();
+      const src = convertFileSrc(path);
+      setPlaybackAudioPath(path);
+      setPlaybackAudioSrc(src);
+      window.setTimeout(() => {
+        if (!playbackAudioRef.current) {
+          return;
+        }
+        playbackAudioRef.current.src = src;
+        playbackAudioRef.current.load();
+        void playbackAudioRef.current.play().catch(() => {
+          // 浏览器自动播放策略可能拒绝，保留 controls 供用户手动播放。
+        });
+      }, 0);
+    } catch {
+      // 状态提示由上层 App 统一处理，这里避免未捕获 Promise。
+    } finally {
+      setIsPreparingPlaybackAudio(false);
+    }
   }
 
   const canShowCurrentShortcut = Boolean(activeSessionId);
@@ -503,6 +552,48 @@ function SessionsTab({
                   <p>
                     <strong>{t("recorder.quality")}:</strong> {activeSession.qualityPreset}
                   </p>
+                  <div className="session-meta-full-width session-meta-audio" style={{ gridColumn: "1 / -1", marginTop: "16px" }}>
+                    <h4 style={{ marginBottom: "12px", color: "var(--text-primary)" }}>{t("sessionDetail.audioPlayback")}</h4>
+                    <div className="session-actions-row" style={{ marginBottom: "12px" }}>
+                      <button
+                        type="button"
+                        className={`action-btn${isPreparingPlaybackAudio ? " loading" : ""}`}
+                        onClick={() => void handlePreparePlaybackAudio()}
+                        disabled={isPreparingPlaybackAudio}
+                      >
+                        {isPreparingPlaybackAudio && <span className="spinner" />}
+                        {isPreparingPlaybackAudio
+                          ? t("sessionDetail.preparingAudio")
+                          : t("sessionDetail.playMergedAudio")}
+                      </button>
+                      <button
+                        type="button"
+                        className="action-btn"
+                        onClick={onExportM4a}
+                      >
+                        {t("recorder.exportM4a")}
+                      </button>
+                      <button
+                        type="button"
+                        className="action-btn"
+                        onClick={onExportMp3}
+                      >
+                        {t("recorder.exportMp3")}
+                      </button>
+                    </div>
+                    {playbackAudioSrc ? (
+                      <>
+                        <audio ref={playbackAudioRef} className="session-audio-player" controls preload="metadata" src={playbackAudioSrc} />
+                        {playbackAudioPath && (
+                          <p style={{ marginTop: "8px", wordBreak: "break-all", fontSize: "0.85em", color: "var(--text-secondary)" }}>
+                            <strong>{t("sessionDetail.audioSegmentPath")}:</strong> {playbackAudioPath}
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="empty-hint" style={{ marginTop: 0 }}>{t("sessionDetail.playbackEmpty")}</p>
+                    )}
+                  </div>
                   {activeSession.audioSegmentMeta && activeSession.audioSegmentMeta.length > 0 ? (
                     <div className="session-meta-full-width" style={{ gridColumn: "1 / -1", marginTop: "16px" }}>
                       <h4 style={{ marginBottom: "12px", color: "var(--text-primary)" }}>{t("sessionDetail.audioSegmentsDetail")}</h4>

@@ -86,6 +86,12 @@ export async function enqueueTranscription(sessionId: string): Promise<string> {
   return response.jobId;
 }
 
+export async function prepareTranscriptionAudio(
+  sessionId: string
+): Promise<{ path: string; format: string; merged: boolean }> {
+  return invoke("session_prepare_transcription_audio", { sessionId });
+}
+
 export async function enqueueSummary(sessionId: string, templateId?: string): Promise<string> {
   const response = await invoke<{ jobId: string }>("summary_enqueue", {
     sessionId,

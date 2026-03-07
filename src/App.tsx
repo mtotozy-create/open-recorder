@@ -17,6 +17,7 @@ import {
   listSessions,
   deleteSession,
   pauseRecording,
+  prepareTranscriptionAudio,
   renameSession,
   resumeRecording,
   startRecording,
@@ -498,6 +499,22 @@ function App() {
     }
   }
 
+  async function onPrepareSessionPlaybackAudio(): Promise<string> {
+    if (!activeSessionId) {
+      throw new Error("no active session selected");
+    }
+
+    try {
+      const response = await prepareTranscriptionAudio(activeSessionId);
+      await refreshSessionDetail(activeSessionId);
+      await refreshSessions();
+      return response.path;
+    } catch (error) {
+      setStatus("status.exportFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
   async function onTranscribe() {
     if (!activeSessionId || isTranscribing) return;
 
@@ -776,6 +793,9 @@ function App() {
           onSelectSession={setActiveSessionId}
           onRenameSession={(sessionId, name) => void onRenameSession(sessionId, name)}
           onDeleteSession={(sessionId) => void handleDeleteSession(sessionId)}
+          onPreparePlaybackAudio={() => onPrepareSessionPlaybackAudio()}
+          onExportM4a={() => void onExport("m4a")}
+          onExportMp3={() => void onExport("mp3")}
           onTranscribe={() => void onTranscribe()}
           onSummarize={() => void onSummarize()}
           t={t}

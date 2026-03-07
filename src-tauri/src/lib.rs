@@ -15,7 +15,7 @@ use commands::{
     },
     settings::{settings_get, settings_update},
     summary::summary_enqueue,
-    transcribe::transcribe_enqueue,
+    transcribe::{session_prepare_transcription_audio, transcribe_enqueue},
 };
 use state::AppState;
 
@@ -37,6 +37,7 @@ pub fn run() {
             session_rename,
             session_delete,
             transcribe_enqueue,
+            session_prepare_transcription_audio,
             summary_enqueue,
             job_get,
             session_jobs,
