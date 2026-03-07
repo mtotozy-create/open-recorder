@@ -509,6 +509,11 @@ function App() {
       // 后端立即返回 jobId，实际转写在后台线程执行
       const jobId = await enqueueTranscription(activeSessionId);
 
+      // 立即刷新详情，让任务出现在列表中
+      if (activeSessionId) {
+        await refreshSessionDetail(activeSessionId);
+      }
+
       // 轮询 job 状态直到完成或失败
       const pollResult = await pollJobUntilDone(jobId);
 
@@ -542,6 +547,9 @@ function App() {
       await sleep(3000);
       try {
         const job = await getJob(jobId);
+        // 更新任务列表状态（包含进度消息）
+        setSessionJobs(prev => prev.map(j => j.id === jobId ? job : j));
+
         if (job.status === "completed") {
           return { status: "completed" };
         }
@@ -571,6 +579,11 @@ function App() {
         activeSessionId,
         summaryTemplateId || settings.defaultTemplateId
       );
+
+      // 立即刷新详情，让任务出现在列表中
+      if (activeSessionId) {
+        await refreshSessionDetail(activeSessionId);
+      }
 
       const pollResult = await pollJobUntilDone(jobId);
 

@@ -227,6 +227,18 @@ pub fn summary_enqueue(
     let session_id_clone = session_id.clone();
 
     std::thread::spawn(move || {
+        let update_progress = |msg: &str| {
+            if let Ok(mut storage) = storage_arc.lock() {
+                if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+                    job.progress_msg = Some(msg.to_string());
+                    job.updated_at = now_iso();
+                }
+                let _ = storage.save();
+            }
+        };
+
+        update_progress("正在生成纪要...");
+
         let summary_result = summarize_with_chat_compatible(
             &transcript,
             &template.system_prompt,
