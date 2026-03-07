@@ -151,6 +151,10 @@ type StatusState = {
   params?: TranslationParams;
 };
 
+type PollJobOptions = {
+  runningStatusKey: "status.transcriptionRunning" | "status.summaryRunning";
+};
+
 function createDefaultTemplate(): PromptTemplate {
   return {
     id: "meeting-default",
@@ -306,28 +310,23 @@ function App() {
     setStatusState({ key, params });
   }
 
-  /**
-   * 格式化秒数为 mm:ss 字符串
-   */
-  function formatElapsed(seconds: number): string {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  }
-
-  /**
-   * 启动状态栏计时器，每秒更新显示已用时间
-   * 返回清理函数
-   */
-  function startElapsedTimer(statusKey: TranslationKey): () => void {
-    const startedAt = Date.now();
-    const update = () => {
-      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      setStatus(statusKey, { elapsed: formatElapsed(elapsed) });
-    };
-    update();
-    const id = window.setInterval(update, 1000);
-    return () => window.clearInterval(id);
+  function upsertJob(previous: JobInfo[], nextJob: JobInfo): JobInfo[] {
+    const index = previous.findIndex((job) => job.id === nextJob.id);
+    if (index < 0) {
+      return [...previous, nextJob];
+    }
+    const current = previous[index];
+    if (
+      current.status === nextJob.status &&
+      current.updatedAt === nextJob.updatedAt &&
+      current.progressMsg === nextJob.progressMsg &&
+      current.error === nextJob.error
+    ) {
+      return previous;
+    }
+    const next = [...previous];
+    next[index] = nextJob;
+    return next;
   }
 
   async function refreshSessions() {
@@ -503,7 +502,7 @@ function App() {
     if (!activeSessionId || isTranscribing) return;
 
     setIsTranscribing(true);
-    const stopTimer = startElapsedTimer("status.transcriptionRunning");
+    setStatus("status.transcriptionRunning", { elapsed: "" });
 
     try {
       // 后端立即返回 jobId，实际转写在后台线程执行
@@ -515,7 +514,9 @@ function App() {
       }
 
       // 轮询 job 状态直到完成或失败
-      const pollResult = await pollJobUntilDone(jobId);
+      const pollResult = await pollJobUntilDone(jobId, {
+        runningStatusKey: "status.transcriptionRunning"
+      });
 
       if (pollResult.status === "completed") {
         setStatus("status.transcriptionFinished", { jobId });
@@ -530,7 +531,6 @@ function App() {
     } catch (error) {
       setStatus("status.transcriptionFailed", { error: String(error) });
     } finally {
-      stopTimer();
       setIsTranscribing(false);
     }
   }
@@ -540,7 +540,8 @@ function App() {
    * 每 3 秒查询一次，最长等待 180 分钟
    */
   async function pollJobUntilDone(
-    jobId: string
+    jobId: string,
+    options: PollJobOptions
   ): Promise<{ status: string; error?: string }> {
     const maxAttempts = 3600; // 3 * 3600 = 10800 秒 = 3 小时
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -548,7 +549,7 @@ function App() {
       try {
         const job = await getJob(jobId);
         // 更新任务列表状态（包含进度消息）
-        setSessionJobs(prev => prev.map(j => j.id === jobId ? job : j));
+        setSessionJobs((previous) => upsertJob(previous, job));
 
         if (job.status === "completed") {
           return { status: "completed" };
@@ -556,7 +557,11 @@ function App() {
         if (job.status === "failed") {
           return { status: "failed", error: job.error ?? undefined };
         }
-        // 仍在运行，继续轮询
+        if (job.status === "running") {
+          setStatus(options.runningStatusKey, {
+            elapsed: job.progressMsg ? ` ${job.progressMsg}` : ""
+          });
+        }
       } catch {
         // 获取状态失败，继续重试
       }
@@ -572,7 +577,7 @@ function App() {
     if (!activeSessionId || isSummarizing) return;
 
     setIsSummarizing(true);
-    const stopTimer = startElapsedTimer("status.summaryRunning");
+    setStatus("status.summaryRunning", { elapsed: "" });
 
     try {
       const jobId = await enqueueSummary(
@@ -585,7 +590,9 @@ function App() {
         await refreshSessionDetail(activeSessionId);
       }
 
-      const pollResult = await pollJobUntilDone(jobId);
+      const pollResult = await pollJobUntilDone(jobId, {
+        runningStatusKey: "status.summaryRunning"
+      });
 
       if (pollResult.status === "completed") {
         setStatus("status.summaryFinished", { jobId });
@@ -600,7 +607,6 @@ function App() {
     } catch (error) {
       setStatus("status.summaryFailed", { error: String(error) });
     } finally {
-      stopTimer();
       setIsSummarizing(false);
     }
   }
