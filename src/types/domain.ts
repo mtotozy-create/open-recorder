@@ -162,4 +162,5 @@ export type JobInfo = {
   createdAt: string;
   updatedAt: string;
   error?: string;
+  progressMsg?: string;
 };

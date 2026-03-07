@@ -148,11 +148,15 @@ function SessionsTab({
   const [listDraftName, setListDraftName] = useState<string>("");
   const [detailDraftName, setDetailDraftName] = useState<string>("");
   const [transcriptViewMode, setTranscriptViewMode] = useState<ViewMode>("readable");
+  const [isTranscriptCollapsed, setIsTranscriptCollapsed] = useState<boolean>(false);
   const [summaryViewMode, setSummaryViewMode] = useState<ViewMode>("readable");
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("transcription");
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const skipListBlurRef = useRef(false);
   const audioFileInputRef = useRef<HTMLInputElement>(null);
+
+  const runningTranscribeJob = sessionJobs?.find((j) => j.kind === "transcription" && j.status === "running");
+  const runningSummaryJob = sessionJobs?.find((j) => j.kind === "summary" && j.status === "running");
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -164,7 +168,8 @@ function SessionsTab({
   useEffect(() => {
     setDetailDraftName(activeSession?.name ?? "");
     setActiveDetailTab("transcription");
-  }, [activeSession?.id, activeSession?.name]);
+    setIsTranscriptCollapsed(!!activeSession?.summary);
+  }, [activeSession?.id, activeSession?.name, !!activeSession?.summary]);
 
   function handleTemplateChange(event: ChangeEvent<HTMLSelectElement>) {
     onSummaryTemplateChange(event.target.value);
@@ -433,7 +438,9 @@ function SessionsTab({
                     disabled={isTranscribing}
                   >
                     {isTranscribing && <span className="spinner" />}
-                    {isTranscribing ? t("status.transcriptionRunning", { elapsed: "" }) : t("sessionDetail.runTranscription")}
+                    {isTranscribing
+                      ? runningTranscribeJob?.progressMsg || t("status.transcriptionRunning", { elapsed: "" })
+                      : t("sessionDetail.runTranscription")}
                   </button>
                   <button
                     type="button"
@@ -442,7 +449,9 @@ function SessionsTab({
                     disabled={isSummarizing}
                   >
                     {isSummarizing && <span className="spinner" />}
-                    {isSummarizing ? t("status.summaryRunning", { elapsed: "" }) : t("sessionDetail.generateSummary")}
+                    {isSummarizing
+                      ? runningSummaryJob?.progressMsg || t("status.summaryRunning", { elapsed: "" })
+                      : t("sessionDetail.generateSummary")}
                   </button>
                   <div className="summary-template-inline">
                     <span>{t("sessionDetail.summaryTemplate")}</span>
@@ -565,7 +574,10 @@ function SessionsTab({
                         {sessionJobs.map(job => (
                           <tr key={job.id}>
                             <td>{job.kind}</td>
-                            <td className={`status-${job.status.toLowerCase()}`}>{job.status}</td>
+                            <td className={`status-${job.status.toLowerCase()}`}>
+                              {job.status}
+                              {job.status === "running" && job.progressMsg ? ` (${job.progressMsg})` : ""}
+                            </td>
                             <td>{formatDateTime(job.updatedAt)}</td>
                             <td className="task-error-text" title={job.error ?? ""}>
                               {job.error ?? "-"}
@@ -580,37 +592,63 @@ function SessionsTab({
             </section>
 
             {activeDetailTab === "transcription" && (
-              <div className="session-results-grid">
-                <section className="panel session-result-panel">
-                  <div className="session-result-header">
-                    <h3>{t("sessionDetail.transcript")}</h3>
-                    <div className="view-switch">
-                      <button
-                        type="button"
-                        className={`view-switch-btn${transcriptViewMode === "readable" ? " active" : ""}`}
-                        onClick={() => setTranscriptViewMode("readable")}
+              <div className={`session-results-grid ${isTranscriptCollapsed ? "transcript-collapsed" : ""}`}>
+                <section className={`panel session-result-panel ${isTranscriptCollapsed ? "collapsed" : ""}`}>
+                  <div
+                    className="session-result-header"
+                    style={{ cursor: "pointer", userSelect: "none" }}
+                    onClick={() => setIsTranscriptCollapsed(!isTranscriptCollapsed)}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <svg
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        style={{
+                          width: "20px",
+                          height: "20px",
+                          stroke: "currentColor",
+                          strokeWidth: 2,
+                          strokeLinecap: "round",
+                          strokeLinejoin: "round",
+                          fill: "none",
+                          transition: "transform 200ms ease",
+                          transform: isTranscriptCollapsed ? "rotate(-90deg)" : "rotate(0deg)"
+                        }}
                       >
-                        {t("sessionDetail.readableView")}
-                      </button>
-                      <button
-                        type="button"
-                        className={`view-switch-btn${transcriptViewMode === "raw" ? " active" : ""}`}
-                        onClick={() => setTranscriptViewMode("raw")}
-                      >
-                        {t("sessionDetail.rawView")}
-                      </button>
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                      <h3 style={{ margin: 0 }}>{t("sessionDetail.transcript")}</h3>
                     </div>
+
+                    {!isTranscriptCollapsed && (
+                      <div className="view-switch" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className={`view-switch-btn${transcriptViewMode === "readable" ? " active" : ""}`}
+                          onClick={() => setTranscriptViewMode("readable")}
+                        >
+                          {t("sessionDetail.readableView")}
+                        </button>
+                        <button
+                          type="button"
+                          className={`view-switch-btn${transcriptViewMode === "raw" ? " active" : ""}`}
+                          onClick={() => setTranscriptViewMode("raw")}
+                        >
+                          {t("sessionDetail.rawView")}
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  {transcriptViewMode === "raw" && (
+                  {!isTranscriptCollapsed && transcriptViewMode === "raw" && (
                     <pre>{JSON.stringify(activeSession.transcript, null, 2)}</pre>
                   )}
 
-                  {transcriptViewMode === "readable" && activeSession.transcript.length === 0 && (
+                  {!isTranscriptCollapsed && transcriptViewMode === "readable" && activeSession.transcript.length === 0 && (
                     <p className="empty-hint">{t("sessionDetail.transcriptEmpty")}</p>
                   )}
 
-                  {transcriptViewMode === "readable" && activeSession.transcript.length > 0 && (
+                  {!isTranscriptCollapsed && transcriptViewMode === "readable" && activeSession.transcript.length > 0 && (
                     <ul className="transcript-list">
                       {activeSession.transcript.map((segment, index) => (
                         <li key={`${index}-${segment.startMs}-${segment.endMs}`} className="transcript-item">

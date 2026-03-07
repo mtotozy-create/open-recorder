@@ -1098,6 +1098,7 @@ pub struct Job {
     pub created_at: String,
     pub updated_at: String,
     pub error: Option<String>,
+    pub progress_msg: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

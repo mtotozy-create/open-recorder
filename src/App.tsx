@@ -567,8 +567,21 @@ function App() {
     const stopTimer = startElapsedTimer("status.summaryRunning");
 
     try {
-      const jobId = await enqueueSummary(activeSessionId, summaryTemplateId || settings.defaultTemplateId);
-      setStatus("status.summaryFinished", { jobId });
+      const jobId = await enqueueSummary(
+        activeSessionId,
+        summaryTemplateId || settings.defaultTemplateId
+      );
+
+      const pollResult = await pollJobUntilDone(jobId);
+
+      if (pollResult.status === "completed") {
+        setStatus("status.summaryFinished", { jobId });
+      } else {
+        setStatus("status.summaryFailed", {
+          error: pollResult.error || "unknown error"
+        });
+      }
+
       await refreshSessionDetail(activeSessionId);
       await refreshSessions();
     } catch (error) {

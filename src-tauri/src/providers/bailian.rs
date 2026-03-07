@@ -73,11 +73,13 @@ pub fn transcribe_with_bailian(
     config: &BailianConfig,
     segment_meta: &[AudioSegmentMeta],
     session_id: &str,
+    progress_callback: &dyn Fn(&str),
 ) -> Result<Vec<TranscriptSegment>, String> {
     let oss = config.oss.as_ref().ok_or_else(|| {
         "bailian transcription requires OSS config (access key, secret, endpoint, bucket)"
             .to_string()
     })?;
+    progress_callback("上传OSS中...");
     let file_urls = upload_segments_and_sign_urls(segment_paths, session_id, oss)?;
     let endpoint = build_endpoint(&config.base_url, BAILIAN_ASR_PATH);
 
@@ -96,6 +98,7 @@ pub fn transcribe_with_bailian(
             }
         });
 
+        progress_callback("提交转写任务中...");
         let response = client
             .post(endpoint.as_str())
             .bearer_auth(&config.api_key)
@@ -124,6 +127,7 @@ pub fn transcribe_with_bailian(
             &config.api_key,
             &payload,
             index,
+            progress_callback,
         )?;
 
         let start_ms = segment_meta
@@ -153,6 +157,7 @@ fn resolve_transcription_text(
     api_key: &str,
     payload: &Value,
     segment_index: usize,
+    progress_callback: &dyn Fn(&str),
 ) -> Result<String, String> {
     if let Some(text) = extract_transcription_text(payload) {
         return Ok(text);
@@ -175,7 +180,8 @@ fn resolve_transcription_text(
         )
     })?;
 
-    let task_payload = poll_bailian_task(client, base_url, api_key, &task_id, segment_index)?;
+    progress_callback("正在轮询结果...");
+    let task_payload = poll_bailian_task(client, base_url, api_key, &task_id, segment_index, progress_callback)?;
     if let Some(text) = extract_transcription_text(&task_payload) {
         return Ok(text);
     }
@@ -209,6 +215,7 @@ fn poll_bailian_task(
     api_key: &str,
     task_id: &str,
     segment_index: usize,
+    progress_callback: &dyn Fn(&str),
 ) -> Result<Value, String> {
     let endpoint = format!(
         "{}/{}",
@@ -220,6 +227,7 @@ fn poll_bailian_task(
         )
     );
 
+    progress_callback("正在轮询结果...");
     for _ in 0..MAX_BAILIAN_POLL_COUNT {
         let response = client
             .get(endpoint.as_str())

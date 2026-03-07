@@ -120,7 +120,16 @@ pub fn transcribe_enqueue(
     let now = now_iso();
 
     // 第一步：校验、创建 job 记录、提取配置（持有短暂锁）
-    let (segment_paths, segment_meta, transcription_config) = {
+    let (
+        raw_segment_paths,
+        raw_segment_meta,
+        session_elapsed_ms,
+        session_sample_rate,
+        session_channels,
+        exported_audio_for_transcription,
+        export_dir,
+        transcription_config,
+    ) = {
         let mut storage = state
             .storage
             .lock()
@@ -136,6 +145,7 @@ pub fn transcribe_enqueue(
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 error: None,
+                progress_msg: None,
             },
         );
 
@@ -195,116 +205,7 @@ pub fn transcribe_enqueue(
             );
         }
 
-        // 优先复用已导出的单文件（m4a > mp3），确保导出文件可直接用于后续转写。
-        let (segment_paths, segment_meta) = if let Some(exported_path) =
-            exported_audio_for_transcription
-        {
-            let total_duration_ms: u64 = raw_segment_meta.iter().map(|m| m.duration_ms).sum();
-            let duration_ms = if total_duration_ms > 0 {
-                total_duration_ms
-            } else if session_elapsed_ms > 0 {
-                session_elapsed_ms
-            } else {
-                600_000
-            };
-            let sample_rate = raw_segment_meta
-                .first()
-                .map(|m| m.sample_rate)
-                .filter(|rate| *rate > 0)
-                .unwrap_or_else(|| {
-                    if session_sample_rate > 0 {
-                        session_sample_rate
-                    } else {
-                        48_000
-                    }
-                });
-            let channels = raw_segment_meta
-                .first()
-                .map(|m| m.channels)
-                .filter(|count| *count > 0)
-                .unwrap_or_else(|| {
-                    if session_channels > 0 {
-                        session_channels
-                    } else {
-                        1
-                    }
-                });
-            let format = Path::new(&exported_path)
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(str::to_lowercase)
-                .unwrap_or_else(|| "m4a".to_string());
-            let exported_meta = vec![AudioSegmentMeta {
-                path: exported_path.clone(),
-                sequence: 0,
-                started_at: raw_segment_meta
-                    .first()
-                    .map(|m| m.started_at.clone())
-                    .unwrap_or_default(),
-                ended_at: raw_segment_meta
-                    .last()
-                    .map(|m| m.ended_at.clone())
-                    .unwrap_or_default(),
-                duration_ms,
-                sample_rate,
-                channels,
-                format,
-                file_size_bytes: std::fs::metadata(&exported_path)
-                    .map(|m| m.len())
-                    .unwrap_or(0),
-            }];
-            (vec![exported_path], exported_meta)
-        } else if raw_segment_paths.len() <= 1 {
-            (raw_segment_paths, raw_segment_meta)
-        } else {
-            // NOTE: 将多个分片合并为单一文件再转写，避免串行多次 API 调用导致等待过长
-            // NOTE: 将多个分片合并为单一文件再转写，避免串行多次 API 调用导致等待过长
-            let export_dir = storage.session_export_dir(&session_id)?;
-            let merged_path = export_dir.join(format!("recording-{}.m4a", session_id));
-
-            match merge_segments_with_ffmpeg(&raw_segment_paths, &merged_path, "m4a") {
-                Ok(()) => {
-                    // 合并总时长 = 各分片时长之和
-                    let total_duration_ms: u64 =
-                        raw_segment_meta.iter().map(|m| m.duration_ms).sum();
-                    let merged_meta = vec![AudioSegmentMeta {
-                        path: merged_path.to_string_lossy().to_string(),
-                        sequence: 0,
-                        started_at: raw_segment_meta
-                            .first()
-                            .map(|m| m.started_at.clone())
-                            .unwrap_or_default(),
-                        ended_at: raw_segment_meta
-                            .last()
-                            .map(|m| m.ended_at.clone())
-                            .unwrap_or_default(),
-                        duration_ms: total_duration_ms,
-                        sample_rate: raw_segment_meta
-                            .first()
-                            .map(|m| m.sample_rate)
-                            .unwrap_or(48000),
-                        channels: raw_segment_meta.first().map(|m| m.channels).unwrap_or(1),
-                        format: "m4a".to_string(),
-                        file_size_bytes: std::fs::metadata(&merged_path)
-                            .map(|m| m.len())
-                            .unwrap_or(0),
-                    }];
-                    let merged_path_str = merged_path.to_string_lossy().to_string();
-                    if let Some(session) = storage.data.sessions.get_mut(&session_id) {
-                        session.exported_m4a_path = Some(merged_path_str.clone());
-                        session.exported_m4a_size = Some(merged_meta[0].file_size_bytes);
-                    }
-                    (vec![merged_path_str], merged_meta)
-                }
-                Err(merge_err) => {
-                    // 合并失败时回退到原始多分片方式，不中断流程
-                    eprintln!("[transcribe] segment merge failed, falling back to multi-segment: {merge_err}");
-                    (raw_segment_paths, raw_segment_meta)
-                }
-            }
-        };
-
-        storage.save()?;
+        let export_dir = storage.session_export_dir(&session_id)?;
 
         let provider = settings
             .providers
@@ -407,32 +308,161 @@ pub fn transcribe_enqueue(
             }
         };
 
-        (segment_paths, segment_meta, config)
+        (
+            raw_segment_paths,
+            raw_segment_meta,
+            session_elapsed_ms,
+            session_sample_rate,
+            session_channels,
+            exported_audio_for_transcription,
+            export_dir,
+            config,
+        )
     };
 
-    // 第二步：clone Arc 到后台线程执行实际转写，命令立即返回
+    // 第二步：clone Arc 到后台线程执行实际转写，包含合并分片部分，释放 UI 阻塞
     let storage_arc = state.storage.clone();
     let job_id_clone = job_id.clone();
     let session_id_clone = session_id.clone();
+    let language_hint_clone = language_hint.clone();
 
     std::thread::spawn(move || {
+        let update_progress = |msg: &str| {
+            if let Ok(mut storage) = storage_arc.lock() {
+                if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+                    job.progress_msg = Some(msg.to_string());
+                    job.updated_at = now_iso();
+                }
+                let _ = storage.save();
+            }
+        };
+
+        // 优先复用已导出的单文件（m4a > mp3），确保导出文件可直接用于后续转写。
+        let (segment_paths, segment_meta) = if let Some(exported_path) =
+            exported_audio_for_transcription
+        {
+            let total_duration_ms: u64 = raw_segment_meta.iter().map(|m| m.duration_ms).sum();
+            let duration_ms = if total_duration_ms > 0 {
+                total_duration_ms
+            } else if session_elapsed_ms > 0 {
+                session_elapsed_ms
+            } else {
+                600_000
+            };
+            let sample_rate = raw_segment_meta
+                .first()
+                .map(|m| m.sample_rate)
+                .filter(|rate| *rate > 0)
+                .unwrap_or_else(|| {
+                    if session_sample_rate > 0 {
+                        session_sample_rate
+                    } else {
+                        48_000
+                    }
+                });
+            let channels = raw_segment_meta
+                .first()
+                .map(|m| m.channels)
+                .filter(|count| *count > 0)
+                .unwrap_or_else(|| {
+                    if session_channels > 0 {
+                        session_channels
+                    } else {
+                        1
+                    }
+                });
+            let format = Path::new(exported_path.as_str())
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(str::to_lowercase)
+                .unwrap_or_else(|| "m4a".to_string());
+            let exported_meta = vec![AudioSegmentMeta {
+                path: exported_path.clone(),
+                sequence: 0,
+                started_at: raw_segment_meta
+                    .first()
+                    .map(|m| m.started_at.clone())
+                    .unwrap_or_default(),
+                ended_at: raw_segment_meta
+                    .last()
+                    .map(|m| m.ended_at.clone())
+                    .unwrap_or_default(),
+                duration_ms,
+                sample_rate,
+                channels,
+                format,
+                file_size_bytes: std::fs::metadata(&exported_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0),
+            }];
+            (vec![exported_path], exported_meta)
+        } else if raw_segment_paths.len() <= 1 {
+            (raw_segment_paths, raw_segment_meta)
+        } else {
+            // NOTE: 将多个分片合并为单一文件再转写，避免串行多次 API 调用导致等待过长
+            update_progress("合并音频中...");
+            let merged_path = export_dir.join(format!("recording-{}.m4a", session_id_clone));
+
+            match merge_segments_with_ffmpeg(&raw_segment_paths, &merged_path, "m4a") {
+                Ok(()) => {
+                    let total_duration_ms: u64 =
+                        raw_segment_meta.iter().map(|m| m.duration_ms).sum();
+                    let merged_meta = vec![AudioSegmentMeta {
+                        path: merged_path.to_string_lossy().to_string(),
+                        sequence: 0,
+                        started_at: raw_segment_meta
+                            .first()
+                            .map(|m| m.started_at.clone())
+                            .unwrap_or_default(),
+                        ended_at: raw_segment_meta
+                            .last()
+                            .map(|m| m.ended_at.clone())
+                            .unwrap_or_default(),
+                        duration_ms: total_duration_ms,
+                        sample_rate: raw_segment_meta
+                            .first()
+                            .map(|m| m.sample_rate)
+                            .unwrap_or(48000),
+                        channels: raw_segment_meta.first().map(|m| m.channels).unwrap_or(1),
+                        format: "m4a".to_string(),
+                        file_size_bytes: std::fs::metadata(&merged_path)
+                            .map(|m| m.len())
+                            .unwrap_or(0),
+                    }];
+                    let merged_path_str = merged_path.to_string_lossy().to_string();
+                    if let Ok(mut storage) = storage_arc.lock() {
+                        if let Some(session) = storage.data.sessions.get_mut(&session_id_clone) {
+                            session.exported_m4a_path = Some(merged_path_str.clone());
+                            session.exported_m4a_size = Some(merged_meta[0].file_size_bytes);
+                        }
+                        let _ = storage.save();
+                    }
+                    (vec![merged_path_str], merged_meta)
+                }
+                Err(merge_err) => {
+                    eprintln!("[transcribe] segment merge failed, falling back to multi-segment: {merge_err}");
+                    (raw_segment_paths, raw_segment_meta)
+                }
+            }
+        };
+
         let transcript_result = match transcription_config {
             ActiveTranscriptionConfig::Bailian(config) => transcribe_with_bailian(
                 &segment_paths,
-                language_hint.as_deref(),
+                language_hint_clone.as_deref(),
                 &config,
                 &segment_meta,
                 &session_id_clone,
+                &update_progress,
             ),
             ActiveTranscriptionConfig::AliyunTingwu(config) => transcribe_with_aliyun_tingwu(
                 &segment_paths,
                 &config,
                 &segment_meta,
                 &session_id_clone,
+                &update_progress,
             ),
         };
-
-        // 原先转写完成后清理临时文件，现已保存为 exported_m4a_path，不予删除
 
         // 回写结果到 storage
         if let Ok(mut storage) = storage_arc.lock() {
@@ -446,6 +476,7 @@ pub fn transcribe_enqueue(
                     if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
                         job.status = JobStatus::Completed;
                         job.error = None;
+                        job.progress_msg = None;
                         job.updated_at = now_iso();
                     }
                 }
@@ -456,6 +487,7 @@ pub fn transcribe_enqueue(
                     }
                     if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
                         job.status = JobStatus::Failed;
+                        job.progress_msg = None;
                         job.error = Some(error);
                         job.updated_at = now_iso();
                     }

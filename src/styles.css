@@ -711,12 +711,20 @@ p {
   overflow: hidden;
 }
 
+.session-results-grid.transcript-collapsed {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .session-result-panel {
   min-height: 200px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   overflow: hidden;
+}
+
+.session-result-panel.collapsed {
+  min-height: unset;
 }
 
 .session-result-header {

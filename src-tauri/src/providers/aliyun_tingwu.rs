@@ -47,6 +47,7 @@ pub fn transcribe_with_aliyun_tingwu(
     config: &AliyunTingwuConfig,
     segment_meta: &[AudioSegmentMeta],
     session_id: &str,
+    progress_callback: &dyn Fn(&str),
 ) -> Result<Vec<TranscriptSegment>, String> {
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -58,7 +59,7 @@ pub fn transcribe_with_aliyun_tingwu(
     let create_path = "/openapi/tingwu/v2/tasks";
     let create_query = "type=offline";
     let create_resource = format!("{create_path}?{create_query}");
-    let file_urls = resolve_segment_file_urls(segment_paths, config, session_id)?;
+    let file_urls = resolve_segment_file_urls(segment_paths, config, session_id, progress_callback)?;
 
     let mut transcript = Vec::with_capacity(segment_paths.len());
     for (index, file_url) in file_urls.iter().enumerate() {
@@ -94,6 +95,7 @@ pub fn transcribe_with_aliyun_tingwu(
             "Parameters": parameters
         });
 
+        progress_callback("提交转写任务中...");
         let create_url = format!("{endpoint}{create_path}?{create_query}");
         let create_payload = send_signed_json_request(
             &client,
@@ -134,6 +136,7 @@ pub fn transcribe_with_aliyun_tingwu(
             config,
             index,
             &task_id,
+            progress_callback,
         )?;
 
         let text = fetch_or_extract_transcript_text(&client, &task_result).map_err(|error| {
@@ -266,10 +269,12 @@ fn poll_task_result_url(
     config: &AliyunTingwuConfig,
     segment_index: usize,
     task_id: &str,
+    progress_callback: &dyn Fn(&str),
 ) -> Result<String, String> {
     let poll_interval = Duration::from_secs(config.poll_interval_seconds.clamp(60, 300));
     let max_poll_count = max_poll_count(config);
 
+    progress_callback("正在轮询结果...");
     for _ in 0..max_poll_count {
         let payload = send_signed_json_request(
             client,
@@ -397,6 +402,7 @@ fn resolve_segment_file_urls(
     segment_paths: &[String],
     config: &AliyunTingwuConfig,
     session_id: &str,
+    progress_callback: &dyn Fn(&str),
 ) -> Result<Vec<String>, String> {
     let mut resolved = vec![String::new(); segment_paths.len()];
     let mut pending_local_paths = vec![];
@@ -424,6 +430,7 @@ fn resolve_segment_file_urls(
         let oss = config.oss.as_ref().ok_or_else(|| {
             "aliyun tingwu requires public FileUrl: configure current OSS for auto upload or set aliyunFileUrlPrefix".to_string()
         })?;
+        progress_callback("上传OSS中...");
         let signed_urls = upload_segments_and_sign_urls(&pending_local_paths, session_id, oss)?;
         if signed_urls.len() != pending_local_indexes.len() {
             return Err("aliyun tingwu failed to map signed OSS urls to segment list".to_string());
