@@ -28,6 +28,7 @@ pub fn upload_segments_and_sign_urls(
     config: &AliyunOssConfig,
 ) -> Result<Vec<String>, String> {
     let client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(3600))
         .build()
         .map_err(|error| format!("failed to create http client: {error}"))?;

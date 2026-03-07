@@ -49,6 +49,7 @@ pub fn transcribe_with_aliyun_tingwu(
     session_id: &str,
 ) -> Result<Vec<TranscriptSegment>, String> {
     let client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| format!("failed to create http client: {error}"))?;

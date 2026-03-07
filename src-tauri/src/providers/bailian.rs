@@ -9,9 +9,10 @@ use crate::{
     providers::aliyun_oss::{upload_segments_and_sign_urls, AliyunOssConfig},
 };
 
-const BAILIAN_ASR_PATH: &str = "/api/v1/services/audio/asr/transcription";
-const BAILIAN_COMPATIBLE_AUDIO_PATH: &str = "/compatible-mode/v1/audio/transcriptions";
-const BAILIAN_COMPATIBLE_CHAT_PATH: &str = "/compatible-mode/v1/chat/completions";
+// pub is needed for summary.rs
+pub const BAILIAN_ASR_PATH: &str = "/api/v1/services/audio/asr/transcription";
+pub const BAILIAN_COMPATIBLE_AUDIO_PATH: &str = "/compatible-mode/v1/audio/transcriptions";
+pub const BAILIAN_COMPATIBLE_CHAT_PATH: &str = "/compatible-mode/v1/chat/completions";
 const BAILIAN_TASK_PATH_PREFIX: &str = "/api/v1/tasks";
 const MAX_BAILIAN_POLL_COUNT: usize = 120;
 const BAILIAN_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -27,7 +28,7 @@ pub struct BailianConfig {
 #[derive(Debug, Clone)]
 pub struct ChatCompatibleSummaryConfig {
     pub provider_name: String,
-    pub base_url: String,
+    pub endpoint: String,
     pub api_key: String,
     pub model: String,
 }
@@ -81,6 +82,7 @@ pub fn transcribe_with_bailian(
     let endpoint = build_endpoint(&config.base_url, BAILIAN_ASR_PATH);
 
     let client = Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|error| format!("failed to create http client: {error}"))?;
@@ -332,15 +334,14 @@ pub fn summarize_with_chat_compatible(
         temperature: 0.2,
     };
 
-    let endpoint = build_endpoint(&config.base_url, BAILIAN_COMPATIBLE_CHAT_PATH);
-
     let client = Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|error| format!("failed to create http client: {error}"))?;
 
     let response = client
-        .post(endpoint)
+        .post(&config.endpoint)
         .bearer_auth(&config.api_key)
         .json(&request)
         .send()
@@ -522,11 +523,11 @@ fn derive_summary_title(raw: &str) -> String {
     }
 }
 
-fn build_endpoint(base_url: &str, path: &str) -> String {
+pub fn build_endpoint(base_url: &str, path: &str) -> String {
     format!("{}{}", normalize_bailian_base_url(base_url), path)
 }
 
-fn normalize_bailian_base_url(base_url: &str) -> String {
+pub fn normalize_bailian_base_url(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     let known_suffixes = [
         BAILIAN_ASR_PATH,

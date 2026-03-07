@@ -52,7 +52,10 @@ fn resolve_summary_config(provider: &ProviderConfig) -> Result<ChatCompatibleSum
 
             Ok(ChatCompatibleSummaryConfig {
                 provider_name: provider.name.clone(),
-                base_url: bailian.base_url.clone(),
+                endpoint: crate::providers::bailian::build_endpoint(
+                    &bailian.base_url,
+                    crate::providers::bailian::BAILIAN_COMPATIBLE_CHAT_PATH,
+                ),
                 api_key,
                 model: bailian.summary_model.clone(),
             })
@@ -82,9 +85,14 @@ fn resolve_summary_config(provider: &ProviderConfig) -> Result<ChatCompatibleSum
                 ));
             }
 
+            let mut endpoint = openrouter.base_url.trim_end_matches('/').to_string();
+            if !endpoint.ends_with("/chat/completions") {
+                endpoint.push_str("/chat/completions");
+            }
+
             Ok(ChatCompatibleSummaryConfig {
                 provider_name: provider.name.clone(),
-                base_url: openrouter.base_url.clone(),
+                endpoint,
                 api_key,
                 model: openrouter.summary_model.clone(),
             })
