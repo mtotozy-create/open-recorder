@@ -103,6 +103,10 @@ fn resolve_summary_config(
             "provider '{}' does not support summary",
             provider.name
         )),
+        ProviderKind::LocalStt => Err(format!(
+            "provider '{}' does not support summary",
+            provider.name
+        )),
     }
 }
 

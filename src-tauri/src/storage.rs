@@ -84,10 +84,7 @@ impl Storage {
     }
 
     pub fn session_audio_dir(&self, session_id: &str) -> Result<PathBuf, String> {
-        let root = self
-            .file_path
-            .parent()
-            .ok_or_else(|| "failed to resolve data directory".to_string())?;
+        let root = self.data_root_dir()?;
         let audio_dir = root.join("audio").join(session_id).join("segments");
         fs::create_dir_all(&audio_dir).map_err(|error| {
             format!(
@@ -99,10 +96,7 @@ impl Storage {
     }
 
     pub fn session_export_dir(&self, session_id: &str) -> Result<PathBuf, String> {
-        let root = self
-            .file_path
-            .parent()
-            .ok_or_else(|| "failed to resolve data directory".to_string())?;
+        let root = self.data_root_dir()?;
         let export_dir = root.join("exports").join(session_id);
         fs::create_dir_all(&export_dir).map_err(|error| {
             format!(
@@ -111,6 +105,13 @@ impl Storage {
             )
         })?;
         Ok(export_dir)
+    }
+
+    pub fn data_root_dir(&self) -> Result<PathBuf, String> {
+        self.file_path
+            .parent()
+            .map(|path| path.to_path_buf())
+            .ok_or_else(|| "failed to resolve data directory".to_string())
     }
 }
 

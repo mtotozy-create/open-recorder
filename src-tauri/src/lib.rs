@@ -6,6 +6,7 @@ mod storage;
 
 use commands::{
     job::{job_get, session_jobs},
+    local_provider::{local_provider_prepare, local_provider_status},
     recorder::{
         recorder_export, recorder_pause, recorder_processing_status, recorder_resume,
         recorder_start, recorder_status, recorder_stop,
@@ -42,6 +43,8 @@ pub fn run() {
             summary_enqueue,
             job_get,
             session_jobs,
+            local_provider_status,
+            local_provider_prepare,
             settings_get,
             settings_update,
         ])

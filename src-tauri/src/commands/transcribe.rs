@@ -13,6 +13,7 @@ use crate::{
     providers::{
         aliyun_tingwu::{transcribe_with_aliyun_tingwu, AliyunTingwuConfig},
         bailian::{transcribe_with_bailian, BailianConfig},
+        local_stt::{transcribe_with_local_stt, LocalSttConfig},
         oss::{OssConfig as ProviderOssConfig, OssProviderKind as ProviderOssProviderKind},
     },
     state::AppState,
@@ -109,6 +110,7 @@ fn resolve_selected_oss_config(settings: &Settings) -> Result<ProviderOssConfig,
 enum ActiveTranscriptionConfig {
     Bailian(BailianConfig),
     AliyunTingwu(AliyunTingwuConfig),
+    LocalStt(LocalSttConfig),
 }
 
 struct PreparedTranscriptionAudio {
@@ -571,10 +573,9 @@ pub fn transcribe_enqueue(
             ));
         }
 
-        let selected_oss_config = resolve_selected_oss_config(&settings)?;
-
         let config = match provider.kind {
             ProviderKind::Bailian => {
+                let selected_oss_config = resolve_selected_oss_config(&settings)?;
                 let bailian = provider.bailian.as_ref().ok_or_else(|| {
                     format!("provider '{}' missing bailian config", provider.name)
                 })?;
@@ -595,6 +596,7 @@ pub fn transcribe_enqueue(
                 })
             }
             ProviderKind::AliyunTingwu => {
+                let selected_oss_config = resolve_selected_oss_config(&settings)?;
                 let aliyun = provider.aliyun_tingwu.as_ref().ok_or_else(|| {
                     format!("provider '{}' missing aliyun_tingwu config", provider.name)
                 })?;
@@ -651,6 +653,28 @@ pub fn transcribe_enqueue(
                     "provider '{}' does not support transcription",
                     provider.name
                 ))
+            }
+            ProviderKind::LocalStt => {
+                let local_stt = provider.local_stt.as_ref().ok_or_else(|| {
+                    format!("provider '{}' missing local_stt config", provider.name)
+                })?;
+
+                ActiveTranscriptionConfig::LocalStt(LocalSttConfig {
+                    python_path: local_stt.python_path.clone(),
+                    venv_dir: local_stt.venv_dir.clone(),
+                    model_cache_dir: local_stt.model_cache_dir.clone(),
+                    engine: local_stt.engine.clone(),
+                    whisper_model: local_stt.whisper_model.clone(),
+                    sense_voice_model: local_stt.sense_voice_model.clone(),
+                    language: local_stt.language.clone(),
+                    diarization_enabled: local_stt.diarization_enabled,
+                    min_speakers: local_stt.min_speakers,
+                    max_speakers: local_stt.max_speakers,
+                    speaker_count_hint: local_stt.speaker_count_hint,
+                    compute_device: local_stt.compute_device.clone(),
+                    vad_enabled: local_stt.vad_enabled,
+                    chunk_seconds: local_stt.chunk_seconds.clamp(5, 180),
+                })
             }
         };
 
@@ -742,6 +766,13 @@ pub fn transcribe_enqueue(
                 &update_progress,
             ),
             ActiveTranscriptionConfig::AliyunTingwu(config) => transcribe_with_aliyun_tingwu(
+                &segment_paths,
+                &config,
+                &segment_meta,
+                &session_id_clone,
+                &update_progress,
+            ),
+            ActiveTranscriptionConfig::LocalStt(config) => transcribe_with_local_stt(
                 &segment_paths,
                 &config,
                 &segment_meta,

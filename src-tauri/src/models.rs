@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID: &str = "bailian-transcription-default";
-const DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID: &str = "aliyun-transcription-default";
-const DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID: &str = "bailian-summary-default";
-const DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID: &str = "openrouter-summary-default";
+const DEFAULT_BAILIAN_PROVIDER_ID: &str = "bailian-default";
+const DEFAULT_ALIYUN_PROVIDER_ID: &str = "aliyun-tingwu-default";
+const DEFAULT_OPENROUTER_PROVIDER_ID: &str = "openrouter-default";
+const DEFAULT_LOCAL_STT_PROVIDER_ID: &str = "local-stt-default";
 const DEFAULT_SELECTED_OSS_CONFIG_ID: &str = "oss-aliyun-default";
 const DEFAULT_R2_OSS_CONFIG_ID: &str = "oss-r2-default";
 
@@ -44,6 +44,7 @@ pub enum ProviderKind {
     Bailian,
     AliyunTingwu,
     Openrouter,
+    LocalStt,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -199,6 +200,54 @@ impl Default for OpenrouterProviderSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalSttEngine {
+    #[default]
+    Whisper,
+    SensevoiceSmall,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LocalSttProviderSettings {
+    pub python_path: Option<String>,
+    pub venv_dir: Option<String>,
+    pub model_cache_dir: Option<String>,
+    pub engine: LocalSttEngine,
+    pub whisper_model: String,
+    pub sense_voice_model: String,
+    pub language: String,
+    pub diarization_enabled: bool,
+    pub min_speakers: Option<u32>,
+    pub max_speakers: Option<u32>,
+    pub speaker_count_hint: Option<u32>,
+    pub compute_device: String,
+    pub vad_enabled: bool,
+    pub chunk_seconds: u64,
+}
+
+impl Default for LocalSttProviderSettings {
+    fn default() -> Self {
+        Self {
+            python_path: None,
+            venv_dir: None,
+            model_cache_dir: None,
+            engine: LocalSttEngine::Whisper,
+            whisper_model: "small".to_string(),
+            sense_voice_model: "iic/SenseVoiceSmall".to_string(),
+            language: "auto".to_string(),
+            diarization_enabled: true,
+            min_speakers: None,
+            max_speakers: None,
+            speaker_count_hint: None,
+            compute_device: "auto".to_string(),
+            vad_enabled: true,
+            chunk_seconds: 30,
+        }
+    }
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -215,6 +264,7 @@ pub struct ProviderConfig {
     pub bailian: Option<BailianProviderSettings>,
     pub aliyun_tingwu: Option<AliyunTingwuProviderSettings>,
     pub openrouter: Option<OpenrouterProviderSettings>,
+    pub local_stt: Option<LocalSttProviderSettings>,
 }
 
 impl Default for ProviderConfig {
@@ -231,6 +281,7 @@ impl Default for ProviderConfig {
             bailian: Some(BailianProviderSettings::default()),
             aliyun_tingwu: None,
             openrouter: None,
+            local_stt: None,
         }
     }
 }
@@ -258,6 +309,8 @@ pub struct TranscriptSegment {
     pub end_ms: u64,
     pub text: String,
     pub confidence: Option<f32>,
+    pub speaker_id: Option<String>,
+    pub speaker_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -405,9 +458,8 @@ impl Default for Settings {
             providers: create_default_providers(),
             oss_configs: create_default_oss_configs(),
             selected_oss_config_id: DEFAULT_SELECTED_OSS_CONFIG_ID.to_string(),
-            selected_transcription_provider_id: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID
-                .to_string(),
-            selected_summary_provider_id: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID.to_string(),
+            selected_transcription_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
+            selected_summary_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
             default_template_id: "meeting-default".to_string(),
             templates: vec![create_default_template()],
 
@@ -448,17 +500,16 @@ impl Settings {
             let (providers, legacy_oss) = self.migrate_legacy_providers();
             self.providers = providers;
             self.selected_transcription_provider_id = match self.legacy_transcription_provider {
-                Some(TranscriptionProvider::AliyunTingwu) => {
-                    DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID.to_string()
-                }
-                _ => DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID.to_string(),
+                Some(TranscriptionProvider::AliyunTingwu) => DEFAULT_ALIYUN_PROVIDER_ID.to_string(),
+                _ => DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
             };
-            self.selected_summary_provider_id = DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID.to_string();
+            self.selected_summary_provider_id = DEFAULT_BAILIAN_PROVIDER_ID.to_string();
             if self.legacy_oss.is_none() {
                 self.legacy_oss = Some(legacy_oss);
             }
         }
 
+        self.providers = canonicalize_providers_by_kind(&self.providers);
         for provider in &mut self.providers {
             normalize_provider(provider);
         }
@@ -502,6 +553,11 @@ impl Settings {
         ensure_capability_provider(&mut self.providers, ProviderCapability::Transcription);
         ensure_capability_provider(&mut self.providers, ProviderCapability::Summary);
 
+        self.selected_transcription_provider_id =
+            normalize_provider_id_alias(self.selected_transcription_provider_id.as_str());
+        self.selected_summary_provider_id =
+            normalize_provider_id_alias(self.selected_summary_provider_id.as_str());
+
         self.selected_transcription_provider_id = resolve_selected_provider_id(
             &self.providers,
             &self.selected_transcription_provider_id,
@@ -518,6 +574,7 @@ impl Settings {
         let default_bailian = BailianProviderSettings::default();
         let default_aliyun = AliyunTingwuProviderSettings::default();
         let default_oss = ProviderOssSettings::default();
+        let default_openrouter = OpenrouterProviderSettings::default();
 
         let legacy_oss = ProviderOssSettings {
             access_key_id: self.legacy_bailian_oss_access_key_id.clone(),
@@ -533,114 +590,115 @@ impl Settings {
                 .unwrap_or(default_oss.signed_url_ttl_seconds),
         };
 
+        let bailian_provider = ProviderConfig {
+            id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
+            name: "Bailian".to_string(),
+            kind: ProviderKind::Bailian,
+            capabilities: vec![
+                ProviderCapability::Transcription,
+                ProviderCapability::Summary,
+            ],
+            enabled: true,
+            bailian: Some(BailianProviderSettings {
+                api_key: self.legacy_bailian_api_key.clone(),
+                base_url: self
+                    .legacy_bailian_base_url
+                    .clone()
+                    .unwrap_or(default_bailian.base_url.clone()),
+                transcription_model: self
+                    .legacy_bailian_transcription_model
+                    .clone()
+                    .unwrap_or(default_bailian.transcription_model.clone()),
+                summary_model: self
+                    .legacy_bailian_summary_model
+                    .clone()
+                    .unwrap_or(default_bailian.summary_model.clone()),
+                legacy_oss: None,
+            }),
+            aliyun_tingwu: None,
+            openrouter: None,
+            local_stt: None,
+        };
+        let aliyun_provider = ProviderConfig {
+            id: DEFAULT_ALIYUN_PROVIDER_ID.to_string(),
+            name: "Aliyun Tingwu".to_string(),
+            kind: ProviderKind::AliyunTingwu,
+            capabilities: vec![ProviderCapability::Transcription],
+            enabled: true,
+            bailian: None,
+            aliyun_tingwu: Some(AliyunTingwuProviderSettings {
+                access_key_id: self.legacy_aliyun_access_key_id.clone(),
+                access_key_secret: self.legacy_aliyun_access_key_secret.clone(),
+                app_key: self.legacy_aliyun_app_key.clone(),
+                endpoint: self
+                    .legacy_aliyun_endpoint
+                    .clone()
+                    .unwrap_or(default_aliyun.endpoint.clone()),
+                source_language: self
+                    .legacy_aliyun_source_language
+                    .clone()
+                    .unwrap_or(default_aliyun.source_language.clone()),
+                file_url_prefix: self.legacy_aliyun_file_url_prefix.clone(),
+                language_hints: self.legacy_aliyun_language_hints.clone(),
+                transcription_normalization_enabled: self
+                    .legacy_aliyun_transcription_normalization_enabled
+                    .unwrap_or(default_aliyun.transcription_normalization_enabled),
+                transcription_paragraph_enabled: self
+                    .legacy_aliyun_transcription_paragraph_enabled
+                    .unwrap_or(default_aliyun.transcription_paragraph_enabled),
+                transcription_punctuation_prediction_enabled: self
+                    .legacy_aliyun_transcription_punctuation_prediction_enabled
+                    .unwrap_or(default_aliyun.transcription_punctuation_prediction_enabled),
+                transcription_disfluency_removal_enabled: self
+                    .legacy_aliyun_transcription_disfluency_removal_enabled
+                    .unwrap_or(default_aliyun.transcription_disfluency_removal_enabled),
+                transcription_speaker_diarization_enabled: self
+                    .legacy_aliyun_transcription_speaker_diarization_enabled
+                    .unwrap_or(default_aliyun.transcription_speaker_diarization_enabled),
+                poll_interval_seconds: self
+                    .legacy_aliyun_poll_interval_seconds
+                    .unwrap_or(default_aliyun.poll_interval_seconds),
+                max_polling_minutes: self
+                    .legacy_aliyun_max_polling_minutes
+                    .unwrap_or(default_aliyun.max_polling_minutes),
+                legacy_oss: None,
+            }),
+            openrouter: None,
+            local_stt: None,
+        };
+        let openrouter_provider = ProviderConfig {
+            id: DEFAULT_OPENROUTER_PROVIDER_ID.to_string(),
+            name: "OpenRouter".to_string(),
+            kind: ProviderKind::Openrouter,
+            capabilities: vec![ProviderCapability::Summary],
+            enabled: true,
+            bailian: None,
+            aliyun_tingwu: None,
+            openrouter: Some(OpenrouterProviderSettings {
+                api_key: None,
+                base_url: default_openrouter.base_url,
+                summary_model: default_openrouter.summary_model,
+            }),
+            local_stt: None,
+        };
+        let local_stt_provider = ProviderConfig {
+            id: DEFAULT_LOCAL_STT_PROVIDER_ID.to_string(),
+            name: "Local STT".to_string(),
+            kind: ProviderKind::LocalStt,
+            capabilities: vec![ProviderCapability::Transcription],
+            enabled: true,
+            bailian: None,
+            aliyun_tingwu: None,
+            openrouter: None,
+            local_stt: Some(LocalSttProviderSettings::default()),
+        };
+
         (
             vec![
-                ProviderConfig {
-                    id: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID.to_string(),
-                    name: "Bailian Transcription".to_string(),
-                    kind: ProviderKind::Bailian,
-                    capabilities: vec![ProviderCapability::Transcription],
-                    enabled: true,
-                    bailian: Some(BailianProviderSettings {
-                        api_key: self.legacy_bailian_api_key.clone(),
-                        base_url: self
-                            .legacy_bailian_base_url
-                            .clone()
-                            .unwrap_or(default_bailian.base_url.clone()),
-                        transcription_model: self
-                            .legacy_bailian_transcription_model
-                            .clone()
-                            .unwrap_or(default_bailian.transcription_model.clone()),
-                        summary_model: self
-                            .legacy_bailian_summary_model
-                            .clone()
-                            .unwrap_or(default_bailian.summary_model.clone()),
-                        legacy_oss: None,
-                    }),
-                    aliyun_tingwu: None,
-                    openrouter: None,
-                },
-                ProviderConfig {
-                    id: DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID.to_string(),
-                    name: "Aliyun Tingwu Transcription".to_string(),
-                    kind: ProviderKind::AliyunTingwu,
-                    capabilities: vec![ProviderCapability::Transcription],
-                    enabled: true,
-                    bailian: None,
-                    aliyun_tingwu: Some(AliyunTingwuProviderSettings {
-                        access_key_id: self.legacy_aliyun_access_key_id.clone(),
-                        access_key_secret: self.legacy_aliyun_access_key_secret.clone(),
-                        app_key: self.legacy_aliyun_app_key.clone(),
-                        endpoint: self
-                            .legacy_aliyun_endpoint
-                            .clone()
-                            .unwrap_or(default_aliyun.endpoint.clone()),
-                        source_language: self
-                            .legacy_aliyun_source_language
-                            .clone()
-                            .unwrap_or(default_aliyun.source_language.clone()),
-                        file_url_prefix: self.legacy_aliyun_file_url_prefix.clone(),
-                        language_hints: self.legacy_aliyun_language_hints.clone(),
-                        transcription_normalization_enabled: self
-                            .legacy_aliyun_transcription_normalization_enabled
-                            .unwrap_or(default_aliyun.transcription_normalization_enabled),
-                        transcription_paragraph_enabled: self
-                            .legacy_aliyun_transcription_paragraph_enabled
-                            .unwrap_or(default_aliyun.transcription_paragraph_enabled),
-                        transcription_punctuation_prediction_enabled: self
-                            .legacy_aliyun_transcription_punctuation_prediction_enabled
-                            .unwrap_or(default_aliyun.transcription_punctuation_prediction_enabled),
-                        transcription_disfluency_removal_enabled: self
-                            .legacy_aliyun_transcription_disfluency_removal_enabled
-                            .unwrap_or(default_aliyun.transcription_disfluency_removal_enabled),
-                        transcription_speaker_diarization_enabled: self
-                            .legacy_aliyun_transcription_speaker_diarization_enabled
-                            .unwrap_or(default_aliyun.transcription_speaker_diarization_enabled),
-                        poll_interval_seconds: self
-                            .legacy_aliyun_poll_interval_seconds
-                            .unwrap_or(default_aliyun.poll_interval_seconds),
-                        max_polling_minutes: self
-                            .legacy_aliyun_max_polling_minutes
-                            .unwrap_or(default_aliyun.max_polling_minutes),
-                        legacy_oss: None,
-                    }),
-                    openrouter: None,
-                },
-                ProviderConfig {
-                    id: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID.to_string(),
-                    name: "Bailian Summary".to_string(),
-                    kind: ProviderKind::Bailian,
-                    capabilities: vec![ProviderCapability::Summary],
-                    enabled: true,
-                    bailian: Some(BailianProviderSettings {
-                        api_key: self.legacy_bailian_api_key.clone(),
-                        base_url: self
-                            .legacy_bailian_base_url
-                            .clone()
-                            .unwrap_or(default_bailian.base_url.clone()),
-                        transcription_model: self
-                            .legacy_bailian_transcription_model
-                            .clone()
-                            .unwrap_or(default_bailian.transcription_model.clone()),
-                        summary_model: self
-                            .legacy_bailian_summary_model
-                            .clone()
-                            .unwrap_or(default_bailian.summary_model.clone()),
-                        legacy_oss: None,
-                    }),
-                    aliyun_tingwu: None,
-                    openrouter: None,
-                },
-                ProviderConfig {
-                    id: DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID.to_string(),
-                    name: "OpenRouter Summary".to_string(),
-                    kind: ProviderKind::Openrouter,
-                    capabilities: vec![ProviderCapability::Summary],
-                    enabled: true,
-                    bailian: None,
-                    aliyun_tingwu: None,
-                    openrouter: Some(OpenrouterProviderSettings::default()),
-                },
+                bailian_provider,
+                aliyun_provider,
+                openrouter_provider,
+                local_stt_provider,
             ],
             legacy_oss,
         )
@@ -686,44 +744,51 @@ fn create_default_r2_oss_config() -> OssConfig {
 fn create_default_providers() -> Vec<ProviderConfig> {
     vec![
         ProviderConfig {
-            id: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID.to_string(),
-            name: "Bailian Transcription".to_string(),
+            id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
+            name: "Bailian".to_string(),
             kind: ProviderKind::Bailian,
-            capabilities: vec![ProviderCapability::Transcription],
+            capabilities: vec![
+                ProviderCapability::Transcription,
+                ProviderCapability::Summary,
+            ],
             enabled: true,
             bailian: Some(BailianProviderSettings::default()),
             aliyun_tingwu: None,
             openrouter: None,
+            local_stt: None,
         },
         ProviderConfig {
-            id: DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID.to_string(),
-            name: "Aliyun Tingwu Transcription".to_string(),
+            id: DEFAULT_ALIYUN_PROVIDER_ID.to_string(),
+            name: "Aliyun Tingwu".to_string(),
             kind: ProviderKind::AliyunTingwu,
             capabilities: vec![ProviderCapability::Transcription],
             enabled: true,
             bailian: None,
             aliyun_tingwu: Some(AliyunTingwuProviderSettings::default()),
             openrouter: None,
+            local_stt: None,
         },
         ProviderConfig {
-            id: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID.to_string(),
-            name: "Bailian Summary".to_string(),
-            kind: ProviderKind::Bailian,
-            capabilities: vec![ProviderCapability::Summary],
-            enabled: true,
-            bailian: Some(BailianProviderSettings::default()),
-            aliyun_tingwu: None,
-            openrouter: None,
-        },
-        ProviderConfig {
-            id: DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID.to_string(),
-            name: "OpenRouter Summary".to_string(),
+            id: DEFAULT_OPENROUTER_PROVIDER_ID.to_string(),
+            name: "OpenRouter".to_string(),
             kind: ProviderKind::Openrouter,
             capabilities: vec![ProviderCapability::Summary],
             enabled: true,
             bailian: None,
             aliyun_tingwu: None,
             openrouter: Some(OpenrouterProviderSettings::default()),
+            local_stt: None,
+        },
+        ProviderConfig {
+            id: DEFAULT_LOCAL_STT_PROVIDER_ID.to_string(),
+            name: "Local STT".to_string(),
+            kind: ProviderKind::LocalStt,
+            capabilities: vec![ProviderCapability::Transcription],
+            enabled: true,
+            bailian: None,
+            aliyun_tingwu: None,
+            openrouter: None,
+            local_stt: Some(LocalSttProviderSettings::default()),
         },
     ]
 }
@@ -765,6 +830,18 @@ fn normalize_provider(provider: &mut ProviderConfig) {
         ProviderKind::Openrouter => Some(provider.openrouter.clone().unwrap_or_default()),
         _ => None,
     };
+
+    provider.local_stt = match provider.kind {
+        ProviderKind::LocalStt => {
+            let mut config = provider.local_stt.clone().unwrap_or_default();
+            config.chunk_seconds = config.chunk_seconds.clamp(5, 180);
+            config.min_speakers = config.min_speakers.map(|value| value.clamp(1, 16));
+            config.max_speakers = config.max_speakers.map(|value| value.clamp(1, 16));
+            config.speaker_count_hint = config.speaker_count_hint.map(|value| value.clamp(1, 16));
+            Some(config)
+        }
+        _ => None,
+    };
 }
 
 fn default_capabilities_for_kind(kind: &ProviderKind) -> Vec<ProviderCapability> {
@@ -775,7 +852,96 @@ fn default_capabilities_for_kind(kind: &ProviderKind) -> Vec<ProviderCapability>
         ],
         ProviderKind::AliyunTingwu => vec![ProviderCapability::Transcription],
         ProviderKind::Openrouter => vec![ProviderCapability::Summary],
+        ProviderKind::LocalStt => vec![ProviderCapability::Transcription],
     }
+}
+
+fn normalize_provider_id_alias(value: &str) -> String {
+    match value.trim() {
+        "bailian-transcription-default" | "bailian-summary-default" => {
+            DEFAULT_BAILIAN_PROVIDER_ID.to_string()
+        }
+        "aliyun-transcription-default" => DEFAULT_ALIYUN_PROVIDER_ID.to_string(),
+        "openrouter-summary-default" => DEFAULT_OPENROUTER_PROVIDER_ID.to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderConfig> {
+    let defaults = create_default_providers();
+    let ordered_kinds = [
+        ProviderKind::Bailian,
+        ProviderKind::AliyunTingwu,
+        ProviderKind::Openrouter,
+        ProviderKind::LocalStt,
+    ];
+
+    ordered_kinds
+        .iter()
+        .map(|kind| {
+            let mut provider = defaults
+                .iter()
+                .find(|item| &item.kind == kind)
+                .cloned()
+                .unwrap_or_default();
+
+            let candidates: Vec<&ProviderConfig> =
+                providers.iter().filter(|item| &item.kind == kind).collect();
+            if candidates.is_empty() {
+                return provider;
+            }
+
+            provider.enabled = candidates.iter().any(|item| item.enabled);
+            if let Some(name) = candidates
+                .iter()
+                .map(|item| item.name.trim())
+                .find(|value| !value.is_empty())
+            {
+                provider.name = name.to_string();
+            }
+
+            match kind {
+                ProviderKind::Bailian => {
+                    if let Some(config) = candidates
+                        .iter()
+                        .find_map(|item| item.bailian.as_ref())
+                        .cloned()
+                    {
+                        provider.bailian = Some(config);
+                    }
+                }
+                ProviderKind::AliyunTingwu => {
+                    if let Some(config) = candidates
+                        .iter()
+                        .find_map(|item| item.aliyun_tingwu.as_ref())
+                        .cloned()
+                    {
+                        provider.aliyun_tingwu = Some(config);
+                    }
+                }
+                ProviderKind::Openrouter => {
+                    if let Some(config) = candidates
+                        .iter()
+                        .find_map(|item| item.openrouter.as_ref())
+                        .cloned()
+                    {
+                        provider.openrouter = Some(config);
+                    }
+                }
+                ProviderKind::LocalStt => {
+                    if let Some(config) = candidates
+                        .iter()
+                        .find_map(|item| item.local_stt.as_ref())
+                        .cloned()
+                    {
+                        provider.local_stt = Some(config);
+                    }
+                }
+            }
+
+            provider
+        })
+        .collect()
 }
 
 fn provider_supports_capability(provider: &ProviderConfig, capability: ProviderCapability) -> bool {
@@ -811,24 +977,29 @@ fn ensure_capability_provider(providers: &mut Vec<ProviderConfig>, capability: P
 
     let fallback = match capability {
         ProviderCapability::Transcription => ProviderConfig {
-            id: "bailian-transcription-auto".to_string(),
-            name: "Bailian Transcription Auto".to_string(),
+            id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
+            name: "Bailian".to_string(),
             kind: ProviderKind::Bailian,
-            capabilities: vec![ProviderCapability::Transcription],
+            capabilities: vec![
+                ProviderCapability::Transcription,
+                ProviderCapability::Summary,
+            ],
             enabled: true,
             bailian: Some(BailianProviderSettings::default()),
             aliyun_tingwu: None,
             openrouter: None,
+            local_stt: None,
         },
         ProviderCapability::Summary => ProviderConfig {
-            id: "openrouter-summary-auto".to_string(),
-            name: "OpenRouter Summary Auto".to_string(),
-            kind: ProviderKind::Openrouter,
+            id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
+            name: "Bailian".to_string(),
+            kind: ProviderKind::Bailian,
             capabilities: vec![ProviderCapability::Summary],
             enabled: true,
-            bailian: None,
+            bailian: Some(BailianProviderSettings::default()),
             aliyun_tingwu: None,
-            openrouter: Some(OpenrouterProviderSettings::default()),
+            openrouter: None,
+            local_stt: None,
         },
     };
 
@@ -992,6 +1163,7 @@ impl ProviderConfig {
             ProviderKind::Bailian => "bailian",
             ProviderKind::AliyunTingwu => "aliyun_tingwu",
             ProviderKind::Openrouter => "openrouter",
+            ProviderKind::LocalStt => "local_stt",
         }
     }
 }

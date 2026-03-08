@@ -145,6 +145,8 @@ pub fn transcribe_with_bailian(
             end_ms,
             text,
             confidence: None,
+            speaker_id: None,
+            speaker_label: None,
         });
     }
 

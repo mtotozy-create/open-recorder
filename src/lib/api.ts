@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   JobInfo,
+  LocalProviderStatus,
   RecorderProcessingStatus,
   RecorderRuntimeStatus,
   RecordingQualityPreset,
@@ -123,4 +124,12 @@ export async function getSettings(): Promise<Settings> {
 
 export async function updateSettings(settings: Partial<Settings>): Promise<Settings> {
   return invoke("settings_update", { request: settings });
+}
+
+export async function getLocalProviderStatus(): Promise<LocalProviderStatus> {
+  return invoke("local_provider_status");
+}
+
+export async function prepareLocalProvider(): Promise<LocalProviderStatus> {
+  return invoke("local_provider_prepare");
 }

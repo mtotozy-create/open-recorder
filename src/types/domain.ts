@@ -17,6 +17,8 @@ export type TranscriptSegment = {
   endMs: number;
   text: string;
   confidence?: number;
+  speakerId?: string;
+  speakerLabel?: string;
 };
 
 export type SummaryResult = {
@@ -36,7 +38,7 @@ export type PromptTemplate = {
   variables: string[];
 };
 
-export type ProviderKind = "bailian" | "aliyun_tingwu" | "openrouter";
+export type ProviderKind = "bailian" | "aliyun_tingwu" | "openrouter" | "local_stt";
 
 export type ProviderCapability = "transcription" | "summary";
 
@@ -84,6 +86,25 @@ export type OpenrouterProviderSettings = {
   summaryModel: string;
 };
 
+export type LocalSttEngine = "whisper" | "sensevoice_small";
+
+export type LocalSttProviderSettings = {
+  pythonPath?: string;
+  venvDir?: string;
+  modelCacheDir?: string;
+  engine: LocalSttEngine;
+  whisperModel: "small" | "medium" | "large-v3";
+  senseVoiceModel: string;
+  language: "auto" | "zh" | "en";
+  diarizationEnabled: boolean;
+  minSpeakers?: number;
+  maxSpeakers?: number;
+  speakerCountHint?: number;
+  computeDevice: "auto" | "cpu" | "mps" | "cuda";
+  vadEnabled: boolean;
+  chunkSeconds: number;
+};
+
 export type ProviderConfig = {
   id: string;
   name: string;
@@ -93,6 +114,7 @@ export type ProviderConfig = {
   bailian?: BailianProviderSettings;
   aliyunTingwu?: AliyunTingwuProviderSettings;
   openrouter?: OpenrouterProviderSettings;
+  localStt?: LocalSttProviderSettings;
 };
 
 export type Settings = {
@@ -103,6 +125,16 @@ export type Settings = {
   selectedSummaryProviderId: string;
   defaultTemplateId: string;
   templates: PromptTemplate[];
+};
+
+export type LocalProviderStatus = {
+  pythonReady: boolean;
+  venvReady: boolean;
+  workerScriptReady: boolean;
+  pythonExecutable: string;
+  venvDir: string;
+  modelCacheDir: string;
+  workerScriptPath: string;
 };
 
 export type SessionSummary = {

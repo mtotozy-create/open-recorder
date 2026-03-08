@@ -1029,6 +1029,7 @@ function SessionsTab({
                         <li key={`${index}-${segment.startMs}-${segment.endMs}`} className="transcript-item">
                           <div className="transcript-item-header">
                             <span>
+                              {segment.speakerLabel ? `${segment.speakerLabel} · ` : ""}
                               {formatSegmentTime(segment.startMs)} - {formatSegmentTime(segment.endMs)}
                             </span>
                             {typeof segment.confidence === "number" && (

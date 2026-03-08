@@ -45,10 +45,10 @@ import type {
   Settings
 } from "./types/domain";
 
-const DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID = "bailian-transcription-default";
-const DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID = "aliyun-transcription-default";
-const DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID = "bailian-summary-default";
-const DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID = "openrouter-summary-default";
+const DEFAULT_BAILIAN_PROVIDER_ID = "bailian-default";
+const DEFAULT_ALIYUN_PROVIDER_ID = "aliyun-tingwu-default";
+const DEFAULT_OPENROUTER_PROVIDER_ID = "openrouter-default";
+const DEFAULT_LOCAL_STT_PROVIDER_ID = "local-stt-default";
 const DEFAULT_OSS_CONFIG_ID = "oss-aliyun-default";
 
 function createDefaultOssConfig(kind: OssProviderKind = "aliyun"): OssConfig {
@@ -69,13 +69,13 @@ function createDefaultOssConfigs(): OssConfig[] {
   return [createDefaultOssConfig("aliyun"), createDefaultOssConfig("r2")];
 }
 
-function createDefaultProviders(): ProviderConfig[] {
-  return [
-    {
-      id: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID,
-      name: "Bailian Transcription",
+function createDefaultProvider(kind: ProviderConfig["kind"]): ProviderConfig {
+  if (kind === "bailian") {
+    return {
+      id: DEFAULT_BAILIAN_PROVIDER_ID,
+      name: "Bailian",
       kind: "bailian",
-      capabilities: ["transcription"],
+      capabilities: ["transcription", "summary"],
       enabled: true,
       bailian: {
         apiKey: "",
@@ -83,10 +83,13 @@ function createDefaultProviders(): ProviderConfig[] {
         transcriptionModel: "paraformer-v2",
         summaryModel: "qwen-plus"
       }
-    },
-    {
-      id: DEFAULT_ALIYUN_TRANSCRIPTION_PROVIDER_ID,
-      name: "Aliyun Tingwu Transcription",
+    };
+  }
+
+  if (kind === "aliyun_tingwu") {
+    return {
+      id: DEFAULT_ALIYUN_PROVIDER_ID,
+      name: "Aliyun Tingwu",
       kind: "aliyun_tingwu",
       capabilities: ["transcription"],
       enabled: true,
@@ -106,23 +109,13 @@ function createDefaultProviders(): ProviderConfig[] {
         pollIntervalSeconds: 60,
         maxPollingMinutes: 180
       }
-    },
-    {
-      id: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID,
-      name: "Bailian Summary",
-      kind: "bailian",
-      capabilities: ["summary"],
-      enabled: true,
-      bailian: {
-        apiKey: "",
-        baseUrl: "https://dashscope.aliyuncs.com",
-        transcriptionModel: "paraformer-v2",
-        summaryModel: "qwen-plus"
-      }
-    },
-    {
-      id: DEFAULT_OPENROUTER_SUMMARY_PROVIDER_ID,
-      name: "OpenRouter Summary",
+    };
+  }
+
+  if (kind === "openrouter") {
+    return {
+      id: DEFAULT_OPENROUTER_PROVIDER_ID,
+      name: "OpenRouter",
       kind: "openrouter",
       capabilities: ["summary"],
       enabled: true,
@@ -131,7 +124,40 @@ function createDefaultProviders(): ProviderConfig[] {
         baseUrl: "https://openrouter.ai/api/v1",
         summaryModel: "qwen/qwen-plus"
       }
+    };
+  }
+
+  return {
+    id: DEFAULT_LOCAL_STT_PROVIDER_ID,
+    name: "Local STT",
+    kind: "local_stt",
+    capabilities: ["transcription"],
+    enabled: true,
+    localStt: {
+      pythonPath: "",
+      venvDir: "",
+      modelCacheDir: "",
+      engine: "whisper",
+      whisperModel: "small",
+      senseVoiceModel: "iic/SenseVoiceSmall",
+      language: "auto",
+      diarizationEnabled: true,
+      minSpeakers: undefined,
+      maxSpeakers: undefined,
+      speakerCountHint: undefined,
+      computeDevice: "auto",
+      vadEnabled: true,
+      chunkSeconds: 30
     }
+  };
+}
+
+function createDefaultProviders(): ProviderConfig[] {
+  return [
+    createDefaultProvider("bailian"),
+    createDefaultProvider("aliyun_tingwu"),
+    createDefaultProvider("openrouter"),
+    createDefaultProvider("local_stt")
   ];
 }
 
@@ -139,8 +165,8 @@ const emptySettings: Settings = {
   providers: createDefaultProviders(),
   ossConfigs: createDefaultOssConfigs(),
   selectedOssConfigId: DEFAULT_OSS_CONFIG_ID,
-  selectedTranscriptionProviderId: DEFAULT_BAILIAN_TRANSCRIPTION_PROVIDER_ID,
-  selectedSummaryProviderId: DEFAULT_BAILIAN_SUMMARY_PROVIDER_ID,
+  selectedTranscriptionProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
+  selectedSummaryProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
   defaultTemplateId: "meeting-default",
   templates: []
 };
@@ -172,6 +198,23 @@ function supportsCapability(
   capability: ProviderCapability
 ): boolean {
   return provider.enabled && provider.capabilities.includes(capability);
+}
+
+function normalizeAliasProviderId(providerId: string): string {
+  const value = providerId.trim();
+  if (!value) {
+    return value;
+  }
+  if (value === "bailian-transcription-default" || value === "bailian-summary-default") {
+    return DEFAULT_BAILIAN_PROVIDER_ID;
+  }
+  if (value === "aliyun-transcription-default") {
+    return DEFAULT_ALIYUN_PROVIDER_ID;
+  }
+  if (value === "openrouter-summary-default") {
+    return DEFAULT_OPENROUTER_PROVIDER_ID;
+  }
+  return value;
 }
 
 function normalizeSettings(input: Settings): Settings {
@@ -206,68 +249,115 @@ function normalizeSettings(input: Settings): Settings {
 
   const templates = input.templates.length > 0 ? input.templates : [createDefaultTemplate()];
   const defaultExists = templates.some((template) => template.id === input.defaultTemplateId);
-  const providers = (input.providers.length > 0 ? input.providers : createDefaultProviders()).map(
-    (provider, index): ProviderConfig => {
-      const base: ProviderConfig = {
-        ...provider,
-        id: provider.id?.trim() || `provider-${index + 1}`,
-        name: provider.name?.trim() || provider.kind,
-        capabilities:
-          provider.capabilities.length > 0
-            ? provider.capabilities
-            : provider.kind === "aliyun_tingwu"
-              ? ["transcription"]
-              : provider.kind === "openrouter"
-                ? ["summary"]
-                : ["transcription", "summary"],
-        enabled: provider.enabled ?? true
-      };
+  const providerSource = input.providers.length > 0 ? input.providers : createDefaultProviders();
+  const grouped = new Map<ProviderConfig["kind"], ProviderConfig[]>();
+  for (const provider of providerSource) {
+    const list = grouped.get(provider.kind) ?? [];
+    list.push(provider);
+    grouped.set(provider.kind, list);
+  }
 
-      if (base.kind === "bailian") {
-        const bailian = base.bailian ?? createDefaultProviders()[0].bailian!;
-        return {
-          ...base,
-          bailian,
-          aliyunTingwu: undefined,
-          openrouter: undefined
-        };
-      }
+  const orderedKinds: ProviderConfig["kind"][] = [
+    "bailian",
+    "aliyun_tingwu",
+    "openrouter",
+    "local_stt"
+  ];
 
-      if (base.kind === "aliyun_tingwu") {
-        const aliyun = base.aliyunTingwu ?? createDefaultProviders()[1].aliyunTingwu!;
-        return {
-          ...base,
-          aliyunTingwu: {
-            ...aliyun,
-            pollIntervalSeconds: Number.isFinite(aliyun.pollIntervalSeconds)
-              ? Math.min(300, Math.max(60, Math.floor(aliyun.pollIntervalSeconds)))
-              : 60,
-            maxPollingMinutes: Number.isFinite(aliyun.maxPollingMinutes)
-              ? Math.min(720, Math.max(5, Math.floor(aliyun.maxPollingMinutes)))
-              : 180
-          },
-          bailian: undefined,
-          openrouter: undefined
-        };
-      }
+  const providers = orderedKinds.map((kind): ProviderConfig => {
+    const defaults = createDefaultProvider(kind);
+    const candidates = grouped.get(kind) ?? [];
+    const mergedEnabled =
+      candidates.length === 0 ? defaults.enabled : candidates.some((item) => item.enabled !== false);
+    const mergedName =
+      candidates
+        .map((item) => item.name?.trim())
+        .find((value) => Boolean(value)) ?? defaults.name;
 
-      const openrouter = base.openrouter ?? createDefaultProviders()[3].openrouter!;
+    if (kind === "bailian") {
+      const bailianConfig = candidates.map((item) => item.bailian).find(Boolean) ?? defaults.bailian!;
       return {
-        ...base,
-        openrouter,
-        bailian: undefined,
-        aliyunTingwu: undefined
+        ...defaults,
+        name: mergedName,
+        enabled: mergedEnabled,
+        bailian: {
+          ...defaults.bailian!,
+          ...bailianConfig
+        },
+        aliyunTingwu: undefined,
+        openrouter: undefined,
+        localStt: undefined
       };
     }
-  );
 
+    if (kind === "aliyun_tingwu") {
+      const aliyunConfig =
+        candidates.map((item) => item.aliyunTingwu).find(Boolean) ?? defaults.aliyunTingwu!;
+      return {
+        ...defaults,
+        name: mergedName,
+        enabled: mergedEnabled,
+        aliyunTingwu: {
+          ...defaults.aliyunTingwu!,
+          ...aliyunConfig,
+          pollIntervalSeconds: Number.isFinite(aliyunConfig.pollIntervalSeconds)
+            ? Math.min(300, Math.max(60, Math.floor(aliyunConfig.pollIntervalSeconds)))
+            : defaults.aliyunTingwu!.pollIntervalSeconds,
+          maxPollingMinutes: Number.isFinite(aliyunConfig.maxPollingMinutes)
+            ? Math.min(720, Math.max(5, Math.floor(aliyunConfig.maxPollingMinutes)))
+            : defaults.aliyunTingwu!.maxPollingMinutes
+        },
+        bailian: undefined,
+        openrouter: undefined,
+        localStt: undefined
+      };
+    }
+
+    if (kind === "openrouter") {
+      const openrouterConfig =
+        candidates.map((item) => item.openrouter).find(Boolean) ?? defaults.openrouter!;
+      return {
+        ...defaults,
+        name: mergedName,
+        enabled: mergedEnabled,
+        openrouter: {
+          ...defaults.openrouter!,
+          ...openrouterConfig
+        },
+        bailian: undefined,
+        aliyunTingwu: undefined,
+        localStt: undefined
+      };
+    }
+
+    const localSttConfig = candidates.map((item) => item.localStt).find(Boolean) ?? defaults.localStt!;
+    const chunkSeconds = Number.isFinite(localSttConfig.chunkSeconds)
+      ? Math.min(180, Math.max(5, Math.floor(localSttConfig.chunkSeconds)))
+      : defaults.localStt!.chunkSeconds;
+    return {
+      ...defaults,
+      name: mergedName,
+      enabled: mergedEnabled,
+      localStt: {
+        ...defaults.localStt!,
+        ...localSttConfig,
+        chunkSeconds
+      },
+      bailian: undefined,
+      aliyunTingwu: undefined,
+      openrouter: undefined
+    };
+  });
+
+  const aliasedTranscriptionSelection = normalizeAliasProviderId(input.selectedTranscriptionProviderId);
+  const aliasedSummarySelection = normalizeAliasProviderId(input.selectedSummaryProviderId);
   const selectedTranscriptionProviderId =
-    providers.find((provider) => provider.id === input.selectedTranscriptionProviderId && supportsCapability(provider, "transcription"))
+    providers.find((provider) => provider.id === aliasedTranscriptionSelection && supportsCapability(provider, "transcription"))
       ?.id ??
     providers.find((provider) => supportsCapability(provider, "transcription"))?.id ??
     "";
   const selectedSummaryProviderId =
-    providers.find((provider) => provider.id === input.selectedSummaryProviderId && supportsCapability(provider, "summary"))?.id ??
+    providers.find((provider) => provider.id === aliasedSummarySelection && supportsCapability(provider, "summary"))?.id ??
     providers.find((provider) => supportsCapability(provider, "summary"))?.id ??
     "";
 

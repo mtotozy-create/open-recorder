@@ -162,6 +162,8 @@ pub fn transcribe_with_aliyun_tingwu(
             end_ms,
             text,
             confidence: None,
+            speaker_id: None,
+            speaker_label: None,
         });
     }
 

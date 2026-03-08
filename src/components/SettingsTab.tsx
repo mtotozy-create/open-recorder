@@ -68,65 +68,10 @@ function providerKindLabel(kind: ProviderKind, t: Translator): string {
   if (kind === "aliyun_tingwu") {
     return t("settings.transcriptionProvider.aliyunTingwu");
   }
-  return "OpenRouter";
-}
-
-function createProvider(kind: ProviderKind, index: number): ProviderConfig {
-  const id = `${kind}-${Date.now()}-${index}`;
-  if (kind === "bailian") {
-    return {
-      id,
-      name: `Bailian ${index}`,
-      kind,
-      capabilities: ["transcription", "summary"],
-      enabled: true,
-      bailian: {
-        apiKey: "",
-        baseUrl: "https://dashscope.aliyuncs.com",
-        transcriptionModel: "paraformer-v2",
-        summaryModel: "qwen-plus"
-      }
-    };
+  if (kind === "openrouter") {
+    return "OpenRouter";
   }
-
-  if (kind === "aliyun_tingwu") {
-    return {
-      id,
-      name: `Aliyun Tingwu ${index}`,
-      kind,
-      capabilities: ["transcription"],
-      enabled: true,
-      aliyunTingwu: {
-        accessKeyId: "",
-        accessKeySecret: "",
-        appKey: "",
-        endpoint: "https://tingwu.cn-beijing.aliyuncs.com",
-        sourceLanguage: "cn",
-        fileUrlPrefix: "",
-        languageHints: "",
-        transcriptionNormalizationEnabled: true,
-        transcriptionParagraphEnabled: true,
-        transcriptionPunctuationPredictionEnabled: true,
-        transcriptionDisfluencyRemovalEnabled: false,
-        transcriptionSpeakerDiarizationEnabled: true,
-        pollIntervalSeconds: 60,
-        maxPollingMinutes: 180
-      }
-    };
-  }
-
-  return {
-    id,
-    name: `OpenRouter ${index}`,
-    kind,
-    capabilities: ["summary"],
-    enabled: true,
-    openrouter: {
-      apiKey: "",
-      baseUrl: "https://openrouter.ai/api/v1",
-      summaryModel: "qwen/qwen-plus"
-    }
-  };
+  return t("settings.localStt");
 }
 
 function ossKindLabel(kind: OssProviderKind): string {
@@ -246,17 +191,6 @@ function SettingsTab({
       provider.id === providerId ? next(provider) : provider
     );
     updateProviders(providers);
-  }
-
-  function removeProvider(providerId: string) {
-    const providers = settings.providers.filter((provider) => provider.id !== providerId);
-    updateProviders(providers);
-  }
-
-  function addProvider() {
-    const provider = createProvider("openrouter", settings.providers.length + 1);
-    updateProviders([...settings.providers, provider]);
-    setActiveProviderId(provider.id);
   }
 
   function updateOssConfigs(ossConfigs: OssConfig[]) {
@@ -491,48 +425,241 @@ function SettingsTab({
       );
     }
 
-    const openrouter = provider.openrouter;
-    if (!openrouter) {
+    if (provider.kind === "openrouter") {
+      const openrouter = provider.openrouter;
+      if (!openrouter) {
+        return null;
+      }
+      return (
+        <>
+          <label>
+            {t("settings.openrouterApiKey")}
+            <input
+              type="password"
+              value={openrouter.apiKey ?? ""}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  openrouter: { ...openrouter, apiKey: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.openrouterBaseUrl")}
+            <input
+              value={openrouter.baseUrl}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  openrouter: { ...openrouter, baseUrl: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.openrouterSummaryModel")}
+            <input
+              value={openrouter.summaryModel}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  openrouter: { ...openrouter, summaryModel: event.target.value }
+                }))
+              }
+            />
+          </label>
+        </>
+      );
+    }
+
+    const localStt = provider.localStt;
+    if (!localStt) {
       return null;
     }
+
+    const updateLocalStt = (next: Partial<typeof localStt>) =>
+      patchProvider(provider.id, (current) => ({
+        ...current,
+        localStt: { ...localStt, ...next }
+      }));
 
     return (
       <>
         <label>
-          {t("settings.openrouterApiKey")}
-          <input
-            type="password"
-            value={openrouter.apiKey ?? ""}
+          {t("settings.localSttEngine")}
+          <select
+            value={localStt.engine}
             onChange={(event) =>
-              patchProvider(provider.id, (current) => ({
-                ...current,
-                openrouter: { ...openrouter, apiKey: event.target.value }
-              }))
+              updateLocalStt({
+                engine: event.target.value as typeof localStt.engine
+              })
+            }
+          >
+            <option value="whisper">{t("settings.localSttEngine.whisper")}</option>
+            <option value="sensevoice_small">{t("settings.localSttEngine.sensevoice")}</option>
+          </select>
+        </label>
+
+        {localStt.engine === "whisper" ? (
+          <label>
+            {t("settings.localWhisperModel")}
+            <select
+              value={localStt.whisperModel}
+              onChange={(event) =>
+                updateLocalStt({
+                  whisperModel: event.target.value as typeof localStt.whisperModel
+                })
+              }
+            >
+              <option value="small">small</option>
+              <option value="medium">medium</option>
+              <option value="large-v3">large-v3</option>
+            </select>
+          </label>
+        ) : (
+          <label>
+            {t("settings.localSenseVoiceModel")}
+            <input
+              value={localStt.senseVoiceModel}
+              onChange={(event) => updateLocalStt({ senseVoiceModel: event.target.value })}
+            />
+          </label>
+        )}
+
+        <label>
+          {t("settings.localSttLanguage")}
+          <select
+            value={localStt.language}
+            onChange={(event) =>
+              updateLocalStt({
+                language: event.target.value as typeof localStt.language
+              })
+            }
+          >
+            <option value="auto">{t("settings.localSttLanguage.auto")}</option>
+            <option value="zh">{t("settings.localSttLanguage.zh")}</option>
+            <option value="en">{t("settings.localSttLanguage.en")}</option>
+          </select>
+        </label>
+
+        <label>
+          {t("settings.localSttDiarization")}
+          <select
+            value={String(localStt.diarizationEnabled)}
+            onChange={(event) => updateLocalStt({ diarizationEnabled: event.target.value === "true" })}
+          >
+            <option value="true">{t("settings.option.enabled")}</option>
+            <option value="false">{t("settings.option.disabled")}</option>
+          </select>
+        </label>
+
+        <label>
+          {t("settings.localSttComputeDevice")}
+          <select
+            value={localStt.computeDevice}
+            onChange={(event) =>
+              updateLocalStt({
+                computeDevice: event.target.value as typeof localStt.computeDevice
+              })
+            }
+          >
+            <option value="auto">auto</option>
+            <option value="cpu">cpu</option>
+            <option value="mps">mps</option>
+            <option value="cuda">cuda</option>
+          </select>
+        </label>
+
+        <label>
+          {t("settings.localSttVad")}
+          <select
+            value={String(localStt.vadEnabled)}
+            onChange={(event) => updateLocalStt({ vadEnabled: event.target.value === "true" })}
+          >
+            <option value="true">{t("settings.option.enabled")}</option>
+            <option value="false">{t("settings.option.disabled")}</option>
+          </select>
+        </label>
+
+        <label>
+          {t("settings.localSttChunkSeconds")}
+          <input
+            type="number"
+            min={5}
+            max={180}
+            value={localStt.chunkSeconds}
+            onChange={(event) =>
+              updateLocalStt({ chunkSeconds: Number.parseInt(event.target.value || "0", 10) || 30 })
             }
           />
         </label>
+
         <label>
-          {t("settings.openrouterBaseUrl")}
+          {t("settings.localSttSpeakerCountHint")}
           <input
-            value={openrouter.baseUrl}
-            onChange={(event) =>
-              patchProvider(provider.id, (current) => ({
-                ...current,
-                openrouter: { ...openrouter, baseUrl: event.target.value }
-              }))
-            }
+            type="number"
+            min={1}
+            max={16}
+            value={localStt.speakerCountHint ?? ""}
+            onChange={(event) => {
+              const value = Number.parseInt(event.target.value, 10);
+              updateLocalStt({
+                speakerCountHint: Number.isFinite(value) ? value : undefined
+              });
+            }}
           />
         </label>
+
         <label>
-          {t("settings.openrouterSummaryModel")}
+          {t("settings.localSttMinSpeakers")}
           <input
-            value={openrouter.summaryModel}
-            onChange={(event) =>
-              patchProvider(provider.id, (current) => ({
-                ...current,
-                openrouter: { ...openrouter, summaryModel: event.target.value }
-              }))
-            }
+            type="number"
+            min={1}
+            max={16}
+            value={localStt.minSpeakers ?? ""}
+            onChange={(event) => {
+              const value = Number.parseInt(event.target.value, 10);
+              updateLocalStt({ minSpeakers: Number.isFinite(value) ? value : undefined });
+            }}
+          />
+        </label>
+
+        <label>
+          {t("settings.localSttMaxSpeakers")}
+          <input
+            type="number"
+            min={1}
+            max={16}
+            value={localStt.maxSpeakers ?? ""}
+            onChange={(event) => {
+              const value = Number.parseInt(event.target.value, 10);
+              updateLocalStt({ maxSpeakers: Number.isFinite(value) ? value : undefined });
+            }}
+          />
+        </label>
+
+        <label>
+          {t("settings.localSttPythonPath")}
+          <input
+            value={localStt.pythonPath ?? ""}
+            onChange={(event) => updateLocalStt({ pythonPath: event.target.value })}
+          />
+        </label>
+
+        <label>
+          {t("settings.localSttVenvDir")}
+          <input
+            value={localStt.venvDir ?? ""}
+            onChange={(event) => updateLocalStt({ venvDir: event.target.value })}
+          />
+        </label>
+
+        <label>
+          {t("settings.localSttModelCacheDir")}
+          <input
+            value={localStt.modelCacheDir ?? ""}
+            onChange={(event) => updateLocalStt({ modelCacheDir: event.target.value })}
           />
         </label>
       </>
@@ -599,80 +726,83 @@ function SettingsTab({
         {activeSubTab === "provider" && (
           <div className="settings-section">
             <h3>{t("settings.providerConfigs")}</h3>
-            <div className="provider-toolbar">
-              <label>
-                {t("settings.providerSelect")}
-                <select
-                  value={activeProviderId}
-                  onChange={(event) => setActiveProviderId(event.target.value)}
-                >
-                  {settings.providers.length === 0 && <option value="">{t("settings.noProvider")}</option>}
-                  {settings.providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name} ({providerKindLabel(provider.kind, t)})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button type="button" className="settings-inline-btn" onClick={addProvider}>
-                {t("settings.addProvider")}
-              </button>
+            <div className="provider-layout">
+              <aside className="provider-list" role="listbox" aria-label={t("settings.providerSelect")}>
+                {settings.providers.map((provider) => {
+                  const active = provider.id === activeProviderId;
+                  return (
+                    <button
+                      key={provider.id}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      className={`provider-list-item${active ? " active" : ""}`}
+                      onClick={() => setActiveProviderId(provider.id)}
+                    >
+                      <strong>{providerKindLabel(provider.kind, t)}</strong>
+                      <span>{provider.name}</span>
+                      <span className={`provider-list-state${provider.enabled ? " enabled" : " disabled"}`}>
+                        {provider.enabled ? t("settings.option.enabled") : t("settings.option.disabled")}
+                      </span>
+                    </button>
+                  );
+                })}
+              </aside>
+
+              <div>
+                {activeProvider ? (
+                  <article className="provider-editor">
+                    <div className="provider-editor-header">
+                      <strong>{providerKindLabel(activeProvider.kind, t)}</strong>
+                    </div>
+
+                    <label>
+                      {t("settings.providerName")}
+                      <input
+                        value={activeProvider.name}
+                        onChange={(event) =>
+                          patchProvider(activeProvider.id, (current) => ({
+                            ...current,
+                            name: event.target.value
+                          }))
+                        }
+                      />
+                    </label>
+
+                    <label>
+                      {t("settings.providerEnabled")}
+                      <select
+                        value={String(activeProvider.enabled)}
+                        onChange={(event) =>
+                          patchProvider(activeProvider.id, (current) => ({
+                            ...current,
+                            enabled: event.target.value === "true"
+                          }))
+                        }
+                      >
+                        <option value="true">{t("settings.option.enabled")}</option>
+                        <option value="false">{t("settings.option.disabled")}</option>
+                      </select>
+                    </label>
+
+                    <p>
+                      {t("settings.capabilities")}:
+                      {activeProvider.capabilities
+                        .map((capability) =>
+                          capability === "transcription"
+                            ? t("settings.capability.transcription")
+                            : t("settings.capability.summary")
+                        )
+                        .join(" / ")}
+                    </p>
+
+                    {renderProviderForm(activeProvider)}
+                  </article>
+                ) : (
+                  <p className="provider-empty-hint">{t("settings.emptyProviders")}</p>
+                )}
+              </div>
             </div>
-
-            {activeProvider ? (
-              <article className="provider-editor">
-                <div className="provider-editor-header">
-                  <strong>{providerKindLabel(activeProvider.kind, t)}</strong>
-                  <button type="button" onClick={() => removeProvider(activeProvider.id)}>
-                    {t("settings.removeProvider")}
-                  </button>
-                </div>
-
-                <label>
-                  {t("settings.providerName")}
-                  <input
-                    value={activeProvider.name}
-                    onChange={(event) =>
-                      patchProvider(activeProvider.id, (current) => ({
-                        ...current,
-                        name: event.target.value
-                      }))
-                    }
-                  />
-                </label>
-
-                <label>
-                  {t("settings.providerEnabled")}
-                  <select
-                    value={String(activeProvider.enabled)}
-                    onChange={(event) =>
-                      patchProvider(activeProvider.id, (current) => ({
-                        ...current,
-                        enabled: event.target.value === "true"
-                      }))
-                    }
-                  >
-                    <option value="true">{t("settings.option.enabled")}</option>
-                    <option value="false">{t("settings.option.disabled")}</option>
-                  </select>
-                </label>
-
-                <p>
-                  {t("settings.capabilities")}:
-                  {activeProvider.capabilities
-                    .map((capability) =>
-                      capability === "transcription"
-                        ? t("settings.capability.transcription")
-                        : t("settings.capability.summary")
-                    )
-                    .join(" / ")}
-                </p>
-
-                {renderProviderForm(activeProvider)}
-              </article>
-            ) : (
-              <p className="provider-empty-hint">{t("settings.emptyProviders")}</p>
-            )}
 
             <div className="provider-selectors">
               <label>
