@@ -173,6 +173,8 @@ function RecorderTab({
               onChange={(event) => onQualityChange(event.target.value as RecordingQualityPreset)}
               disabled={hasRecording}
             >
+              <option value="voice_low_storage">{t("recorder.quality.voiceLowStorage")}</option>
+              <option value="legacy_compatible">{t("recorder.quality.legacyCompatible")}</option>
               <option value="standard">{t("recorder.quality.standard")}</option>
               <option value="hd">{t("recorder.quality.hd")}</option>
               <option value="hifi">{t("recorder.quality.hifi")}</option>

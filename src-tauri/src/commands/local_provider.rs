@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -8,7 +9,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::{
-    models::{LocalSttProviderSettings, ProviderKind, Settings},
+    models::{LocalSttEngine, LocalSttProviderSettings, ProviderKind, Settings},
     providers::local_stt::ensure_worker_script_on_disk,
     state::AppState,
 };
@@ -116,6 +117,109 @@ fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
     ))
 }
 
+fn resolve_whisper_repos(whisper_model: &str) -> (String, String) {
+    match whisper_model.trim().to_ascii_lowercase().as_str() {
+        "small" => (
+            "Systran/faster-whisper-small".to_string(),
+            "mlx-community/whisper-small-mlx".to_string(),
+        ),
+        "medium" => (
+            "Systran/faster-whisper-medium".to_string(),
+            "mlx-community/whisper-medium-mlx".to_string(),
+        ),
+        "large-v3" => (
+            "Systran/faster-whisper-large-v3".to_string(),
+            "mlx-community/whisper-large-v3-mlx".to_string(),
+        ),
+        _ => {
+            let value = whisper_model.trim().to_string();
+            (value.clone(), value)
+        }
+    }
+}
+
+fn maybe_insert_hf_model(model_ids: &mut BTreeSet<String>, model_id_or_path: &str) {
+    let value = model_id_or_path.trim();
+    if value.is_empty() || Path::new(value).exists() {
+        return;
+    }
+    model_ids.insert(value.to_string());
+}
+
+fn collect_offline_snapshot_models(local_stt: &LocalSttProviderSettings) -> Vec<String> {
+    let mut model_ids: BTreeSet<String> = BTreeSet::new();
+
+    if matches!(local_stt.engine, LocalSttEngine::Whisper) {
+        let (faster_repo, mlx_repo) = resolve_whisper_repos(&local_stt.whisper_model);
+        maybe_insert_hf_model(&mut model_ids, &faster_repo);
+        if cfg!(target_os = "macos") {
+            maybe_insert_hf_model(&mut model_ids, &mlx_repo);
+        }
+    }
+
+    if local_stt.diarization_enabled {
+        maybe_insert_hf_model(&mut model_ids, "pyannote/speaker-diarization-3.1");
+        maybe_insert_hf_model(&mut model_ids, "pyannote/segmentation-3.0");
+        maybe_insert_hf_model(
+            &mut model_ids,
+            "pyannote/wespeaker-voxceleb-resnet34-LM",
+        );
+    }
+
+    model_ids.into_iter().collect()
+}
+
+fn preload_hf_snapshots(
+    python_executable: &str,
+    model_cache_dir: &Path,
+    model_ids: &[String],
+) -> Result<(), String> {
+    if model_ids.is_empty() {
+        return Ok(());
+    }
+
+    let preload_script = r#"
+import sys
+from huggingface_hub import snapshot_download
+
+cache_dir = sys.argv[1]
+for model_id in sys.argv[2:]:
+    if not model_id:
+        continue
+    snapshot_download(repo_id=model_id, cache_dir=cache_dir)
+"#;
+
+    let cache_dir = model_cache_dir.to_string_lossy().to_string();
+    let mut command = Command::new(python_executable);
+    command
+        .arg("-c")
+        .arg(preload_script)
+        .arg(&cache_dir)
+        .env("HF_HOME", &cache_dir)
+        .env("TRANSFORMERS_CACHE", &cache_dir)
+        .env("HUGGINGFACE_HUB_CACHE", &cache_dir);
+    for model_id in model_ids {
+        command.arg(model_id);
+    }
+
+    let output = command.output().map_err(|error| {
+        format!(
+            "failed to preload offline model snapshots via '{}': {error}",
+            python_executable
+        )
+    })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Err(format!(
+        "failed to preload offline model snapshots {:?}; stderr={}; stdout={}",
+        model_ids, stderr, stdout
+    ))
+}
+
 #[tauri::command]
 pub fn local_provider_status(
     state: State<'_, AppState>,
@@ -133,7 +237,7 @@ pub fn local_provider_status(
 pub fn local_provider_prepare(
     state: State<'_, AppState>,
 ) -> Result<LocalProviderStatusResponse, String> {
-    let (bootstrap_python, venv_dir, model_cache_dir) = {
+    let (bootstrap_python, venv_dir, model_cache_dir, offline_snapshot_models) = {
         let mut storage = state
             .storage
             .lock()
@@ -173,8 +277,14 @@ pub fn local_provider_prepare(
             .filter(|value| !value.is_empty())
             .unwrap_or("python3")
             .to_string();
+        let offline_snapshot_models = collect_offline_snapshot_models(local_stt);
         storage.save()?;
-        (bootstrap_python, venv_dir, model_cache_dir)
+        (
+            bootstrap_python,
+            venv_dir,
+            model_cache_dir,
+            offline_snapshot_models,
+        )
     };
 
     if let Some(parent) = venv_dir.parent() {
@@ -212,7 +322,28 @@ pub fn local_provider_prepare(
             "funasr",
             "pyannote.audio",
             "torch",
+            "opencc-python-reimplemented",
         ],
+    )?;
+    if cfg!(target_os = "macos") {
+        run_command(&pip_executable, &["install", "mlx-whisper"]).map_err(|error| {
+            format!(
+                "failed to install mlx-whisper (required for whisper+mps execution): {error}"
+            )
+        })?;
+    }
+
+    let python_executable = if venv_python_unix.is_file() {
+        venv_python_unix.to_string_lossy().to_string()
+    } else if venv_python_windows.is_file() {
+        venv_python_windows.to_string_lossy().to_string()
+    } else {
+        return Err("python not found in local stt virtual environment".to_string());
+    };
+    preload_hf_snapshots(
+        &python_executable,
+        &model_cache_dir,
+        &offline_snapshot_models,
     )?;
 
     let mut storage = state

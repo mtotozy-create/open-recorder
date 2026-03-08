@@ -74,6 +74,7 @@ struct WorkerSegment {
 struct WorkerResponse {
     segments: Vec<WorkerSegment>,
     error: Option<String>,
+    warning: Option<String>,
 }
 
 pub fn ensure_worker_script_on_disk() -> Result<PathBuf, String> {
@@ -250,6 +251,16 @@ pub fn transcribe_with_local_stt(
 
     if let Some(error) = response.error.filter(|value| !value.trim().is_empty()) {
         return Err(error);
+    }
+    if let Some(warning) = response
+        .warning
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let warning_msg = format!("告警: {warning}");
+        progress_callback(&warning_msg);
+        eprintln!("[local-stt] {warning_msg}");
     }
 
     if response.segments.is_empty() {

@@ -2,4 +2,6 @@ node_modules/
 dist/
 .open-recorder-data/
 src-tauri/target/
+src-tauri/python/__pycache__/
+*.pyc
 .DS_Store

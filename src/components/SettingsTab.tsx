@@ -2,6 +2,7 @@ import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from "react
 
 import type { Translator } from "../i18n";
 import type { Locale, TranslationKey } from "../i18n/messages";
+import { WHISPER_MODEL_PROFILES } from "../lib/localSttWhisperModels";
 import type {
   OssConfig,
   OssProviderKind,
@@ -76,6 +77,14 @@ function providerKindLabel(kind: ProviderKind, t: Translator): string {
 
 function ossKindLabel(kind: OssProviderKind): string {
   return kind === "r2" ? "Cloudflare R2" : "Aliyun OSS";
+}
+
+function whisperModelOptionLabel(modelId: string): string {
+  const profile = WHISPER_MODEL_PROFILES.find((item) => item.id === modelId);
+  if (!profile) {
+    return modelId;
+  }
+  return `${profile.label} | faster-whisper: ${profile.fasterWhisperModel} | mlx-whisper: ${profile.mlxWhisperModel}`;
 }
 
 function SettingsTab({
@@ -512,9 +521,11 @@ function SettingsTab({
                 })
               }
             >
-              <option value="small">small</option>
-              <option value="medium">medium</option>
-              <option value="large-v3">large-v3</option>
+              {WHISPER_MODEL_PROFILES.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {whisperModelOptionLabel(model.id)}
+                </option>
+              ))}
             </select>
           </label>
         ) : (

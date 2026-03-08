@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    io::ErrorKind,
     io::BufWriter,
     path::{Path, PathBuf},
     process::Command,
@@ -32,8 +33,11 @@ const SEGMENT_DURATION_SECS: u64 = 120;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct QualityConfig {
-    sample_rate: u32,
-    channels: u16,
+    capture_sample_rate: u32,
+    capture_channels: u16,
+    output_sample_rate: u32,
+    output_channels: u16,
+    output_bitrate: &'static str,
 }
 
 struct OpenSegment {
@@ -46,6 +50,7 @@ struct OpenSegment {
 struct RecorderShared {
     session_id: String,
     segment_dir: PathBuf,
+    quality_preset: RecordingQualityPreset,
     sample_rate: u32,
     channels: u16,
     chunk_frames: u64,
@@ -68,6 +73,7 @@ struct PendingSegmentTask {
     finished_elapsed_ms: u64,
     sample_rate: u32,
     channels: u16,
+    quality_preset: RecordingQualityPreset,
 }
 
 struct ProcessingState {
@@ -134,39 +140,89 @@ fn now_iso() -> String {
 
 fn quality_config(preset: &RecordingQualityPreset) -> QualityConfig {
     match preset {
+        RecordingQualityPreset::VoiceLowStorage => QualityConfig {
+            capture_sample_rate: 16_000,
+            capture_channels: 1,
+            output_sample_rate: 16_000,
+            output_channels: 1,
+            output_bitrate: "24k",
+        },
+        RecordingQualityPreset::LegacyCompatible => QualityConfig {
+            capture_sample_rate: 48_000,
+            capture_channels: 1,
+            output_sample_rate: 48_000,
+            output_channels: 1,
+            output_bitrate: "64k",
+        },
         RecordingQualityPreset::Standard => QualityConfig {
-            sample_rate: 16_000,
-            channels: 1,
+            capture_sample_rate: 16_000,
+            capture_channels: 1,
+            output_sample_rate: 16_000,
+            output_channels: 1,
+            output_bitrate: "40k",
         },
         RecordingQualityPreset::Hd => QualityConfig {
-            sample_rate: 24_000,
-            channels: 1,
+            capture_sample_rate: 24_000,
+            capture_channels: 1,
+            output_sample_rate: 24_000,
+            output_channels: 1,
+            output_bitrate: "64k",
         },
         RecordingQualityPreset::Hifi => QualityConfig {
-            sample_rate: 48_000,
-            channels: 2,
+            capture_sample_rate: 48_000,
+            capture_channels: 2,
+            output_sample_rate: 48_000,
+            output_channels: 2,
+            output_bitrate: "128k",
         },
     }
 }
 
-/// 根据音质等级返回 AAC 编码比特率
-fn aac_bitrate_for_quality(sample_rate: u32, channels: u16) -> &'static str {
-    match (sample_rate, channels) {
-        (48_000, 2) => "192k", // HiFi
-        (24_000, _) => "96k",  // HD
-        _ => "64k",            // Standard
+fn ffmpeg_candidates() -> [&'static str; 3] {
+    ["ffmpeg", "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+}
+
+fn run_ffmpeg(args: &[&str]) -> Result<std::process::ExitStatus, String> {
+    let mut not_found_bins: Vec<String> = vec![];
+    for bin in ffmpeg_candidates() {
+        match Command::new(bin)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            Ok(status) => return Ok(status),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                not_found_bins.push(bin.to_string());
+            }
+            Err(error) => return Err(format!("failed to run {bin}: {error}")),
+        }
     }
+
+    Err(format!(
+        "ffmpeg executable not found; tried {}",
+        not_found_bins.join(", ")
+    ))
 }
 
 /// 使用 macOS 原生 afconvert 或 FFmpeg 将 WAV 分段转码为 M4A (AAC)
 /// 优先使用 afconvert（macOS 自带），不可用时回退到 ffmpeg
-fn encode_wav_to_m4a(wav_path: &Path, bitrate: &str) -> Result<PathBuf, String> {
+fn encode_wav_to_m4a(
+    wav_path: &Path,
+    output_sample_rate: u32,
+    output_channels: u16,
+    bitrate: &str,
+) -> Result<PathBuf, String> {
     let m4a_path = wav_path.with_extension("m4a");
     let wav_str = wav_path.to_string_lossy();
     let m4a_str = m4a_path.to_string_lossy();
+    let output_channels = output_channels.max(1);
+    let output_sample_rate = output_sample_rate.max(8_000);
+    let output_format = format!("aac@{output_sample_rate}");
 
     // 将 bitrate 从 "64k" 格式转为 afconvert 需要的纯数字格式（单位 bps）
     let bitrate_bps = bitrate.trim_end_matches('k').parse::<u32>().unwrap_or(64) * 1000;
+    let output_channels_str = output_channels.to_string();
 
     // 优先尝试 afconvert（macOS 自带）
     let afconvert_result = Command::new("afconvert")
@@ -174,11 +230,15 @@ fn encode_wav_to_m4a(wav_path: &Path, bitrate: &str) -> Result<PathBuf, String> 
             wav_str.as_ref(),
             m4a_str.as_ref(),
             "-d",
-            "aac",
+            output_format.as_ref(),
             "-f",
             "m4af",
+            "-c",
+            output_channels_str.as_ref(),
             "-b",
             &bitrate_bps.to_string(),
+            "-s",
+            "0",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -188,20 +248,21 @@ fn encode_wav_to_m4a(wav_path: &Path, bitrate: &str) -> Result<PathBuf, String> 
         Ok(status) if status.success() => true,
         _ => {
             // afconvert 不可用或失败，回退到 ffmpeg
-            let ffmpeg_result = Command::new("ffmpeg")
-                .args([
-                    "-y",
-                    "-i",
-                    wav_str.as_ref(),
-                    "-codec:a",
-                    "aac",
-                    "-b:a",
-                    bitrate,
-                    m4a_str.as_ref(),
-                ])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+            let output_sample_rate_str = output_sample_rate.to_string();
+            let ffmpeg_result = run_ffmpeg(&[
+                "-y",
+                "-i",
+                wav_str.as_ref(),
+                "-ar",
+                output_sample_rate_str.as_str(),
+                "-ac",
+                output_channels_str.as_ref(),
+                "-codec:a",
+                "aac",
+                "-b:a",
+                bitrate,
+                m4a_str.as_ref(),
+            ]);
 
             match ffmpeg_result {
                 Ok(status) if status.success() => true,
@@ -332,11 +393,26 @@ fn persist_segment_meta(
     task: &PendingSegmentTask,
     storage: &Arc<Mutex<Storage>>,
 ) -> Result<(), String> {
-    let bitrate = aac_bitrate_for_quality(task.sample_rate, task.channels);
+    let quality = quality_config(&task.quality_preset);
     let wav_path = Path::new(&task.path);
-    let (final_path, final_format) = match encode_wav_to_m4a(wav_path, bitrate) {
-        Ok(m4a_path) => (m4a_path.to_string_lossy().to_string(), "m4a".to_string()),
-        Err(_) => (task.path.clone(), "wav".to_string()),
+    let (final_path, final_format, final_sample_rate, final_channels) = match encode_wav_to_m4a(
+        wav_path,
+        quality.output_sample_rate,
+        quality.output_channels,
+        quality.output_bitrate,
+    ) {
+        Ok(m4a_path) => (
+            m4a_path.to_string_lossy().to_string(),
+            "m4a".to_string(),
+            quality.output_sample_rate,
+            quality.output_channels,
+        ),
+        Err(_) => (
+            task.path.clone(),
+            "wav".to_string(),
+            task.sample_rate,
+            task.channels,
+        ),
     };
     let duration_ms = task
         .finished_elapsed_ms
@@ -349,8 +425,8 @@ fn persist_segment_meta(
         started_at: task.started_at.clone(),
         ended_at: now_iso(),
         duration_ms,
-        sample_rate: task.sample_rate,
-        channels: task.channels,
+        sample_rate: final_sample_rate,
+        channels: final_channels,
         format: final_format,
         file_size_bytes,
     };
@@ -366,8 +442,8 @@ fn persist_segment_meta(
     session.audio_segments.push(meta.path.clone());
     session.audio_segment_meta.push(meta);
     session.elapsed_ms = task.finished_elapsed_ms;
-    session.sample_rate = task.sample_rate;
-    session.channels = task.channels;
+    session.sample_rate = final_sample_rate;
+    session.channels = final_channels;
     session.updated_at = now_iso();
     state.save()?;
     Ok(())
@@ -512,6 +588,7 @@ fn close_open_segment(
         finished_elapsed_ms,
         sample_rate: shared.sample_rate,
         channels: shared.channels,
+        quality_preset: shared.quality_preset.clone(),
     };
     increase_pending_jobs(&task.session_id)?;
     if processor_tx
@@ -863,7 +940,11 @@ pub fn recorder_start(
         .ok_or_else(|| "no input device available".to_string())?;
 
     let (stream_config, sample_format) =
-        select_stream_config(&device, target_config.sample_rate, target_config.channels)?;
+        select_stream_config(
+            &device,
+            target_config.capture_sample_rate,
+            target_config.capture_channels,
+        )?;
 
     let session_id = Uuid::new_v4().to_string();
     let now = now_iso();
@@ -919,6 +1000,7 @@ pub fn recorder_start(
     let shared = Arc::new(Mutex::new(RecorderShared {
         session_id: session_id.clone(),
         segment_dir,
+        quality_preset: target_quality.clone(),
         sample_rate: actual_sample_rate,
         channels: actual_channels,
         chunk_frames,
@@ -1271,7 +1353,7 @@ pub fn recorder_export(
 
 /// 合并多个分段文件并输出为指定格式
 /// 单分段：优先 afconvert，回退 ffmpeg
-/// 多分段：先 hound 合并为中间 WAV，再转码为目标格式
+/// 多分段：先将分段统一为 WAV，再合并并转码为目标格式
 pub(crate) fn merge_segments_with_ffmpeg(
     segment_paths: &[String],
     output_path: &Path,
@@ -1286,72 +1368,61 @@ pub(crate) fn merge_segments_with_ffmpeg(
         return convert_single_file(&segment_paths[0], output_path, output_format);
     }
 
-    // 多分段：先合并为中间 WAV，再转码
-    let export_dir = output_path
+    // 多分段：先在系统临时目录进行解码与合并，避免目标目录权限影响临时文件写入。
+    let output_dir = output_path
         .parent()
         .ok_or_else(|| "failed to resolve export directory".to_string())?;
-    let intermediate_wav = export_dir.join("_intermediate_merge.wav");
+    fs::create_dir_all(output_dir)
+        .map_err(|error| format!("failed to create export directory: {error}"))?;
 
-    // 使用 hound 合并所有分段为 WAV（分段可能是 m4a，需先解码）
-    // 检查第一个分段的格式
-    let first_ext = Path::new(&segment_paths[0])
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("wav");
+    let merge_work_dir = std::env::temp_dir()
+        .join("open-recorder-merge")
+        .join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&merge_work_dir).map_err(|error| {
+        format!(
+            "failed to create merge temp directory {}: {error}",
+            merge_work_dir.display()
+        )
+    })?;
 
-    if first_ext == "wav" {
-        // 全是 WAV，直接用 hound 合并
-        merge_wav_segments_with_hound(segment_paths, &intermediate_wav)?;
-    } else {
-        // 包含 M4A，需要先逐个解码再合并
-        // 逐个用 afconvert/ffmpeg 解码为临时 WAV
-        let mut temp_wavs: Vec<PathBuf> = Vec::new();
+    let intermediate_wav = merge_work_dir.join("_intermediate_merge.wav");
+
+    let merge_result: Result<(), String> = (|| {
+        // 统一为 WAV（按分段逐个判断格式，避免混合格式误判）
+        let mut wav_paths: Vec<String> = Vec::with_capacity(segment_paths.len());
         for (index, segment) in segment_paths.iter().enumerate() {
             let ext = Path::new(segment)
                 .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("wav");
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_else(|| "wav".to_string());
             if ext == "wav" {
-                temp_wavs.push(PathBuf::from(segment));
+                wav_paths.push(segment.clone());
             } else {
-                let temp_wav = export_dir.join(format!("_temp_decode_{index}.wav"));
+                let temp_wav = merge_work_dir.join(format!("temp-decode-{index}.wav"));
                 convert_single_file(segment, &temp_wav, "wav")?;
-                temp_wavs.push(temp_wav);
+                wav_paths.push(temp_wav.to_string_lossy().to_string());
             }
         }
 
-        // 合并所有临时 WAV
-        let wav_paths: Vec<String> = temp_wavs
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
         merge_wav_segments_with_hound(&wav_paths, &intermediate_wav)?;
 
-        // 清理临时解码文件
-        for (index, _) in segment_paths.iter().enumerate() {
-            let temp_wav = export_dir.join(format!("_temp_decode_{index}.wav"));
-            let _ = fs::remove_file(&temp_wav);
+        // 如果目标就是 WAV，直接复制中间文件到目标输出
+        if output_format == "wav" {
+            fs::copy(&intermediate_wav, output_path)
+                .map_err(|error| format!("failed to write merged wav: {error}"))?;
+            return Ok(());
         }
-    }
 
-    // 如果目标就是 WAV，直接 rename 中间文件
-    if output_format == "wav" {
-        fs::rename(&intermediate_wav, output_path)
-            .map_err(|error| format!("failed to rename intermediate wav: {error}"))?;
-        return Ok(());
-    }
+        // 转码中间 WAV 为目标格式
+        convert_single_file(&intermediate_wav.to_string_lossy(), output_path, output_format)
+    })();
 
-    // 转码中间 WAV 为目标格式
-    let result = convert_single_file(
-        &intermediate_wav.to_string_lossy(),
-        output_path,
-        output_format,
-    );
-
-    // 清理中间文件
+    // 无论成功失败都清理临时文件目录
     let _ = fs::remove_file(&intermediate_wav);
+    let _ = fs::remove_dir_all(&merge_work_dir);
 
-    result
+    merge_result
 }
 
 /// 使用 hound 合并多个 WAV 文件
@@ -1467,11 +1538,8 @@ pub(crate) fn convert_single_file(
 
     args.push(output_str.to_string());
 
-    let status = Command::new("ffmpeg")
-        .args(&args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    let ffmpeg_args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let status = run_ffmpeg(&ffmpeg_args);
 
     match status {
         Ok(result) if result.success() => Ok(()),

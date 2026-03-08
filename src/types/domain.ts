@@ -1,3 +1,5 @@
+import type { LocalWhisperModelId } from "../lib/localSttWhisperModels";
+
 export type SessionStatus =
   | "recording"
   | "paused"
@@ -8,7 +10,12 @@ export type SessionStatus =
   | "completed"
   | "failed";
 
-export type RecordingQualityPreset = "standard" | "hd" | "hifi";
+export type RecordingQualityPreset =
+  | "voice_low_storage"
+  | "legacy_compatible"
+  | "standard"
+  | "hd"
+  | "hifi";
 
 export type JobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -93,7 +100,7 @@ export type LocalSttProviderSettings = {
   venvDir?: string;
   modelCacheDir?: string;
   engine: LocalSttEngine;
-  whisperModel: "small" | "medium" | "large-v3";
+  whisperModel: LocalWhisperModelId;
   senseVoiceModel: string;
   language: "auto" | "zh" | "en";
   diarizationEnabled: boolean;

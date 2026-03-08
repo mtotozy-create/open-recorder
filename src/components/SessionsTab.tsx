@@ -11,7 +11,13 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 
 import type { Translator } from "../i18n";
-import type { JobInfo, PromptTemplate, SessionDetail, SessionSummary } from "../types/domain";
+import type {
+  JobInfo,
+  PromptTemplate,
+  RecordingQualityPreset,
+  SessionDetail,
+  SessionSummary
+} from "../types/domain";
 
 type DetailTab = "transcription" | "meta" | "tasks";
 type ViewMode = "readable" | "raw";
@@ -157,6 +163,21 @@ function getDisplayName(
     return `${dateTime} - ${session.id.slice(0, 8)}`;
   }
   return `${t("sessionDetail.renamePlaceholder")} - ${session.id.slice(0, 8)}`;
+}
+
+function getQualityLabel(qualityPreset: RecordingQualityPreset, t: Translator): string {
+  switch (qualityPreset) {
+    case "voice_low_storage":
+      return t("recorder.quality.voiceLowStorage");
+    case "legacy_compatible":
+      return t("recorder.quality.legacyCompatible");
+    case "hd":
+      return t("recorder.quality.hd");
+    case "hifi":
+      return t("recorder.quality.hifi");
+    default:
+      return t("recorder.quality.standard");
+  }
 }
 
 function toSafeHref(rawHref?: string): string | undefined {
@@ -703,7 +724,9 @@ function SessionsTab({
 
                       <div className="session-item-row">
                         <div className="session-badges">
-                          <span className="session-badge quality">{session.qualityPreset}</span>
+                          <span className="session-badge quality">
+                            {getQualityLabel(session.qualityPreset, t)}
+                          </span>
                           <span className={`session-badge ${statusClass}`}>{session.status}</span>
                         </div>
                       </div>
@@ -819,7 +842,8 @@ function SessionsTab({
                     <strong>{t("recorder.duration")}:</strong> {formatDuration(activeSession.elapsedMs)}
                   </p>
                   <p>
-                    <strong>{t("recorder.quality")}:</strong> {activeSession.qualityPreset}
+                    <strong>{t("recorder.quality")}:</strong>{" "}
+                    {getQualityLabel(activeSession.qualityPreset, t)}
                   </p>
                   <div className="session-meta-full-width session-meta-audio" style={{ gridColumn: "1 / -1", marginTop: "16px" }}>
                     <h4 style={{ marginBottom: "12px", color: "var(--text-primary)" }}>{t("sessionDetail.audioPlayback")}</h4>

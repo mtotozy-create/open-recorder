@@ -793,7 +793,14 @@ pub fn transcribe_enqueue(
                     if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
                         job.status = JobStatus::Completed;
                         job.error = None;
-                        job.progress_msg = None;
+                        let keep_warning = job
+                            .progress_msg
+                            .as_ref()
+                            .map(|value| value.starts_with("告警:"))
+                            .unwrap_or(false);
+                        if !keep_warning {
+                            job.progress_msg = None;
+                        }
                         job.updated_at = now_iso();
                     }
                 }
