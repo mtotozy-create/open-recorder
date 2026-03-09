@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import RecorderTab from "./components/RecorderTab";
 import SettingsTab from "./components/SettingsTab";
@@ -20,6 +20,7 @@ import {
   prepareTranscriptionAudio,
   renameSession,
   resumeRecording,
+  setSessionTags as saveSessionTags,
   startRecording,
   stopRecording,
   updateSettings
@@ -50,6 +51,44 @@ const DEFAULT_ALIYUN_PROVIDER_ID = "aliyun-tingwu-default";
 const DEFAULT_OPENROUTER_PROVIDER_ID = "openrouter-default";
 const DEFAULT_LOCAL_STT_PROVIDER_ID = "local-stt-default";
 const DEFAULT_OSS_CONFIG_ID = "oss-aliyun-default";
+const DEFAULT_RECORDING_SEGMENT_SECONDS = 120;
+const MIN_RECORDING_SEGMENT_SECONDS = 10;
+const MAX_RECORDING_SEGMENT_SECONDS = 1800;
+const DEFAULT_SESSION_TAG_CATALOG = [
+  "#or",
+  "#会议",
+  "#电话",
+  "#导入",
+  "#总经理会",
+  "#军工规划会",
+  "#625项目"
+];
+
+function normalizeSessionTag(rawTag: string): string | undefined {
+  const trimmed = rawTag.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const body = trimmed.replace(/^#+/, "").trim();
+  if (!body) {
+    return undefined;
+  }
+  return `#${body.toLowerCase()}`;
+}
+
+function normalizeSessionTagCatalog(input: string[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const rawTag of input) {
+    const normalized = normalizeSessionTag(rawTag);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
 
 function createDefaultOssConfig(kind: OssProviderKind = "aliyun"): OssConfig {
   return {
@@ -167,6 +206,8 @@ const emptySettings: Settings = {
   selectedOssConfigId: DEFAULT_OSS_CONFIG_ID,
   selectedTranscriptionProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
   selectedSummaryProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
+  recordingSegmentSeconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
+  sessionTagCatalog: DEFAULT_SESSION_TAG_CATALOG,
   defaultTemplateId: "meeting-default",
   templates: []
 };
@@ -246,6 +287,16 @@ function normalizeSettings(input: Settings): Settings {
     ossConfigs.find((config) => config.id === input.selectedOssConfigId)?.id ??
     ossConfigs[0]?.id ??
     "";
+  const recordingSegmentSeconds = Number.isFinite(input.recordingSegmentSeconds)
+    ? Math.min(
+        MAX_RECORDING_SEGMENT_SECONDS,
+        Math.max(MIN_RECORDING_SEGMENT_SECONDS, Math.floor(input.recordingSegmentSeconds))
+      )
+    : DEFAULT_RECORDING_SEGMENT_SECONDS;
+  const sessionTagCatalog = normalizeSessionTagCatalog([
+    ...DEFAULT_SESSION_TAG_CATALOG,
+    ...(input.sessionTagCatalog ?? [])
+  ]);
 
   const templates = input.templates.length > 0 ? input.templates : [createDefaultTemplate()];
   const defaultExists = templates.some((template) => template.id === input.defaultTemplateId);
@@ -367,6 +418,8 @@ function normalizeSettings(input: Settings): Settings {
     selectedOssConfigId,
     selectedTranscriptionProviderId,
     selectedSummaryProviderId,
+    recordingSegmentSeconds,
+    sessionTagCatalog,
     templates,
     defaultTemplateId: defaultExists ? input.defaultTemplateId : templates[0].id
   };
@@ -390,6 +443,7 @@ function App() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const persistedSegmentCountRef = useRef(0);
 
   const t = useMemo(() => createTranslator(locale), [locale]);
   const statusMessage = t(statusState.key, statusState.params);
@@ -490,6 +544,7 @@ function App() {
 
   useEffect(() => {
     if (!currentRecording) {
+      persistedSegmentCountRef.current = 0;
       return;
     }
 
@@ -512,6 +567,11 @@ function App() {
             }
             return next;
           });
+        }
+        if (status.persistedSegmentCount > persistedSegmentCountRef.current) {
+          persistedSegmentCountRef.current = status.persistedSegmentCount;
+          await refreshSessionDetail(currentRecording);
+          await refreshSessions();
         }
         if (status.phase === "processing") {
           setStatus("status.recordingProcessing", { pending: String(status.pendingJobs) });
@@ -549,6 +609,7 @@ function App() {
   async function onStart() {
     try {
       const sessionId = await startRecording(undefined, recordingQuality);
+      persistedSegmentCountRef.current = 0;
       setCurrentRecording(sessionId);
       setRecorderPhase("recording");
       setActiveSessionId(sessionId);
@@ -848,6 +909,22 @@ function App() {
     }
   }
 
+  async function onSetSessionTags(sessionId: string, tags: string[]) {
+    try {
+      await saveSessionTags(sessionId, tags);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      const latestSettings = normalizeSettings(await getSettings());
+      setSettings(latestSettings);
+      setStatus("status.sessionTagsUpdated");
+    } catch (error) {
+      setStatus("status.sessionTagsUpdateFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
   async function handleDeleteSession(sessionId: string) {
     try {
       await deleteSession(sessionId);
@@ -917,6 +994,7 @@ function App() {
           activeSession={activeSession}
           sessionJobs={sessionJobs}
           summaryTemplateId={summaryTemplateId}
+          tagCatalog={settings.sessionTagCatalog}
           isTranscribing={isTranscribing}
           isSummarizing={isSummarizing}
           isCreatingSession={isCreatingSession}
@@ -929,6 +1007,7 @@ function App() {
           }
           onSelectSession={setActiveSessionId}
           onRenameSession={(sessionId, name) => void onRenameSession(sessionId, name)}
+          onSetSessionTags={(sessionId, tags) => void onSetSessionTags(sessionId, tags)}
           onDeleteSession={(sessionId) => void handleDeleteSession(sessionId)}
           onPreparePlaybackAudio={() => onPrepareSessionPlaybackAudio()}
           onExportM4a={() => void onExport("m4a")}

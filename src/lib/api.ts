@@ -85,6 +85,10 @@ export async function renameSession(sessionId: string, name: string): Promise<vo
   await invoke("session_rename", { sessionId, name });
 }
 
+export async function setSessionTags(sessionId: string, tags: string[]): Promise<void> {
+  await invoke("session_set_tags", { sessionId, tags });
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
   await invoke("session_delete", { sessionId });
 }

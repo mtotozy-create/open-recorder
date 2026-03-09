@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_BAILIAN_PROVIDER_ID: &str = "bailian-default";
@@ -6,6 +8,74 @@ const DEFAULT_OPENROUTER_PROVIDER_ID: &str = "openrouter-default";
 const DEFAULT_LOCAL_STT_PROVIDER_ID: &str = "local-stt-default";
 const DEFAULT_SELECTED_OSS_CONFIG_ID: &str = "oss-aliyun-default";
 const DEFAULT_R2_OSS_CONFIG_ID: &str = "oss-r2-default";
+const DEFAULT_RECORDING_SEGMENT_SECONDS: u64 = 120;
+const MIN_RECORDING_SEGMENT_SECONDS: u64 = 10;
+const MAX_RECORDING_SEGMENT_SECONDS: u64 = 1800;
+pub const MAX_SESSION_TAGS: usize = 3;
+pub const DEFAULT_RECORDING_SESSION_TAG: &str = "#or";
+pub const DEFAULT_IMPORTED_SESSION_TAG: &str = "#导入";
+pub const BUILTIN_SESSION_TAGS: [&str; 7] = [
+    "#or",
+    "#会议",
+    "#电话",
+    "#导入",
+    "#总经理会",
+    "#军工规划会",
+    "#625项目",
+];
+
+fn default_recording_segment_seconds() -> u64 {
+    DEFAULT_RECORDING_SEGMENT_SECONDS
+}
+
+fn default_session_tag_catalog() -> Vec<String> {
+    BUILTIN_SESSION_TAGS
+        .iter()
+        .map(|tag| (*tag).to_string())
+        .collect()
+}
+
+pub fn normalize_tag(raw_tag: &str) -> Option<String> {
+    let trimmed = raw_tag.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let body = trimmed.trim_start_matches('#').trim();
+    if body.is_empty() {
+        return None;
+    }
+    Some(format!("#{}", body.to_lowercase()))
+}
+
+pub fn normalize_tags(raw_tags: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::with_capacity(raw_tags.len());
+    for raw_tag in raw_tags {
+        if let Some(tag) = normalize_tag(raw_tag) {
+            if seen.insert(tag.clone()) {
+                normalized.push(tag);
+            }
+        }
+    }
+    normalized
+}
+
+pub fn validate_session_tags(raw_tags: &[String]) -> Result<Vec<String>, String> {
+    let normalized = normalize_tags(raw_tags);
+    if normalized.len() > MAX_SESSION_TAGS {
+        return Err(format!(
+            "a session can have at most {MAX_SESSION_TAGS} tags"
+        ));
+    }
+    Ok(normalized)
+}
+
+pub fn merge_session_tags_into_catalog(catalog: &mut Vec<String>, tags: &[String]) {
+    let mut merged = Vec::with_capacity(catalog.len() + tags.len());
+    merged.extend(catalog.iter().cloned());
+    merged.extend(tags.iter().cloned());
+    *catalog = normalize_tags(&merged);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -375,6 +445,10 @@ pub struct Settings {
     pub selected_oss_config_id: String,
     pub selected_transcription_provider_id: String,
     pub selected_summary_provider_id: String,
+    #[serde(default = "default_recording_segment_seconds")]
+    pub recording_segment_seconds: u64,
+    #[serde(default = "default_session_tag_catalog")]
+    pub session_tag_catalog: Vec<String>,
     pub default_template_id: String,
     pub templates: Vec<PromptTemplate>,
 
@@ -462,6 +536,8 @@ impl Default for Settings {
             selected_oss_config_id: DEFAULT_SELECTED_OSS_CONFIG_ID.to_string(),
             selected_transcription_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
             selected_summary_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
+            recording_segment_seconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
+            session_tag_catalog: default_session_tag_catalog(),
             default_template_id: "meeting-default".to_string(),
             templates: vec![create_default_template()],
 
@@ -570,6 +646,14 @@ impl Settings {
             &self.selected_summary_provider_id,
             ProviderCapability::Summary,
         );
+        self.session_tag_catalog = normalize_tags(&self.session_tag_catalog);
+        merge_session_tags_into_catalog(
+            &mut self.session_tag_catalog,
+            &default_session_tag_catalog(),
+        );
+        self.recording_segment_seconds = self
+            .recording_segment_seconds
+            .clamp(MIN_RECORDING_SEGMENT_SECONDS, MAX_RECORDING_SEGMENT_SECONDS);
     }
 
     fn migrate_legacy_providers(&self) -> (Vec<ProviderConfig>, ProviderOssSettings) {
@@ -1194,6 +1278,7 @@ pub struct Session {
     pub sample_rate: u32,
     pub channels: u16,
     pub elapsed_ms: u64,
+    pub tags: Vec<String>,
     pub exported_wav_path: Option<String>,
     pub exported_wav_size: Option<u64>,
     pub exported_wav_created_at: Option<String>,
@@ -1222,6 +1307,7 @@ impl Default for Session {
             sample_rate: 0,
             channels: 0,
             elapsed_ms: 0,
+            tags: vec![],
             exported_wav_path: None,
             exported_wav_size: None,
             exported_wav_created_at: None,
@@ -1247,6 +1333,7 @@ pub struct SessionSummary {
     pub updated_at: String,
     pub elapsed_ms: u64,
     pub quality_preset: RecordingQualityPreset,
+    pub tags: Vec<String>,
 }
 
 impl From<&Session> for SessionSummary {
@@ -1259,6 +1346,7 @@ impl From<&Session> for SessionSummary {
             updated_at: value.updated_at.clone(),
             elapsed_ms: value.elapsed_ms,
             quality_preset: value.quality_preset.clone(),
+            tags: value.tags.clone(),
         }
     }
 }
@@ -1288,6 +1376,7 @@ pub struct RecorderStatus {
     pub session_id: String,
     pub elapsed_ms: u64,
     pub segment_count: usize,
+    pub persisted_segment_count: usize,
     pub quality_preset: RecordingQualityPreset,
     pub rms: f32,
     pub peak: f32,
@@ -1337,6 +1426,8 @@ pub struct SettingsPatch {
     pub legacy_oss: Option<ProviderOssSettings>,
     pub selected_transcription_provider_id: Option<String>,
     pub selected_summary_provider_id: Option<String>,
+    pub recording_segment_seconds: Option<u64>,
+    pub session_tag_catalog: Option<Vec<String>>,
     pub default_template_id: Option<String>,
     pub templates: Option<Vec<PromptTemplate>>,
 }
@@ -1406,5 +1497,42 @@ mod tests {
         settings.normalize();
 
         assert_eq!(settings.selected_oss_config_id, "oss-a");
+    }
+
+    #[test]
+    fn normalize_clamps_recording_segment_seconds() {
+        let mut settings = Settings::default();
+        settings.recording_segment_seconds = 1;
+        settings.normalize();
+        assert_eq!(settings.recording_segment_seconds, 10);
+
+        settings.recording_segment_seconds = 3600;
+        settings.normalize();
+        assert_eq!(settings.recording_segment_seconds, 1800);
+    }
+
+    #[test]
+    fn normalize_tag_deduplicates_and_prefixes() {
+        let input = vec![
+            "or".to_string(),
+            "#OR".to_string(),
+            "  #会议 ".to_string(),
+            "  ".to_string(),
+        ];
+
+        let normalized = super::normalize_tags(&input);
+        assert_eq!(normalized, vec!["#or".to_string(), "#会议".to_string()]);
+    }
+
+    #[test]
+    fn validate_session_tags_enforces_max_limit() {
+        let tags = vec![
+            "#a".to_string(),
+            "#b".to_string(),
+            "#c".to_string(),
+            "#d".to_string(),
+        ];
+        let result = super::validate_session_tags(&tags);
+        assert!(result.is_err());
     }
 }

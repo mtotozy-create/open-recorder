@@ -50,6 +50,14 @@ pub fn settings_update(
         storage.data.settings.selected_summary_provider_id = selected_summary_provider_id;
     }
 
+    if let Some(recording_segment_seconds) = request.recording_segment_seconds {
+        storage.data.settings.recording_segment_seconds = recording_segment_seconds;
+    }
+
+    if let Some(session_tag_catalog) = request.session_tag_catalog {
+        storage.data.settings.session_tag_catalog = session_tag_catalog;
+    }
+
     if let Some(default_template_id) = request.default_template_id {
         storage.data.settings.default_template_id = default_template_id;
     }

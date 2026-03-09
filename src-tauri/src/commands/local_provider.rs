@@ -160,10 +160,7 @@ fn collect_offline_snapshot_models(local_stt: &LocalSttProviderSettings) -> Vec<
     if local_stt.diarization_enabled {
         maybe_insert_hf_model(&mut model_ids, "pyannote/speaker-diarization-3.1");
         maybe_insert_hf_model(&mut model_ids, "pyannote/segmentation-3.0");
-        maybe_insert_hf_model(
-            &mut model_ids,
-            "pyannote/wespeaker-voxceleb-resnet34-LM",
-        );
+        maybe_insert_hf_model(&mut model_ids, "pyannote/wespeaker-voxceleb-resnet34-LM");
     }
 
     model_ids.into_iter().collect()
@@ -327,9 +324,7 @@ pub fn local_provider_prepare(
     )?;
     if cfg!(target_os = "macos") {
         run_command(&pip_executable, &["install", "mlx-whisper"]).map_err(|error| {
-            format!(
-                "failed to install mlx-whisper (required for whisper+mps execution): {error}"
-            )
+            format!("failed to install mlx-whisper (required for whisper+mps execution): {error}")
         })?;
     }
 

@@ -36,6 +36,7 @@ const settingsSubTabs: SettingsSubTabItem[] = [
   { id: "templates", labelKey: "settings.tabs.templates" },
   { id: "about", labelKey: "settings.tabs.about" }
 ];
+const DEFAULT_RECORDING_SEGMENT_SECONDS = 120;
 
 function buildTemplateId(name: string, index: number): string {
   const normalized = name
@@ -730,6 +731,21 @@ function SettingsTab({
                 <option value="zh-CN">{t("settings.language.zh")}</option>
                 <option value="en-US">{t("settings.language.en")}</option>
               </select>
+            </label>
+            <label>
+              {t("settings.recordingSegmentSeconds")}
+              <input
+                type="number"
+                min={10}
+                max={1800}
+                value={settings.recordingSegmentSeconds}
+                onChange={(event) =>
+                  onSettingsChange({
+                    recordingSegmentSeconds:
+                      Number.parseInt(event.target.value || "0", 10) || DEFAULT_RECORDING_SEGMENT_SECONDS
+                  })
+                }
+              />
             </label>
           </div>
         )}

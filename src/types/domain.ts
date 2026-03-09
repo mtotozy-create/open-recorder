@@ -130,6 +130,8 @@ export type Settings = {
   selectedOssConfigId: string;
   selectedTranscriptionProviderId: string;
   selectedSummaryProviderId: string;
+  recordingSegmentSeconds: number;
+  sessionTagCatalog: string[];
   defaultTemplateId: string;
   templates: PromptTemplate[];
 };
@@ -152,6 +154,7 @@ export type SessionSummary = {
   updatedAt: string;
   elapsedMs: number;
   qualityPreset: RecordingQualityPreset;
+  tags: string[];
 };
 
 export type AudioSegmentMeta = {
@@ -191,6 +194,7 @@ export type RecorderRuntimeStatus = {
   sessionId: string;
   elapsedMs: number;
   segmentCount: number;
+  persistedSegmentCount: number;
   qualityPreset: RecordingQualityPreset;
   rms: number;
   peak: number;

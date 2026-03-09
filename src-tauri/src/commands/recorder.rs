@@ -1,8 +1,8 @@
 use std::{
     collections::HashMap,
     fs,
-    io::ErrorKind,
     io::BufWriter,
+    io::ErrorKind,
     path::{Path, PathBuf},
     process::Command,
     sync::{mpsc, Arc, Mutex, OnceLock},
@@ -21,15 +21,14 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        AudioSegmentMeta, RecorderExportResponse, RecorderPhase, RecorderProcessingStatus,
-        RecorderStatus, RecordingQualityPreset, Session, SessionStatus, StartSessionResponse,
+        merge_session_tags_into_catalog, AudioSegmentMeta, RecorderExportResponse, RecorderPhase,
+        RecorderProcessingStatus, RecorderStatus, RecordingQualityPreset, Session, SessionStatus,
+        StartSessionResponse, DEFAULT_RECORDING_SESSION_TAG,
     },
     state::AppState,
     storage::Storage,
 };
 
-// NOTE: 分段时长 2 分钟，降低单段文件大小
-const SEGMENT_DURATION_SECS: u64 = 120;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct QualityConfig {
@@ -179,7 +178,11 @@ fn quality_config(preset: &RecordingQualityPreset) -> QualityConfig {
 }
 
 fn ffmpeg_candidates() -> [&'static str; 3] {
-    ["ffmpeg", "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+    [
+        "ffmpeg",
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+    ]
 }
 
 fn run_ffmpeg(args: &[&str]) -> Result<std::process::ExitStatus, String> {
@@ -939,23 +942,26 @@ pub fn recorder_start(
         .default_input_device()
         .ok_or_else(|| "no input device available".to_string())?;
 
-    let (stream_config, sample_format) =
-        select_stream_config(
-            &device,
-            target_config.capture_sample_rate,
-            target_config.capture_channels,
-        )?;
+    let (stream_config, sample_format) = select_stream_config(
+        &device,
+        target_config.capture_sample_rate,
+        target_config.capture_channels,
+    )?;
 
     let session_id = Uuid::new_v4().to_string();
     let now = now_iso();
     let actual_sample_rate = stream_config.sample_rate.0;
     let actual_channels = stream_config.channels;
-    let segment_dir = {
-        let storage = state
+    let (segment_dir, segment_duration_secs) = {
+        let mut storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
-        storage.session_audio_dir(&session_id)?
+        storage.data.settings.normalize();
+        (
+            storage.session_audio_dir(&session_id)?,
+            storage.data.settings.recording_segment_seconds,
+        )
     };
 
     {
@@ -979,6 +985,7 @@ pub fn recorder_start(
                 sample_rate: actual_sample_rate,
                 channels: actual_channels,
                 elapsed_ms: 0,
+                tags: vec![DEFAULT_RECORDING_SESSION_TAG.to_string()],
                 exported_wav_path: None,
                 exported_wav_size: None,
                 exported_wav_created_at: None,
@@ -992,11 +999,16 @@ pub fn recorder_start(
                 summary: None,
             },
         );
+        merge_session_tags_into_catalog(
+            &mut storage.data.settings.session_tag_catalog,
+            &[DEFAULT_RECORDING_SESSION_TAG.to_string()],
+        );
+        storage.data.settings.normalize();
         storage.save()?;
     }
     clear_processing_state(&session_id);
 
-    let chunk_frames = SEGMENT_DURATION_SECS.saturating_mul(u64::from(actual_sample_rate));
+    let chunk_frames = segment_duration_secs.saturating_mul(u64::from(actual_sample_rate));
     let shared = Arc::new(Mutex::new(RecorderShared {
         session_id: session_id.clone(),
         segment_dir,
@@ -1236,6 +1248,7 @@ pub fn recorder_status(
         session_id,
         elapsed_ms: elapsed_ms_runtime.max(session.elapsed_ms),
         segment_count: session.audio_segments.len() + pending_jobs_total,
+        persisted_segment_count: session.audio_segments.len(),
         quality_preset: session.quality_preset.clone(),
         rms,
         peak,
@@ -1415,7 +1428,11 @@ pub(crate) fn merge_segments_with_ffmpeg(
         }
 
         // 转码中间 WAV 为目标格式
-        convert_single_file(&intermediate_wav.to_string_lossy(), output_path, output_format)
+        convert_single_file(
+            &intermediate_wav.to_string_lossy(),
+            output_path,
+            output_format,
+        )
     })();
 
     // 无论成功失败都清理临时文件目录

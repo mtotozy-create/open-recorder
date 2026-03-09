@@ -13,6 +13,7 @@ use commands::{
     },
     session::{
         session_create_from_audio, session_delete, session_get, session_list, session_rename,
+        session_set_tags,
     },
     settings::{settings_get, settings_update},
     summary::summary_enqueue,
@@ -38,6 +39,7 @@ pub fn run() {
             session_create_from_audio,
             session_rename,
             session_delete,
+            session_set_tags,
             transcribe_enqueue,
             session_prepare_transcription_audio,
             summary_enqueue,

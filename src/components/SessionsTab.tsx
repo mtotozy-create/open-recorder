@@ -3,7 +3,8 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type KeyboardEvent
+  type KeyboardEvent,
+  type MouseEvent
 } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
@@ -24,6 +25,7 @@ type ViewMode = "readable" | "raw";
 type CopyStatus = "idle" | "success" | "error";
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 const COPY_STATUS_RESET_MS = 1800;
+const MAX_SESSION_TAGS = 3;
 
 type SessionsTabProps = {
   sessions: SessionSummary[];
@@ -31,6 +33,7 @@ type SessionsTabProps = {
   activeSessionId?: string;
   activeSession?: SessionDetail;
   summaryTemplateId: string;
+  tagCatalog: string[];
   onSummaryTemplateChange: (value: string) => void;
   sessionJobs?: JobInfo[];
   isTranscribing?: boolean;
@@ -40,6 +43,7 @@ type SessionsTabProps = {
   onRefresh: () => void;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => void;
+  onSetSessionTags: (sessionId: string, tags: string[]) => void | Promise<void>;
   onDeleteSession: (sessionId: string) => void;
   onPreparePlaybackAudio: () => Promise<string>;
   onExportM4a: () => void;
@@ -106,6 +110,25 @@ function resolveRunningElapsedMs(
 
 function normalizeSessionName(name?: string): string {
   return (name ?? "").trim();
+}
+
+function normalizeTag(rawTag: string): string | undefined {
+  const trimmed = rawTag.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const body = trimmed.replace(/^#+/, "").trim();
+  if (!body) {
+    return undefined;
+  }
+  return `#${body.toLowerCase()}`;
+}
+
+function uniqueTags(input: string[]): string[] {
+  const normalized = input
+    .map((tag) => normalizeTag(tag))
+    .filter((tag): tag is string => Boolean(tag));
+  return Array.from(new Set(normalized));
 }
 
 function logPlaybackDebug(scope: string, payload?: Record<string, unknown>) {
@@ -237,6 +260,7 @@ function SessionsTab({
   activeSessionId,
   activeSession,
   summaryTemplateId,
+  tagCatalog,
   onSummaryTemplateChange,
   sessionJobs = [],
   isTranscribing = false,
@@ -246,6 +270,7 @@ function SessionsTab({
   onRefresh,
   onSelectSession,
   onRenameSession,
+  onSetSessionTags,
   onDeleteSession,
   onPreparePlaybackAudio,
   onExportM4a,
@@ -275,11 +300,36 @@ function SessionsTab({
   const [transcriptionStartMs, setTranscriptionStartMs] = useState<number>();
   const [summaryStartMs, setSummaryStartMs] = useState<number>();
   const [summaryCopyStatus, setSummaryCopyStatus] = useState<CopyStatus>("idle");
+  const [isTagFilterExpanded, setIsTagFilterExpanded] = useState(false);
+  const [selectedFilterTags, setSelectedFilterTags] = useState<string[]>([]);
+  const [tagEditorSessionId, setTagEditorSessionId] = useState<string>();
+  const [tagDraft, setTagDraft] = useState<string[]>([]);
+  const [tagDraftInput, setTagDraftInput] = useState("");
+  const [tagDraftError, setTagDraftError] = useState<string>();
+  const [isSavingTags, setIsSavingTags] = useState(false);
   const skipListBlurRef = useRef(false);
   const audioFileInputRef = useRef<HTMLInputElement>(null);
   const playbackAudioRef = useRef<HTMLAudioElement>(null);
   const summaryCopyResetTimerRef = useRef<number | undefined>(undefined);
 
+  const availableTags = uniqueTags([
+    ...tagCatalog,
+    ...sessions.flatMap((session) => session.tags ?? [])
+  ]);
+  const tagSessionCounts = new Map<string, number>();
+  for (const tag of availableTags) {
+    tagSessionCounts.set(tag, 0);
+  }
+  for (const session of sessions) {
+    for (const tag of uniqueTags(session.tags ?? [])) {
+      tagSessionCounts.set(tag, (tagSessionCounts.get(tag) ?? 0) + 1);
+    }
+  }
+  const filteredSessions = selectedFilterTags.length === 0
+    ? sessions
+    : sessions.filter((session) =>
+        (session.tags ?? []).some((tag) => selectedFilterTags.includes(tag))
+      );
   const runningTranscribeJob = sessionJobs?.find((j) => j.kind === "transcription" && j.status === "running");
   const runningSummaryJob = sessionJobs?.find((j) => j.kind === "summary" && j.status === "running");
   const transcriptionElapsedLabel = formatDuration(
@@ -357,6 +407,29 @@ function SessionsTab({
     }
     setSummaryStartMs(undefined);
   }, [isSummarizing]);
+
+  useEffect(() => {
+    if (!tagEditorSessionId) {
+      return;
+    }
+    if (sessions.some((session) => session.id === tagEditorSessionId)) {
+      return;
+    }
+    setTagEditorSessionId(undefined);
+    setTagDraft([]);
+    setTagDraftInput("");
+    setTagDraftError(undefined);
+  }, [sessions, tagEditorSessionId]);
+
+  useEffect(() => {
+    setSelectedFilterTags((previous) => {
+      const next = previous.filter((tag) => availableTags.includes(tag));
+      if (next.length === previous.length && next.every((tag, index) => tag === previous[index])) {
+        return previous;
+      }
+      return next;
+    });
+  }, [availableTags]);
 
   function handleTranscribeClick() {
     if (!isTranscribing) {
@@ -491,6 +564,90 @@ function SessionsTab({
       return;
     }
     void onCreateSessionFromFile(file);
+  }
+
+  function toggleFilterTag(tag: string) {
+    setSelectedFilterTags((previous) =>
+      previous.includes(tag)
+        ? previous.filter((item) => item !== tag)
+        : [...previous, tag]
+    );
+  }
+
+  function openTagEditor(session: SessionSummary, event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    if (tagEditorSessionId === session.id) {
+      setTagEditorSessionId(undefined);
+      setTagDraft([]);
+      setTagDraftInput("");
+      setTagDraftError(undefined);
+      return;
+    }
+    setTagEditorSessionId(session.id);
+    setTagDraft(uniqueTags(session.tags ?? []).slice(0, MAX_SESSION_TAGS));
+    setTagDraftInput("");
+    setTagDraftError(undefined);
+  }
+
+  function toggleTagDraft(tag: string) {
+    const normalized = normalizeTag(tag);
+    if (!normalized) {
+      return;
+    }
+    setTagDraftError(undefined);
+    setTagDraft((previous) => {
+      if (previous.includes(normalized)) {
+        return previous.filter((item) => item !== normalized);
+      }
+      if (previous.length >= MAX_SESSION_TAGS) {
+        setTagDraftError(t("sessions.tagLimit", { max: String(MAX_SESSION_TAGS) }));
+        return previous;
+      }
+      return [...previous, normalized];
+    });
+  }
+
+  function addCustomTagToDraft() {
+    const normalized = normalizeTag(tagDraftInput);
+    if (!normalized) {
+      setTagDraftError(t("sessions.tagInvalid"));
+      return;
+    }
+    setTagDraftError(undefined);
+    setTagDraft((previous) => {
+      if (previous.includes(normalized)) {
+        return previous;
+      }
+      if (previous.length >= MAX_SESSION_TAGS) {
+        setTagDraftError(t("sessions.tagLimit", { max: String(MAX_SESSION_TAGS) }));
+        return previous;
+      }
+      return [...previous, normalized];
+    });
+    setTagDraftInput("");
+  }
+
+  async function saveTagDraft(sessionId: string, event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    if (isSavingTags) {
+      return;
+    }
+    if (tagDraft.length > MAX_SESSION_TAGS) {
+      setTagDraftError(t("sessions.tagLimit", { max: String(MAX_SESSION_TAGS) }));
+      return;
+    }
+    setIsSavingTags(true);
+    setTagDraftError(undefined);
+    try {
+      await onSetSessionTags(sessionId, tagDraft);
+      setTagEditorSessionId(undefined);
+      setTagDraft([]);
+      setTagDraftInput("");
+    } catch (error) {
+      setTagDraftError(String(error));
+    } finally {
+      setIsSavingTags(false);
+    }
   }
 
   async function handlePreparePlaybackAudio() {
@@ -655,16 +812,80 @@ function SessionsTab({
           <>
             <header className="sessions-sidebar-header">
               <h2>{t("sessions.title")}</h2>
-              <span>{sessions.length}</span>
+              <span>{filteredSessions.length}</span>
             </header>
 
+            <section className="session-tag-filter">
+              <button
+                type="button"
+                className="session-tag-filter-toggle"
+                aria-expanded={isTagFilterExpanded}
+                onClick={() => setIsTagFilterExpanded((previous) => !previous)}
+                title={t("sessions.filterByTags")}
+              >
+                <span>{t("sessions.filterByTags")}</span>
+                <span className="session-tag-filter-toggle-meta">
+                  {selectedFilterTags.length}/{availableTags.length}
+                </span>
+                <svg
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  className={`session-tag-filter-toggle-icon${isTagFilterExpanded ? " expanded" : ""}`}
+                >
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+              {isTagFilterExpanded && (
+                <div className="session-tag-filter-body">
+                  <div className="session-tag-filter-header">
+                    <span>{t("sessions.filterByTags")}</span>
+                    <button
+                      type="button"
+                      className="session-tag-filter-clear"
+                      onClick={() => setSelectedFilterTags([])}
+                      disabled={selectedFilterTags.length === 0}
+                    >
+                      {t("sessions.clearFilter")}
+                    </button>
+                  </div>
+                  {availableTags.length === 0 ? (
+                    <p className="session-tag-empty">{t("sessions.noTags")}</p>
+                  ) : (
+                    <div className="session-tag-chip-list">
+                      {availableTags.map((tag) => {
+                        const selected = selectedFilterTags.includes(tag);
+                        return (
+                          <button
+                            key={`filter-${tag}`}
+                            type="button"
+                            className={`session-tag-filter-chip${selected ? " active" : ""}`}
+                            onClick={() => toggleFilterTag(tag)}
+                          >
+                            <span>{tag}</span>
+                            <span className="session-tag-filter-chip-count">
+                              {tagSessionCounts.get(tag) ?? 0}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+
             {sessions.length === 0 && <p className="empty-hint">{t("sessions.empty")}</p>}
+            {sessions.length > 0 && filteredSessions.length === 0 && (
+              <p className="empty-hint">{t("sessions.filterEmpty")}</p>
+            )}
 
             <ul className="session-list">
-              {sessions.map((session) => {
+              {filteredSessions.map((session) => {
                 const active = session.id === activeSessionId;
                 const statusClass = session.status.toLowerCase();
                 const isEditing = listEditingId === session.id;
+                const sessionTags = uniqueTags(session.tags ?? []).slice(0, MAX_SESSION_TAGS);
+                const isTagEditorOpen = tagEditorSessionId === session.id;
                 return (
                   <li key={session.id}>
                     <article
@@ -721,6 +942,117 @@ function SessionsTab({
                       <div className="session-item-row">
                         <span className="session-item-time">{formatDateTime(session.createdAt)}</span>
                       </div>
+
+                      <div className="session-item-row session-item-tags-row">
+                        <button
+                          type="button"
+                          className="session-tag-manage-btn"
+                          onClick={(event) => openTagEditor(session, event)}
+                          title={t("sessions.manageTags")}
+                          aria-label={t("sessions.manageTags")}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 3a2 2 0 012 2v1.1a5.5 5.5 0 012.1 1.2l.98-.56a2 2 0 012.73.73l1 1.73a2 2 0 01-.73 2.73l-.97.56a5.6 5.6 0 010 2.4l.97.56a2 2 0 01.73 2.73l-1 1.73a2 2 0 01-2.73.73l-.98-.56a5.5 5.5 0 01-2.1 1.2V19a2 2 0 11-4 0v-1.1a5.5 5.5 0 01-2.1-1.2l-.98.56a2 2 0 01-2.73-.73l-1-1.73a2 2 0 01.73-2.73l.97-.56a5.6 5.6 0 010-2.4l-.97-.56a2 2 0 01-.73-2.73l1-1.73a2 2 0 012.73-.73l.98.56a5.5 5.5 0 012.1-1.2V5a2 2 0 012-2zM12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z" />
+                          </svg>
+                        </button>
+                        <div className="session-tag-inline-list">
+                          {sessionTags.length === 0 && (
+                            <span className="session-tag-empty">{t("sessions.noTags")}</span>
+                          )}
+                          {sessionTags.map((tag) => (
+                            <span key={`${session.id}-${tag}`} className="session-tag-chip">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {isTagEditorOpen && (
+                        <div
+                          className="session-tag-editor"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <div className="session-tag-editor-title">
+                            {t("sessions.tagDraftCount", {
+                              count: String(tagDraft.length),
+                              max: String(MAX_SESSION_TAGS)
+                            })}
+                          </div>
+                          <div className="session-tag-chip-list">
+                            {uniqueTags([...availableTags, ...tagDraft]).map((tag) => {
+                              const selected = tagDraft.includes(tag);
+                              const disabled = !selected && tagDraft.length >= MAX_SESSION_TAGS;
+                              return (
+                                <button
+                                  key={`${session.id}-edit-${tag}`}
+                                  type="button"
+                                  className={`session-tag-chip${selected ? " active" : ""}`}
+                                  disabled={disabled}
+                                  onClick={() => toggleTagDraft(tag)}
+                                >
+                                  {tag}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="session-tag-input-row">
+                            <input
+                              type="text"
+                              value={tagDraftInput}
+                              placeholder={t("sessions.addTagPlaceholder")}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => {
+                                setTagDraftInput(event.target.value);
+                                setTagDraftError(undefined);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  addCustomTagToDraft();
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                addCustomTagToDraft();
+                              }}
+                            >
+                              {t("sessions.addTag")}
+                            </button>
+                          </div>
+                          {tagDraftError && (
+                            <p className="session-tag-error">{tagDraftError}</p>
+                          )}
+                          <div className="session-tag-editor-actions">
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setTagEditorSessionId(undefined);
+                                setTagDraft([]);
+                                setTagDraftInput("");
+                                setTagDraftError(undefined);
+                              }}
+                            >
+                              {t("action.cancel")}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              disabled={isSavingTags}
+                              onClick={(event) => {
+                                void saveTagDraft(session.id, event);
+                              }}
+                            >
+                              {t("action.confirm")}
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="session-item-row">
                         <div className="session-badges">

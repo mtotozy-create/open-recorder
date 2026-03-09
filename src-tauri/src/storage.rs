@@ -6,7 +6,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::{Job, Session, Settings};
+use crate::models::{
+    merge_session_tags_into_catalog, normalize_tags, Job, Session, Settings,
+    DEFAULT_RECORDING_SESSION_TAG,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -14,6 +17,7 @@ pub struct PersistedState {
     pub sessions: HashMap<String, Session>,
     pub jobs: HashMap<String, Job>,
     pub settings: Settings,
+    pub session_tags_backfilled: bool,
 }
 
 impl Default for PersistedState {
@@ -22,6 +26,7 @@ impl Default for PersistedState {
             sessions: HashMap::new(),
             jobs: HashMap::new(),
             settings: Settings::default(),
+            session_tags_backfilled: false,
         }
     }
 }
@@ -55,7 +60,12 @@ impl Storage {
                 Ok(raw) => match serde_json::from_str::<PersistedState>(&raw) {
                     Ok(mut data) => {
                         data.settings.normalize();
-                        return Ok(Self { file_path, data });
+                        let migrated = backfill_session_tags_if_needed(&mut data);
+                        let storage = Self { file_path, data };
+                        if migrated {
+                            storage.save()?;
+                        }
+                        return Ok(storage);
                     }
                     Err(error) => {
                         errors.push(format!(
@@ -113,6 +123,30 @@ impl Storage {
             .map(|path| path.to_path_buf())
             .ok_or_else(|| "failed to resolve data directory".to_string())
     }
+}
+
+fn backfill_session_tags_if_needed(data: &mut PersistedState) -> bool {
+    if data.session_tags_backfilled {
+        return false;
+    }
+
+    for session in data.sessions.values_mut() {
+        let normalized = normalize_tags(&session.tags);
+        if normalized.is_empty() {
+            session.tags = vec![DEFAULT_RECORDING_SESSION_TAG.to_string()];
+            continue;
+        }
+        if normalized != session.tags {
+            session.tags = normalized;
+        }
+    }
+
+    data.session_tags_backfilled = true;
+    for session in data.sessions.values() {
+        merge_session_tags_into_catalog(&mut data.settings.session_tag_catalog, &session.tags);
+    }
+    data.settings.normalize();
+    true
 }
 
 fn resolve_data_dir_candidates() -> Vec<PathBuf> {

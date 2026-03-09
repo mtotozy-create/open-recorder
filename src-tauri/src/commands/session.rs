@@ -6,8 +6,9 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        AudioSegmentMeta, RecordingQualityPreset, Session, SessionStatus, SessionSummary,
-        StartSessionResponse,
+        merge_session_tags_into_catalog, validate_session_tags, AudioSegmentMeta,
+        RecordingQualityPreset, Session, SessionStatus, SessionSummary, StartSessionResponse,
+        DEFAULT_IMPORTED_SESSION_TAG,
     },
     state::AppState,
 };
@@ -126,6 +127,7 @@ pub fn session_create_from_audio(
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let default_tags = vec![DEFAULT_IMPORTED_SESSION_TAG.to_string()];
 
     storage.data.sessions.insert(
         session_id.clone(),
@@ -152,6 +154,7 @@ pub fn session_create_from_audio(
             sample_rate: 0,
             channels: 0,
             elapsed_ms: duration_ms.unwrap_or(0),
+            tags: default_tags.clone(),
             exported_wav_path: None,
             exported_wav_size: None,
             exported_wav_created_at: None,
@@ -165,6 +168,11 @@ pub fn session_create_from_audio(
             summary: None,
         },
     );
+    merge_session_tags_into_catalog(
+        &mut storage.data.settings.session_tag_catalog,
+        &default_tags,
+    );
+    storage.data.settings.normalize();
 
     storage.save()?;
     Ok(StartSessionResponse { session_id })
@@ -220,6 +228,37 @@ pub fn session_delete(session_id: String, state: State<'_, AppState>) -> Result<
         .jobs
         .retain(|_, job| job.session_id != session_id);
 
+    storage.save()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn session_set_tags(
+    session_id: String,
+    tags: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let normalized_tags = validate_session_tags(&tags)?;
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+
+    {
+        let session = storage
+            .data
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| "session not found".to_string())?;
+        session.tags = normalized_tags.clone();
+        session.updated_at = now_iso();
+    }
+
+    merge_session_tags_into_catalog(
+        &mut storage.data.settings.session_tag_catalog,
+        &normalized_tags,
+    );
+    storage.data.settings.normalize();
     storage.save()?;
     Ok(())
 }
