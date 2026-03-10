@@ -9,6 +9,7 @@ import {
   enqueueSummary,
   enqueueTranscription,
   exportRecording,
+  listInputDevices,
   getRecorderStatus,
   getSession,
   getSettings,
@@ -20,9 +21,13 @@ import {
   prepareTranscriptionAudio,
   renameSession,
   resumeRecording,
+  setRealtimeSourceLanguage as setRealtimeSourceLanguageApi,
   setSessionTags as saveSessionTags,
   startRecording,
+  setRealtimeTranslationTargetLanguage as setRealtimeTranslationTargetLanguageApi,
   stopRecording,
+  toggleRealtimeTranscription,
+  toggleRealtimeTranslation,
   updateSettings
 } from "./lib/api";
 import {
@@ -39,10 +44,12 @@ import type {
   ProviderCapability,
   ProviderConfig,
   PromptTemplate,
+  RecorderInputDevice,
   RecorderPhase,
   RecordingQualityPreset,
   SessionDetail,
   SessionSummary,
+  TranscriptSegment,
   Settings
 } from "./types/domain";
 
@@ -145,6 +152,8 @@ function createDefaultProvider(kind: ProviderConfig["kind"]): ProviderConfig {
         transcriptionPunctuationPredictionEnabled: true,
         transcriptionDisfluencyRemovalEnabled: false,
         transcriptionSpeakerDiarizationEnabled: true,
+        realtimeEnabledByDefault: false,
+        realtimeOutputLevel: 1,
         pollIntervalSeconds: 60,
         maxPollingMinutes: 180
       }
@@ -207,6 +216,7 @@ const emptySettings: Settings = {
   selectedTranscriptionProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
   selectedSummaryProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
   recordingSegmentSeconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
+  recordingInputDeviceId: "",
   sessionTagCatalog: DEFAULT_SESSION_TAG_CATALOG,
   defaultTemplateId: "meeting-default",
   templates: []
@@ -214,6 +224,8 @@ const emptySettings: Settings = {
 const initialSettings = normalizeSettings(emptySettings);
 
 const WAVEFORM_CAPACITY = 220;
+const DEFAULT_REALTIME_SOURCE_LANGUAGE = "cn";
+const DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE = "en";
 
 type StatusState = {
   key: TranslationKey;
@@ -293,6 +305,8 @@ function normalizeSettings(input: Settings): Settings {
         Math.max(MIN_RECORDING_SEGMENT_SECONDS, Math.floor(input.recordingSegmentSeconds))
       )
     : DEFAULT_RECORDING_SEGMENT_SECONDS;
+  const recordingInputDeviceId =
+    typeof input.recordingInputDeviceId === "string" ? input.recordingInputDeviceId.trim() : "";
   const sessionTagCatalog = normalizeSessionTagCatalog([
     ...DEFAULT_SESSION_TAG_CATALOG,
     ...(input.sessionTagCatalog ?? [])
@@ -351,6 +365,14 @@ function normalizeSettings(input: Settings): Settings {
         aliyunTingwu: {
           ...defaults.aliyunTingwu!,
           ...aliyunConfig,
+          realtimeEnabledByDefault:
+            typeof aliyunConfig.realtimeEnabledByDefault === "boolean"
+              ? aliyunConfig.realtimeEnabledByDefault
+              : defaults.aliyunTingwu!.realtimeEnabledByDefault,
+          realtimeOutputLevel:
+            aliyunConfig.realtimeOutputLevel === 2
+              ? 2
+              : defaults.aliyunTingwu!.realtimeOutputLevel,
           pollIntervalSeconds: Number.isFinite(aliyunConfig.pollIntervalSeconds)
             ? Math.min(300, Math.max(60, Math.floor(aliyunConfig.pollIntervalSeconds)))
             : defaults.aliyunTingwu!.pollIntervalSeconds,
@@ -419,10 +441,16 @@ function normalizeSettings(input: Settings): Settings {
     selectedTranscriptionProviderId,
     selectedSummaryProviderId,
     recordingSegmentSeconds,
+    recordingInputDeviceId,
     sessionTagCatalog,
     templates,
     defaultTemplateId: defaultExists ? input.defaultTemplateId : templates[0].id
   };
+}
+
+function getAliyunRealtimeEnabledDefault(settings: Settings): boolean {
+  const provider = settings.providers.find((item) => item.kind === "aliyun_tingwu");
+  return provider?.aliyunTingwu?.realtimeEnabledByDefault ?? false;
 }
 
 function App() {
@@ -437,6 +465,23 @@ function App() {
   const [recordingQuality, setRecordingQuality] = useState<RecordingQualityPreset>("standard");
   const [recordingElapsedMs, setRecordingElapsedMs] = useState<number>(0);
   const [waveformPoints, setWaveformPoints] = useState<number[]>([]);
+  const [realtimeTranscriptionEnabled, setRealtimeTranscriptionEnabled] = useState<boolean>(
+    getAliyunRealtimeEnabledDefault(initialSettings)
+  );
+  const [realtimeSourceLanguage, setRealtimeSourceLanguage] = useState<string>(
+    DEFAULT_REALTIME_SOURCE_LANGUAGE
+  );
+  const [realtimeTranslationEnabled, setRealtimeTranslationEnabled] = useState<boolean>(false);
+  const [realtimeTranslationTargetLanguage, setRealtimeTranslationTargetLanguage] = useState<string>(
+    DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE
+  );
+  const [realtimePreviewText, setRealtimePreviewText] = useState<string>("");
+  const [realtimeSegments, setRealtimeSegments] = useState<TranscriptSegment[]>([]);
+  const [realtimeTranscriptionState, setRealtimeTranscriptionState] = useState<
+    "idle" | "connecting" | "running" | "paused" | "stopping" | "error"
+  >("idle");
+  const [realtimeLastError, setRealtimeLastError] = useState<string>();
+  const [inputDevices, setInputDevices] = useState<RecorderInputDevice[]>([]);
   const [settings, setSettings] = useState<Settings>(initialSettings);
   const [summaryTemplateId, setSummaryTemplateId] = useState<string>(initialSettings.defaultTemplateId);
   const [statusState, setStatusState] = useState<StatusState>({ key: "status.ready" });
@@ -452,15 +497,9 @@ function App() {
     () => Boolean(currentRecording && (recorderPhase === "recording" || recorderPhase === "paused")),
     [currentRecording, recorderPhase]
   );
-  const canExport = useMemo(
-    () =>
-      Boolean(
-        activeSessionId &&
-          activeSession &&
-          activeSession.audioSegments.length > 0 &&
-          activeSession.status !== "processing"
-      ),
-    [activeSession, activeSessionId]
+  const canToggleRealtime = useMemo(
+    () => !currentRecording || recorderPhase === "recording" || recorderPhase === "paused",
+    [currentRecording, recorderPhase]
   );
 
   function setStatus(key: TranslationKey, params?: TranslationParams) {
@@ -507,6 +546,11 @@ function App() {
     setSessionJobs(jobs);
   }
 
+  async function refreshInputDevices() {
+    const devices = await listInputDevices();
+    setInputDevices(devices);
+  }
+
   useEffect(() => {
     void refreshSessions().catch((error) => {
       setStatus("status.sessionsLoadFailed", { error: String(error) });
@@ -517,6 +561,7 @@ function App() {
         const normalized = normalizeSettings(loaded);
         setSettings(normalized);
         setSummaryTemplateId(normalized.defaultTemplateId);
+        setRealtimeTranscriptionEnabled(getAliyunRealtimeEnabledDefault(normalized));
       })
       .catch((error) => setStatus("status.settingsLoadFailed", { error: String(error) }));
   }, []);
@@ -543,6 +588,15 @@ function App() {
   }, [settings.defaultTemplateId, settings.templates, summaryTemplateId]);
 
   useEffect(() => {
+    if (activeTab !== "settings") {
+      return;
+    }
+    void refreshInputDevices().catch((error) => {
+      setStatus("status.inputDeviceListFailed", { error: String(error) });
+    });
+  }, [activeTab]);
+
+  useEffect(() => {
     if (!currentRecording) {
       persistedSegmentCountRef.current = 0;
       return;
@@ -559,6 +613,17 @@ function App() {
         }
         setRecordingElapsedMs(status.elapsedMs);
         setRecorderPhase(status.phase);
+        setRealtimeTranscriptionEnabled(status.realtime.enabled);
+        setRealtimeSourceLanguage(status.realtime.sourceLanguage);
+        setRealtimeTranslationEnabled(status.realtime.translationEnabled);
+        setRealtimeTranslationTargetLanguage(status.realtime.translationTargetLanguage);
+        setRealtimePreviewText(status.realtime.previewText);
+        setRealtimeSegments(status.realtime.segments);
+        setRealtimeTranscriptionState(status.realtime.state);
+        setRealtimeLastError(status.realtime.lastError);
+        if (status.realtime.lastError) {
+          setStatus("status.realtimeRuntimeError", { error: status.realtime.lastError });
+        }
         if (status.phase === "recording") {
           setWaveformPoints((previous) => {
             const next = [...previous, status.rms];
@@ -583,6 +648,14 @@ function App() {
           setCurrentRecording(undefined);
           setWaveformPoints([]);
           setRecorderPhase("idle");
+          setRealtimePreviewText("");
+          setRealtimeSegments([]);
+          setRealtimeTranscriptionState("idle");
+          setRealtimeLastError(undefined);
+          setRealtimeSourceLanguage(DEFAULT_REALTIME_SOURCE_LANGUAGE);
+          setRealtimeTranslationEnabled(false);
+          setRealtimeTranslationTargetLanguage(DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE);
+          setRealtimeTranscriptionEnabled(getAliyunRealtimeEnabledDefault(settings));
           setStatus("status.recordingPostProcessDone");
           await refreshSessionDetail(currentRecording);
           await refreshSessions();
@@ -604,18 +677,44 @@ function App() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [currentRecording]);
+  }, [currentRecording, settings]);
 
   async function onStart() {
     try {
-      const sessionId = await startRecording(undefined, recordingQuality);
+      const preferredInputDeviceId =
+        typeof settings.recordingInputDeviceId === "string" &&
+        settings.recordingInputDeviceId.trim().length > 0
+          ? settings.recordingInputDeviceId.trim()
+          : undefined;
+      const response = await startRecording(
+        preferredInputDeviceId,
+        recordingQuality,
+        realtimeTranscriptionEnabled,
+        realtimeSourceLanguage,
+        realtimeTranslationEnabled,
+        realtimeTranslationTargetLanguage
+      );
+      const sessionId = response.sessionId;
       persistedSegmentCountRef.current = 0;
       setCurrentRecording(sessionId);
       setRecorderPhase("recording");
       setActiveSessionId(sessionId);
       setRecordingElapsedMs(0);
       setWaveformPoints([]);
-      setStatus("status.recordingSession", { sessionId });
+      setRealtimePreviewText("");
+      setRealtimeSegments([]);
+      setRealtimeTranscriptionState(realtimeTranscriptionEnabled ? "connecting" : "idle");
+      setRealtimeTranslationEnabled(
+        realtimeTranscriptionEnabled && realtimeTranslationEnabled
+      );
+      setRealtimeLastError(undefined);
+      if (response.fallbackFromInputDeviceId) {
+        setStatus("status.recordingFallbackInputDevice", {
+          deviceName: response.inputDeviceName || response.inputDeviceId || "default input"
+        });
+      } else {
+        setStatus("status.recordingSession", { sessionId });
+      }
       await refreshSessions();
       await refreshSessionDetail(sessionId);
     } catch (error) {
@@ -662,6 +761,77 @@ function App() {
       await refreshSessions();
     } catch (error) {
       setStatus("status.stopRecordingFailed", { error: String(error) });
+    }
+  }
+
+  async function onToggleRealtime(enabled: boolean) {
+    const previous = realtimeTranscriptionEnabled;
+    const previousTranslationEnabled = realtimeTranslationEnabled;
+    setRealtimeTranscriptionEnabled(enabled);
+    if (!enabled) {
+      setRealtimeTranslationEnabled(false);
+    }
+    if (!currentRecording) {
+      return;
+    }
+    try {
+      await toggleRealtimeTranscription(currentRecording, enabled);
+      if (enabled) {
+        setRealtimeTranscriptionState("connecting");
+        setRealtimeLastError(undefined);
+      } else {
+        setRealtimeTranscriptionState("idle");
+      }
+    } catch (error) {
+      setRealtimeTranscriptionEnabled(previous);
+      setRealtimeTranslationEnabled(previousTranslationEnabled);
+      setStatus("status.realtimeToggleFailed", { error: String(error) });
+    }
+  }
+
+  async function onToggleRealtimeTranslation(enabled: boolean) {
+    if (!realtimeTranscriptionEnabled) {
+      setRealtimeTranslationEnabled(false);
+      return;
+    }
+    const previous = realtimeTranslationEnabled;
+    setRealtimeTranslationEnabled(enabled);
+    if (!currentRecording) {
+      return;
+    }
+    try {
+      await toggleRealtimeTranslation(currentRecording, enabled);
+    } catch (error) {
+      setRealtimeTranslationEnabled(previous);
+      setStatus("status.realtimeToggleFailed", { error: String(error) });
+    }
+  }
+
+  async function onChangeRealtimeTranslationTargetLanguage(targetLanguage: string) {
+    const previous = realtimeTranslationTargetLanguage;
+    setRealtimeTranslationTargetLanguage(targetLanguage);
+    if (!currentRecording) {
+      return;
+    }
+    try {
+      await setRealtimeTranslationTargetLanguageApi(currentRecording, targetLanguage);
+    } catch (error) {
+      setRealtimeTranslationTargetLanguage(previous);
+      setStatus("status.realtimeToggleFailed", { error: String(error) });
+    }
+  }
+
+  async function onChangeRealtimeSourceLanguage(sourceLanguage: string) {
+    const previous = realtimeSourceLanguage;
+    setRealtimeSourceLanguage(sourceLanguage);
+    if (!currentRecording) {
+      return;
+    }
+    try {
+      await setRealtimeSourceLanguageApi(currentRecording, sourceLanguage);
+    } catch (error) {
+      setRealtimeSourceLanguage(previous);
+      setStatus("status.realtimeToggleFailed", { error: String(error) });
     }
   }
 
@@ -950,6 +1120,9 @@ function App() {
           ? previous
           : normalized.defaultTemplateId
       );
+      if (!currentRecording) {
+        setRealtimeTranscriptionEnabled(getAliyunRealtimeEnabledDefault(normalized));
+      }
       setStatus("status.settingsSaved");
     } catch (error) {
       setStatus("status.settingsSaveFailed", { error: String(error) });
@@ -971,17 +1144,34 @@ function App() {
           statusMessage={statusMessage}
           canRecord={canRecord}
           hasRecording={hasRecording}
-          canExport={canExport}
           elapsedMs={recordingElapsedMs}
           waveformPoints={waveformPoints}
+          realtimeEnabled={realtimeTranscriptionEnabled}
+          realtimeToggleDisabled={!canToggleRealtime}
+          realtimeSourceLanguage={realtimeSourceLanguage}
+          realtimeSourceLanguageDisabled={!canToggleRealtime || !realtimeTranscriptionEnabled}
+          realtimeTranslationEnabled={realtimeTranslationEnabled}
+          realtimeTranslationToggleDisabled={!canToggleRealtime || !realtimeTranscriptionEnabled}
+          realtimeTranslationTargetLanguage={realtimeTranslationTargetLanguage}
+          realtimeTranslationTargetDisabled={!canToggleRealtime || !realtimeTranscriptionEnabled}
+          realtimePreviewText={realtimePreviewText}
+          realtimeSegments={realtimeSegments}
+          realtimeState={realtimeTranscriptionState}
+          realtimeLastError={realtimeLastError}
           qualityPreset={recordingQuality}
           onQualityChange={setRecordingQuality}
+          onRealtimeToggle={(enabled) => void onToggleRealtime(enabled)}
+          onRealtimeSourceLanguageChange={(sourceLanguage) =>
+            void onChangeRealtimeSourceLanguage(sourceLanguage)
+          }
+          onRealtimeTranslationToggle={(enabled) => void onToggleRealtimeTranslation(enabled)}
+          onRealtimeTranslationTargetChange={(targetLanguage) =>
+            void onChangeRealtimeTranslationTargetLanguage(targetLanguage)
+          }
           onStart={() => void onStart()}
           onPause={() => void onPause()}
           onResume={() => void onResume()}
           onStop={() => void onStop()}
-          onExportM4a={() => void onExport("m4a")}
-          onExportMp3={() => void onExport("mp3")}
           t={t}
         />
       )}
@@ -1022,6 +1212,7 @@ function App() {
         <SettingsTab
           locale={locale}
           settings={settings}
+          inputDevices={inputDevices}
           onLocaleChange={setLocale}
           onSettingsChange={(patch) => {
             setSettings((previous) => normalizeSettings({ ...previous, ...patch }));

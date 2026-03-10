@@ -10,12 +10,14 @@ import type {
   ProviderCapability,
   ProviderConfig,
   ProviderKind,
+  RecorderInputDevice,
   Settings
 } from "../types/domain";
 
 type SettingsTabProps = {
   locale: Locale;
   settings: Settings;
+  inputDevices: RecorderInputDevice[];
   onLocaleChange: (locale: Locale) => void;
   onSettingsChange: (patch: Partial<Settings>) => void;
   onSave: () => void;
@@ -91,6 +93,7 @@ function whisperModelOptionLabel(modelId: string): string {
 function SettingsTab({
   locale,
   settings,
+  inputDevices,
   onLocaleChange,
   onSettingsChange,
   onSave,
@@ -408,6 +411,30 @@ function SettingsTab({
             </select>
           </label>
           <label>
+            {t("settings.aliyunRealtimeEnabledByDefault")}
+            <select
+              value={String(aliyun.realtimeEnabledByDefault)}
+              onChange={(event) =>
+                updateAliyun({ realtimeEnabledByDefault: event.target.value === "true" })
+              }
+            >
+              <option value="true">{t("settings.option.enabled")}</option>
+              <option value="false">{t("settings.option.disabled")}</option>
+            </select>
+          </label>
+          <label>
+            {t("settings.aliyunRealtimeOutputLevel")}
+            <select
+              value={String(aliyun.realtimeOutputLevel)}
+              onChange={(event) =>
+                updateAliyun({ realtimeOutputLevel: event.target.value === "2" ? 2 : 1 })
+              }
+            >
+              <option value="1">{t("settings.aliyunRealtimeOutputLevel.finalOnly")}</option>
+              <option value="2">{t("settings.aliyunRealtimeOutputLevel.intermediate")}</option>
+            </select>
+          </label>
+          <label>
             {t("settings.aliyunPollIntervalSeconds")}
             <input
               type="number"
@@ -681,6 +708,11 @@ function SettingsTab({
   const transcriptionProviders = settings.providers.filter((provider) =>
     supportsCapability(provider, "transcription")
   );
+  const selectedInputDeviceId =
+    typeof settings.recordingInputDeviceId === "string" ? settings.recordingInputDeviceId : "";
+  const hasSelectedInputDevice =
+    selectedInputDeviceId.length === 0 ||
+    inputDevices.some((device) => device.id === selectedInputDeviceId);
   const summaryProviders = settings.providers.filter((provider) =>
     supportsCapability(provider, "summary")
   );
@@ -746,6 +778,34 @@ function SettingsTab({
                   })
                 }
               />
+            </label>
+            <label>
+              {t("settings.recordingInputDevice")}
+              <select
+                value={selectedInputDeviceId}
+                onChange={(event) =>
+                  onSettingsChange({ recordingInputDeviceId: event.target.value })
+                }
+              >
+                <option value="">
+                  {t("settings.recordingInputDevice.systemDefault")}
+                </option>
+                {inputDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {device.name}
+                    {device.isDefault
+                      ? ` (${t("settings.recordingInputDevice.defaultSuffix")})`
+                      : ""}
+                  </option>
+                ))}
+                {!hasSelectedInputDevice && selectedInputDeviceId.length > 0 && (
+                  <option value={selectedInputDeviceId}>
+                    {t("settings.recordingInputDevice.unavailable", {
+                      deviceId: selectedInputDeviceId
+                    })}
+                  </option>
+                )}
+              </select>
             </label>
           </div>
         )}

@@ -175,7 +175,12 @@ pub fn session_create_from_audio(
     storage.data.settings.normalize();
 
     storage.save()?;
-    Ok(StartSessionResponse { session_id })
+    Ok(StartSessionResponse {
+        session_id,
+        input_device_id: None,
+        input_device_name: None,
+        fallback_from_input_device_id: None,
+    })
 }
 
 #[tauri::command]

@@ -54,6 +54,10 @@ pub fn settings_update(
         storage.data.settings.recording_segment_seconds = recording_segment_seconds;
     }
 
+    if let Some(recording_input_device_id) = request.recording_input_device_id {
+        storage.data.settings.recording_input_device_id = Some(recording_input_device_id);
+    }
+
     if let Some(session_tag_catalog) = request.session_tag_catalog {
         storage.data.settings.session_tag_catalog = session_tag_catalog;
     }

@@ -21,15 +21,28 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        merge_session_tags_into_catalog, AudioSegmentMeta, RecorderExportResponse, RecorderPhase,
-        RecorderProcessingStatus, RecorderStatus, RecordingQualityPreset, Session, SessionStatus,
-        StartSessionResponse, DEFAULT_RECORDING_SESSION_TAG,
+        merge_session_tags_into_catalog, AudioSegmentMeta, RecorderExportResponse,
+        RecorderInputDevice, RecorderPhase, RecorderProcessingStatus, RecorderRealtimeState,
+        RecorderRealtimeStatus, RecorderStatus, RecordingQualityPreset, Session, SessionStatus,
+        StartSessionResponse,
+        ProviderKind,
+        DEFAULT_RECORDING_SESSION_TAG,
+    },
+    providers::aliyun_tingwu_realtime::{
+        start_realtime_worker, AliyunTingwuRealtimeConfig, RealtimeWorkerEvent,
+        RealtimeWorkerHandle, RealtimeWorkerState,
     },
     state::AppState,
     storage::Storage,
 };
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const UNKNOWN_INPUT_DEVICE_NAME: &str = "Unknown Input Device";
+const DEFAULT_REALTIME_SOURCE_LANGUAGE: &str = "cn";
+const DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE: &str = "en";
+const SUPPORTED_REALTIME_SOURCE_LANGUAGES: [&str; 2] = ["cn", "en"];
+const SUPPORTED_REALTIME_TRANSLATION_TARGET_LANGUAGES: [&str; 8] =
+    ["en", "cn", "ja", "ko", "fr", "de", "es", "ru"];
 
 struct QualityConfig {
     capture_sample_rate: u32,
@@ -44,6 +57,64 @@ struct OpenSegment {
     sequence: u32,
     started_at: String,
     start_elapsed_ms: u64,
+}
+
+#[derive(Default)]
+struct RealtimeResampleState {
+    phase: u32,
+}
+
+#[derive(Clone)]
+struct RealtimeSegmentMeta {
+    sentence_id: Option<String>,
+    sentence_index: Option<u64>,
+}
+
+#[derive(Clone)]
+struct PendingRealtimeTranslation {
+    text: String,
+    event_time_ms: Option<u64>,
+    source_sentence_id: Option<String>,
+    sentence_index: Option<u64>,
+    target_language: Option<String>,
+}
+
+struct RecorderRealtimeRuntime {
+    enabled: bool,
+    source_language: String,
+    translation_enabled: bool,
+    translation_target_language: String,
+    state: RecorderRealtimeState,
+    preview_text: String,
+    segments: Vec<crate::models::TranscriptSegment>,
+    segment_meta: Vec<RealtimeSegmentMeta>,
+    pending_translations: Vec<PendingRealtimeTranslation>,
+    next_segment_start_ms: u64,
+    last_error: Option<String>,
+    event_rx: Option<mpsc::Receiver<RealtimeWorkerEvent>>,
+    worker: Option<RealtimeWorkerHandle>,
+    resample_state: RealtimeResampleState,
+}
+
+impl Default for RecorderRealtimeRuntime {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            source_language: DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string(),
+            translation_enabled: false,
+            translation_target_language: DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string(),
+            state: RecorderRealtimeState::Idle,
+            preview_text: String::new(),
+            segments: vec![],
+            segment_meta: vec![],
+            pending_translations: vec![],
+            next_segment_start_ms: 0,
+            last_error: None,
+            event_rx: None,
+            worker: None,
+            resample_state: RealtimeResampleState::default(),
+        }
+    }
 }
 
 struct RecorderShared {
@@ -61,6 +132,7 @@ struct RecorderShared {
     last_rms: f32,
     last_peak: f32,
     last_error: Option<String>,
+    realtime: RecorderRealtimeRuntime,
 }
 
 struct PendingSegmentTask {
@@ -104,6 +176,19 @@ enum RecorderRuntime {
     Active(ActiveRecorder),
 }
 
+struct InputDeviceEntry {
+    device: cpal::Device,
+    id: String,
+    name: String,
+}
+
+struct ResolvedInputDevice {
+    device: cpal::Device,
+    id: String,
+    name: String,
+    fallback_from: Option<String>,
+}
+
 fn recorder_runtime() -> &'static Mutex<RecorderRuntime> {
     static RUNTIME: OnceLock<Mutex<RecorderRuntime>> = OnceLock::new();
     RUNTIME.get_or_init(|| Mutex::new(RecorderRuntime::Idle))
@@ -135,6 +220,464 @@ fn segment_processor_tx(
 
 fn now_iso() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn parse_language_hints(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .collect()
+}
+
+fn normalize_realtime_translation_target_language(raw: &str) -> Option<String> {
+    let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
+    if normalized.is_empty() {
+        return None;
+    }
+    let canonical = match normalized.as_str() {
+        "zh" | "zh-cn" => "cn".to_string(),
+        _ => normalized,
+    };
+    SUPPORTED_REALTIME_TRANSLATION_TARGET_LANGUAGES
+        .contains(&canonical.as_str())
+        .then_some(canonical)
+}
+
+fn normalize_realtime_source_language(raw: &str) -> Option<String> {
+    let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
+    if normalized.is_empty() {
+        return None;
+    }
+    let canonical = match normalized.as_str() {
+        "zh" | "zh-cn" => "cn".to_string(),
+        _ => normalized,
+    };
+    SUPPORTED_REALTIME_SOURCE_LANGUAGES
+        .contains(&canonical.as_str())
+        .then_some(canonical)
+}
+
+fn map_realtime_state(state: RealtimeWorkerState) -> RecorderRealtimeState {
+    match state {
+        RealtimeWorkerState::Idle => RecorderRealtimeState::Idle,
+        RealtimeWorkerState::Connecting => RecorderRealtimeState::Connecting,
+        RealtimeWorkerState::Running => RecorderRealtimeState::Running,
+        RealtimeWorkerState::Paused => RecorderRealtimeState::Paused,
+        RealtimeWorkerState::Stopping => RecorderRealtimeState::Stopping,
+        RealtimeWorkerState::Error => RecorderRealtimeState::Error,
+    }
+}
+
+fn find_translation_target_segment_index(
+    shared: &RecorderShared,
+    translation: &PendingRealtimeTranslation,
+) -> Option<usize> {
+    if let Some(source_sentence_id) = translation.source_sentence_id.as_deref() {
+        if let Some(index) = shared
+            .realtime
+            .segment_meta
+            .iter()
+            .rposition(|meta| meta.sentence_id.as_deref() == Some(source_sentence_id))
+        {
+            return Some(index);
+        }
+    }
+    if let Some(sentence_index) = translation.sentence_index {
+        if let Some(index) = shared
+            .realtime
+            .segment_meta
+            .iter()
+            .rposition(|meta| meta.sentence_index == Some(sentence_index))
+        {
+            return Some(index);
+        }
+    }
+    if let Some(event_time_ms) = translation.event_time_ms {
+        if let Some(index) = shared
+            .realtime
+            .segments
+            .iter()
+            .rposition(|segment| segment.end_ms == event_time_ms)
+        {
+            return Some(index);
+        }
+    }
+    shared.realtime.segments.len().checked_sub(1)
+}
+
+fn apply_translation_to_segment(
+    shared: &mut RecorderShared,
+    translation: &PendingRealtimeTranslation,
+) -> bool {
+    let Some(index) = find_translation_target_segment_index(shared, translation) else {
+        return false;
+    };
+    let Some(segment) = shared.realtime.segments.get_mut(index) else {
+        return false;
+    };
+    segment.translation_text = Some(translation.text.clone());
+    segment.translation_target_language = translation
+        .target_language
+        .clone()
+        .or_else(|| Some(shared.realtime.translation_target_language.clone()));
+    true
+}
+
+fn flush_pending_translations(shared: &mut RecorderShared) {
+    if shared.realtime.pending_translations.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut shared.realtime.pending_translations);
+    let mut remaining = Vec::with_capacity(pending.len());
+    for item in pending {
+        if !apply_translation_to_segment(shared, &item) {
+            remaining.push(item);
+        }
+    }
+    shared.realtime.pending_translations = remaining;
+}
+
+fn apply_realtime_event(shared: &mut RecorderShared, event: RealtimeWorkerEvent) {
+    match event {
+        RealtimeWorkerEvent::StateChanged { state, error } => {
+            shared.realtime.state = map_realtime_state(state);
+            if let Some(reason) = error {
+                shared.realtime.last_error = Some(reason);
+                shared.realtime.state = RecorderRealtimeState::Error;
+            }
+            if matches!(state, RealtimeWorkerState::Idle | RealtimeWorkerState::Error) {
+                shared.realtime.worker = None;
+                shared.realtime.event_rx = None;
+                shared.realtime.enabled = false;
+                shared.realtime.translation_enabled = false;
+            }
+        }
+        RealtimeWorkerEvent::FinalSentence {
+            text,
+            event_time_ms,
+            sentence_id,
+            sentence_index,
+        } => {
+            let sentence = text.trim();
+            if sentence.is_empty() {
+                return;
+            }
+            if !shared.realtime.preview_text.is_empty() {
+                shared.realtime.preview_text.push('\n');
+            }
+            shared.realtime.preview_text.push_str(sentence);
+
+            let mut end_ms = event_time_ms.unwrap_or_else(|| elapsed_ms(shared));
+            let start_ms = shared.realtime.next_segment_start_ms;
+            if end_ms <= start_ms {
+                end_ms = start_ms.saturating_add(1000);
+            }
+            shared.realtime.segments.push(crate::models::TranscriptSegment {
+                start_ms,
+                end_ms,
+                text: sentence.to_string(),
+                translation_text: None,
+                translation_target_language: None,
+                confidence: None,
+                speaker_id: None,
+                speaker_label: None,
+            });
+            shared.realtime.segment_meta.push(RealtimeSegmentMeta {
+                sentence_id,
+                sentence_index,
+            });
+            shared.realtime.next_segment_start_ms = end_ms;
+            flush_pending_translations(shared);
+        }
+        RealtimeWorkerEvent::TranslatedSentence {
+            text,
+            event_time_ms,
+            source_sentence_id,
+            sentence_index,
+            target_language,
+        } => {
+            if !shared.realtime.translation_enabled {
+                return;
+            }
+            let translation = PendingRealtimeTranslation {
+                text,
+                event_time_ms,
+                source_sentence_id,
+                sentence_index,
+                target_language,
+            };
+            if !apply_translation_to_segment(shared, &translation) {
+                shared.realtime.pending_translations.push(translation);
+                if shared.realtime.pending_translations.len() > 128 {
+                    let drop_count = shared.realtime.pending_translations.len() - 128;
+                    shared.realtime.pending_translations.drain(0..drop_count);
+                }
+            }
+        }
+    }
+}
+
+fn drain_realtime_events(shared: &mut RecorderShared) {
+    let mut drained = Vec::new();
+    if let Some(event_rx) = shared.realtime.event_rx.as_ref() {
+        while let Ok(event) = event_rx.try_recv() {
+            drained.push(event);
+        }
+    }
+    for event in drained {
+        apply_realtime_event(shared, event);
+    }
+}
+
+fn resample_to_mono_16k(
+    data: &[i16],
+    input_sample_rate: u32,
+    input_channels: u16,
+    state: &mut RealtimeResampleState,
+) -> Vec<i16> {
+    if data.is_empty() || input_sample_rate == 0 {
+        return vec![];
+    }
+
+    let channels = usize::from(input_channels.max(1));
+    let mut output = Vec::with_capacity(data.len() / channels);
+    let mut phase = state.phase;
+    let target_rate = 16_000_u32;
+
+    for frame in data.chunks_exact(channels) {
+        let sample_sum = frame.iter().map(|value| i32::from(*value)).sum::<i32>();
+        let avg = sample_sum / (channels as i32);
+        let mono = avg.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+
+        phase = phase.saturating_add(target_rate);
+        while phase >= input_sample_rate {
+            output.push(mono);
+            phase -= input_sample_rate;
+        }
+    }
+
+    state.phase = phase;
+    output
+}
+
+fn realtime_status_snapshot(shared: &mut RecorderShared) -> RecorderRealtimeStatus {
+    drain_realtime_events(shared);
+    RecorderRealtimeStatus {
+        enabled: shared.realtime.enabled,
+        source_language: shared.realtime.source_language.clone(),
+        translation_enabled: shared.realtime.translation_enabled,
+        translation_target_language: shared.realtime.translation_target_language.clone(),
+        state: shared.realtime.state.clone(),
+        preview_text: shared.realtime.preview_text.clone(),
+        segment_count: shared.realtime.segments.len(),
+        segments: shared.realtime.segments.clone(),
+        last_error: shared.realtime.last_error.clone(),
+    }
+}
+
+fn resolve_realtime_provider_config(
+    storage: &Storage,
+    source_language: String,
+    translation_enabled: bool,
+    translation_target_language: String,
+) -> Result<AliyunTingwuRealtimeConfig, String> {
+    let provider = storage
+        .data
+        .settings
+        .providers
+        .iter()
+        .find(|item| item.kind == ProviderKind::AliyunTingwu)
+        .ok_or_else(|| "aliyun tingwu provider not configured".to_string())?;
+    let aliyun = provider
+        .aliyun_tingwu
+        .as_ref()
+        .ok_or_else(|| "aliyun tingwu provider settings missing".to_string())?;
+
+    let access_key_id = aliyun.access_key_id.clone().unwrap_or_default();
+    let access_key_secret = aliyun.access_key_secret.clone().unwrap_or_default();
+    let app_key = aliyun.app_key.clone().unwrap_or_default();
+    if access_key_id.trim().is_empty()
+        || access_key_secret.trim().is_empty()
+        || app_key.trim().is_empty()
+    {
+        return Err("aliyun realtime requires access key id, access key secret and app key".to_string());
+    }
+
+    let _provider_source_language = aliyun.source_language.trim().to_ascii_lowercase();
+    let source_language = normalize_realtime_source_language(&source_language)
+        .unwrap_or_else(|| DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string());
+    let translation_target_language =
+        normalize_realtime_translation_target_language(&translation_target_language)
+            .unwrap_or_else(|| DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string());
+    let translation_enabled =
+        translation_enabled && translation_target_language != source_language;
+
+    Ok(AliyunTingwuRealtimeConfig {
+        access_key_id,
+        access_key_secret,
+        app_key,
+        endpoint: aliyun.endpoint.clone(),
+        source_language,
+        language_hints: parse_language_hints(aliyun.language_hints.as_deref()),
+        output_level: aliyun.realtime_output_level.clamp(1, 2),
+        translation_enabled,
+        translation_target_language,
+    })
+}
+
+fn start_realtime_runtime(
+    shared_ref: &Arc<Mutex<RecorderShared>>,
+    storage: &Arc<Mutex<Storage>>,
+) -> Result<(), String> {
+    let (source_language, translation_enabled, translation_target_language) = {
+        let shared = shared_ref
+            .lock()
+            .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+        (
+            shared.realtime.source_language.clone(),
+            shared.realtime.translation_enabled,
+            shared.realtime.translation_target_language.clone(),
+        )
+    };
+    let config = {
+        let storage_lock = storage
+            .lock()
+            .map_err(|_| "failed to acquire storage lock".to_string())?;
+        resolve_realtime_provider_config(
+            &storage_lock,
+            source_language,
+            translation_enabled,
+            translation_target_language,
+        )?
+    };
+
+    let mut shared = shared_ref
+        .lock()
+        .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+    drain_realtime_events(&mut shared);
+    if shared.realtime.worker.is_some() {
+        shared.realtime.enabled = true;
+        return Ok(());
+    }
+
+    let (event_tx, event_rx) = mpsc::channel::<RealtimeWorkerEvent>();
+    let worker = start_realtime_worker(config, event_tx);
+    shared.realtime.enabled = true;
+    shared.realtime.state = RecorderRealtimeState::Connecting;
+    shared.realtime.last_error = None;
+    shared.realtime.pending_translations.clear();
+    shared.realtime.event_rx = Some(event_rx);
+    shared.realtime.worker = Some(worker);
+    Ok(())
+}
+
+fn stop_realtime_runtime(
+    shared_ref: &Arc<Mutex<RecorderShared>>,
+    disable_after_stop: bool,
+) -> Result<(), String> {
+    let worker = {
+        let mut shared = shared_ref
+            .lock()
+            .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+        drain_realtime_events(&mut shared);
+        shared.realtime.state = RecorderRealtimeState::Stopping;
+        shared.realtime.worker.take()
+    };
+
+    let mut stop_error = None;
+    if let Some(worker) = worker {
+        if let Err(error) = worker.stop() {
+            stop_error = Some(error);
+        }
+    }
+
+    let mut shared = shared_ref
+        .lock()
+        .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+    drain_realtime_events(&mut shared);
+    if disable_after_stop {
+        shared.realtime.enabled = false;
+        shared.realtime.translation_enabled = false;
+    }
+    shared.realtime.pending_translations.clear();
+    shared.realtime.event_rx = None;
+    shared.realtime.state = if stop_error.is_some() {
+        RecorderRealtimeState::Error
+    } else {
+        RecorderRealtimeState::Idle
+    };
+    if let Some(error) = stop_error {
+        shared.realtime.last_error = Some(error);
+    }
+    Ok(())
+}
+
+fn pause_realtime_if_session_paused(
+    session_id: &str,
+    shared_ref: &Arc<Mutex<RecorderShared>>,
+    storage: &Arc<Mutex<Storage>>,
+) -> Result<(), String> {
+    let session_is_paused = {
+        let storage = storage
+            .lock()
+            .map_err(|_| "failed to acquire storage lock".to_string())?;
+        storage
+            .data
+            .sessions
+            .get(session_id)
+            .map(|session| matches!(session.status, SessionStatus::Paused))
+            .unwrap_or(false)
+    };
+    if !session_is_paused {
+        return Ok(());
+    }
+    if let Ok(mut shared) = shared_ref.lock() {
+        if let Some(worker) = shared.realtime.worker.as_ref() {
+            let _ = worker.pause();
+            shared.realtime.state = RecorderRealtimeState::Paused;
+        }
+    }
+    Ok(())
+}
+
+fn persist_realtime_segments(
+    session_id: &str,
+    shared_ref: &Arc<Mutex<RecorderShared>>,
+    storage: &Arc<Mutex<Storage>>,
+) -> Result<(), String> {
+    let segments = {
+        let mut shared = shared_ref
+            .lock()
+            .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+        drain_realtime_events(&mut shared);
+        shared.realtime.segments.clone()
+    };
+
+    if segments.is_empty() {
+        return Ok(());
+    }
+
+    let mut storage_lock = storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let session = storage_lock
+        .data
+        .sessions
+        .get_mut(session_id)
+        .ok_or_else(|| "session not found".to_string())?;
+    session.transcript = segments
+        .into_iter()
+        .map(|mut segment| {
+            segment.translation_text = None;
+            segment.translation_target_language = None;
+            segment
+        })
+        .collect();
+    session.updated_at = now_iso();
+    storage_lock.save()?;
+    Ok(())
 }
 
 fn quality_config(preset: &RecordingQualityPreset) -> QualityConfig {
@@ -175,6 +718,114 @@ fn quality_config(preset: &RecordingQualityPreset) -> QualityConfig {
             output_bitrate: "128k",
         },
     }
+}
+
+fn make_input_device_id(name: &str, ordinal: usize) -> String {
+    format!("{ordinal}:{name}")
+}
+
+fn parse_input_device_id(raw: &str) -> Option<(usize, &str)> {
+    let (ordinal_raw, name) = raw.split_once(':')?;
+    let ordinal = ordinal_raw.parse::<usize>().ok()?;
+    let trimmed_name = name.trim();
+    if ordinal == 0 || trimmed_name.is_empty() {
+        return None;
+    }
+    Some((ordinal, trimmed_name))
+}
+
+fn list_input_device_entries(
+    host: &cpal::Host,
+) -> Result<(Vec<InputDeviceEntry>, Option<usize>), String> {
+    let default_name = host
+        .default_input_device()
+        .and_then(|device| device.name().ok());
+    let mut ordinal_by_name: HashMap<String, usize> = HashMap::new();
+    let mut entries = Vec::new();
+    let mut default_index = None;
+
+    let devices = host
+        .input_devices()
+        .map_err(|error| format!("failed to enumerate input devices: {error}"))?;
+    for device in devices {
+        let name = device
+            .name()
+            .unwrap_or_else(|_| UNKNOWN_INPUT_DEVICE_NAME.to_string());
+        let ordinal = ordinal_by_name
+            .entry(name.clone())
+            .and_modify(|value| *value += 1)
+            .or_insert(1);
+        if default_index.is_none() && default_name.as_deref() == Some(name.as_str()) {
+            default_index = Some(entries.len());
+        }
+        entries.push(InputDeviceEntry {
+            device,
+            id: make_input_device_id(&name, *ordinal),
+            name,
+        });
+    }
+
+    Ok((entries, default_index))
+}
+
+fn normalize_requested_input_device_id(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn resolve_input_device(
+    host: &cpal::Host,
+    requested_input_device_id: Option<String>,
+) -> Result<ResolvedInputDevice, String> {
+    let (mut entries, default_index) = list_input_device_entries(host)?;
+    if entries.is_empty() {
+        return Err("no input device available".to_string());
+    }
+
+    let resolved_default_index = default_index.unwrap_or(0);
+    let mut selected_index = resolved_default_index;
+    let mut fallback_from = None;
+
+    if let Some(requested_id) = requested_input_device_id {
+        if let Some(index) = entries.iter().position(|entry| entry.id == requested_id) {
+            selected_index = index;
+        } else {
+            let requested_name = parse_input_device_id(&requested_id)
+                .map(|(_, name)| name.to_string())
+                .or_else(|| {
+                    let trimmed = requested_id.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                });
+
+            if let Some(name) = requested_name {
+                if let Some(index) = entries.iter().position(|entry| entry.name == name) {
+                    selected_index = index;
+                } else {
+                    fallback_from = Some(requested_id);
+                }
+            } else {
+                fallback_from = Some(requested_id);
+            }
+        }
+    }
+
+    let selected = entries.swap_remove(selected_index);
+    Ok(ResolvedInputDevice {
+        device: selected.device,
+        id: selected.id,
+        name: selected.name,
+        fallback_from,
+    })
 }
 
 fn ffmpeg_candidates() -> [&'static str; 3] {
@@ -684,6 +1335,20 @@ fn process_i16_samples(
     };
     state.last_peak = peak;
 
+    if state.realtime.enabled {
+        let realtime_frame = resample_to_mono_16k(
+            data,
+            state.sample_rate,
+            state.channels,
+            &mut state.realtime.resample_state,
+        );
+        if !realtime_frame.is_empty() {
+            if let Some(worker) = state.realtime.worker.as_ref() {
+                worker.push_audio_frame(realtime_frame);
+            }
+        }
+    }
+
     rotate_segment_if_needed(&mut state, storage, processor_tx);
 }
 
@@ -773,6 +1438,7 @@ fn start_audio_thread(
     shared: Arc<Mutex<RecorderShared>>,
     storage: Arc<Mutex<Storage>>,
     processor_tx: mpsc::Sender<SegmentProcessorCommand>,
+    device: cpal::Device,
     stream_config: cpal::StreamConfig,
     sample_format: SampleFormat,
 ) -> Result<mpsc::Sender<AudioThreadCommand>, String> {
@@ -780,15 +1446,6 @@ fn start_audio_thread(
     let (init_tx, init_rx) = mpsc::channel::<Result<(), String>>();
 
     thread::spawn(move || {
-        let host = cpal::default_host();
-        let device = match host.default_input_device() {
-            Some(device) => device,
-            None => {
-                let _ = init_tx.send(Err("no input device available".to_string()));
-                return;
-            }
-        };
-
         let shared_for_data = Arc::clone(&shared);
         let storage_for_data = Arc::clone(&storage);
         let processor_tx_for_data = processor_tx.clone();
@@ -918,9 +1575,28 @@ fn start_audio_thread(
 }
 
 #[tauri::command]
+pub fn recorder_list_input_devices() -> Result<Vec<RecorderInputDevice>, String> {
+    let host = cpal::default_host();
+    let (entries, default_index) = list_input_device_entries(&host)?;
+    Ok(entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| RecorderInputDevice {
+            id: entry.id,
+            name: entry.name,
+            is_default: default_index == Some(index),
+        })
+        .collect())
+}
+
+#[tauri::command]
 pub fn recorder_start(
     input_device_id: Option<String>,
     quality_preset: Option<RecordingQualityPreset>,
+    realtime_enabled: Option<bool>,
+    realtime_source_language: Option<String>,
+    realtime_translate_enabled: Option<bool>,
+    realtime_translate_target_language: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<StartSessionResponse, String> {
     let mut runtime = recorder_runtime()
@@ -936,33 +1612,51 @@ pub fn recorder_start(
 
     let target_quality = quality_preset.unwrap_or_default();
     let target_config = quality_config(&target_quality);
-
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "no input device available".to_string())?;
-
-    let (stream_config, sample_format) = select_stream_config(
-        &device,
-        target_config.capture_sample_rate,
-        target_config.capture_channels,
-    )?;
+    let requested_input_device_id = normalize_requested_input_device_id(input_device_id);
 
     let session_id = Uuid::new_v4().to_string();
     let now = now_iso();
-    let actual_sample_rate = stream_config.sample_rate.0;
-    let actual_channels = stream_config.channels;
-    let (segment_dir, segment_duration_secs) = {
+    let (
+        segment_dir,
+        segment_duration_secs,
+        settings_input_device_id,
+        realtime_enabled_by_default,
+    ) = {
         let mut storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
         storage.data.settings.normalize();
+        let realtime_default = storage
+            .data
+            .settings
+            .providers
+            .iter()
+            .find(|provider| provider.kind == ProviderKind::AliyunTingwu)
+            .and_then(|provider| provider.aliyun_tingwu.as_ref())
+            .map(|config| config.realtime_enabled_by_default)
+            .unwrap_or(false);
         (
             storage.session_audio_dir(&session_id)?,
             storage.data.settings.recording_segment_seconds,
+            normalize_requested_input_device_id(
+                storage.data.settings.recording_input_device_id.clone(),
+            ),
+            realtime_default,
         )
     };
+    let preferred_input_device_id = requested_input_device_id.or(settings_input_device_id);
+
+    let host = cpal::default_host();
+    let resolved_device = resolve_input_device(&host, preferred_input_device_id)?;
+    let (stream_config, sample_format) = select_stream_config(
+        &resolved_device.device,
+        target_config.capture_sample_rate,
+        target_config.capture_channels,
+    )?;
+
+    let actual_sample_rate = stream_config.sample_rate.0;
+    let actual_channels = stream_config.channels;
 
     {
         let mut storage = state
@@ -978,7 +1672,7 @@ pub fn recorder_start(
                 status: SessionStatus::Recording,
                 created_at: now.clone(),
                 updated_at: now,
-                input_device_id,
+                input_device_id: Some(resolved_device.id.clone()),
                 audio_segments: vec![],
                 audio_segment_meta: vec![],
                 quality_preset: target_quality.clone(),
@@ -1009,6 +1703,17 @@ pub fn recorder_start(
     clear_processing_state(&session_id);
 
     let chunk_frames = segment_duration_secs.saturating_mul(u64::from(actual_sample_rate));
+    let realtime_requested = realtime_enabled.unwrap_or(realtime_enabled_by_default);
+    let realtime_source_language = realtime_source_language
+        .as_deref()
+        .and_then(normalize_realtime_source_language)
+        .unwrap_or_else(|| DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string());
+    let realtime_translation_target_language = realtime_translate_target_language
+        .as_deref()
+        .and_then(normalize_realtime_translation_target_language)
+        .unwrap_or_else(|| DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string());
+    let realtime_translation_enabled =
+        realtime_requested && realtime_translate_enabled.unwrap_or(false);
     let shared = Arc::new(Mutex::new(RecorderShared {
         session_id: session_id.clone(),
         segment_dir,
@@ -1024,6 +1729,13 @@ pub fn recorder_start(
         last_rms: 0.0,
         last_peak: 0.0,
         last_error: None,
+        realtime: RecorderRealtimeRuntime {
+            enabled: false,
+            source_language: realtime_source_language,
+            translation_enabled: realtime_translation_enabled,
+            translation_target_language: realtime_translation_target_language,
+            ..RecorderRealtimeRuntime::default()
+        },
     }));
 
     {
@@ -1038,6 +1750,7 @@ pub fn recorder_start(
         Arc::clone(&shared),
         Arc::clone(&state.storage),
         processor_tx,
+        resolved_device.device,
         stream_config,
         sample_format,
     )?;
@@ -1048,7 +1761,26 @@ pub fn recorder_start(
         shared,
     });
 
-    Ok(StartSessionResponse { session_id })
+    if realtime_requested {
+        let active_shared = match &*runtime {
+            RecorderRuntime::Active(active) => Arc::clone(&active.shared),
+            RecorderRuntime::Idle => unreachable!(),
+        };
+        if let Err(error) = start_realtime_runtime(&active_shared, &state.storage) {
+            if let Ok(mut shared_state) = active_shared.lock() {
+                shared_state.realtime.enabled = false;
+                shared_state.realtime.state = RecorderRealtimeState::Error;
+                shared_state.realtime.last_error = Some(error);
+            }
+        }
+    }
+
+    Ok(StartSessionResponse {
+        session_id,
+        input_device_id: Some(resolved_device.id),
+        input_device_name: Some(resolved_device.name),
+        fallback_from_input_device_id: resolved_device.fallback_from,
+    })
 }
 
 #[tauri::command]
@@ -1090,6 +1822,16 @@ pub fn recorder_pause(session_id: String, state: State<'_, AppState>) -> Result<
         SessionStatus::Paused,
         elapsed_ms,
     )?;
+
+    if let Ok(mut shared) = shared_ref.lock() {
+        drain_realtime_events(&mut shared);
+        if let Some(worker) = shared.realtime.worker.as_ref() {
+            if let Err(error) = worker.pause() {
+                shared.realtime.last_error = Some(error);
+                shared.realtime.state = RecorderRealtimeState::Error;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1131,6 +1873,16 @@ pub fn recorder_resume(session_id: String, state: State<'_, AppState>) -> Result
         SessionStatus::Recording,
         elapsed_ms,
     )?;
+
+    if let Ok(mut shared) = shared_ref.lock() {
+        drain_realtime_events(&mut shared);
+        if let Some(worker) = shared.realtime.worker.as_ref() {
+            if let Err(error) = worker.resume() {
+                shared.realtime.last_error = Some(error);
+                shared.realtime.state = RecorderRealtimeState::Error;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1166,6 +1918,9 @@ pub fn recorder_stop(session_id: String, state: State<'_, AppState>) -> Result<(
         elapsed_ms(&shared)
     };
 
+    let _ = stop_realtime_runtime(&active.shared, true);
+    let _ = persist_realtime_segments(&session_id, &active.shared, &state.storage);
+
     let (pending_jobs, last_error) = mark_finalizing(&session_id)?;
     let status = if pending_jobs == 0 {
         if last_error.is_some() {
@@ -1185,6 +1940,173 @@ pub fn recorder_stop(session_id: String, state: State<'_, AppState>) -> Result<(
 }
 
 #[tauri::command]
+pub fn recorder_toggle_realtime(
+    session_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let shared_ref = {
+        let runtime = recorder_runtime()
+            .lock()
+            .map_err(|_| "failed to acquire recorder runtime lock".to_string())?;
+        match &*runtime {
+            RecorderRuntime::Active(active) if active.session_id == session_id => {
+                Arc::clone(&active.shared)
+            }
+            RecorderRuntime::Active(_) => {
+                return Err("another session is currently recording".to_string());
+            }
+            RecorderRuntime::Idle => return Err("no active recorder".to_string()),
+        }
+    };
+
+    if enabled {
+        start_realtime_runtime(&shared_ref, &state.storage)?;
+        pause_realtime_if_session_paused(&session_id, &shared_ref, &state.storage)?;
+        return Ok(());
+    }
+
+    if let Ok(mut shared) = shared_ref.lock() {
+        shared.realtime.translation_enabled = false;
+    }
+    stop_realtime_runtime(&shared_ref, true)
+}
+
+#[tauri::command]
+pub fn recorder_toggle_realtime_translation(
+    session_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let shared_ref = {
+        let runtime = recorder_runtime()
+            .lock()
+            .map_err(|_| "failed to acquire recorder runtime lock".to_string())?;
+        match &*runtime {
+            RecorderRuntime::Active(active) if active.session_id == session_id => {
+                Arc::clone(&active.shared)
+            }
+            RecorderRuntime::Active(_) => {
+                return Err("another session is currently recording".to_string());
+            }
+            RecorderRuntime::Idle => return Err("no active recorder".to_string()),
+        }
+    };
+
+    let should_restart = {
+        let mut shared = shared_ref
+            .lock()
+            .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+        if !shared.realtime.enabled {
+            shared.realtime.translation_enabled = false;
+            return Err("realtime transcription is disabled".to_string());
+        }
+        shared.realtime.translation_enabled = enabled;
+        shared.realtime.worker.is_some()
+    };
+
+    if !should_restart {
+        return Ok(());
+    }
+
+    stop_realtime_runtime(&shared_ref, false)?;
+    start_realtime_runtime(&shared_ref, &state.storage)?;
+    pause_realtime_if_session_paused(&session_id, &shared_ref, &state.storage)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn recorder_set_realtime_translation_target(
+    session_id: String,
+    target_language: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let normalized_target = normalize_realtime_translation_target_language(&target_language)
+        .ok_or_else(|| {
+            format!(
+                "unsupported realtime translation target language: {}",
+                target_language
+            )
+        })?;
+    let shared_ref = {
+        let runtime = recorder_runtime()
+            .lock()
+            .map_err(|_| "failed to acquire recorder runtime lock".to_string())?;
+        match &*runtime {
+            RecorderRuntime::Active(active) if active.session_id == session_id => {
+                Arc::clone(&active.shared)
+            }
+            RecorderRuntime::Active(_) => {
+                return Err("another session is currently recording".to_string());
+            }
+            RecorderRuntime::Idle => return Err("no active recorder".to_string()),
+        }
+    };
+
+    let should_restart = {
+        let mut shared = shared_ref
+            .lock()
+            .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+        shared.realtime.translation_target_language = normalized_target;
+        shared.realtime.enabled && shared.realtime.translation_enabled && shared.realtime.worker.is_some()
+    };
+
+    if !should_restart {
+        return Ok(());
+    }
+
+    stop_realtime_runtime(&shared_ref, false)?;
+    start_realtime_runtime(&shared_ref, &state.storage)?;
+    pause_realtime_if_session_paused(&session_id, &shared_ref, &state.storage)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn recorder_set_realtime_source_language(
+    session_id: String,
+    source_language: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let normalized_source = normalize_realtime_source_language(&source_language).ok_or_else(|| {
+        format!(
+            "unsupported realtime source language: {}",
+            source_language
+        )
+    })?;
+    let shared_ref = {
+        let runtime = recorder_runtime()
+            .lock()
+            .map_err(|_| "failed to acquire recorder runtime lock".to_string())?;
+        match &*runtime {
+            RecorderRuntime::Active(active) if active.session_id == session_id => {
+                Arc::clone(&active.shared)
+            }
+            RecorderRuntime::Active(_) => {
+                return Err("another session is currently recording".to_string());
+            }
+            RecorderRuntime::Idle => return Err("no active recorder".to_string()),
+        }
+    };
+
+    let should_restart = {
+        let mut shared = shared_ref
+            .lock()
+            .map_err(|_| "failed to acquire recorder state lock".to_string())?;
+        shared.realtime.source_language = normalized_source;
+        shared.realtime.enabled && shared.realtime.worker.is_some()
+    };
+
+    if !should_restart {
+        return Ok(());
+    }
+
+    stop_realtime_runtime(&shared_ref, false)?;
+    start_realtime_runtime(&shared_ref, &state.storage)?;
+    pause_realtime_if_session_paused(&session_id, &shared_ref, &state.storage)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn recorder_status(
     session_id: String,
     state: State<'_, AppState>,
@@ -1193,10 +2115,18 @@ pub fn recorder_status(
         .lock()
         .map_err(|_| "failed to acquire recorder runtime lock".to_string())?;
 
-    let (elapsed_ms_runtime, rms, peak, pending_segment, runtime_phase, runtime_error) =
+    let (
+        elapsed_ms_runtime,
+        rms,
+        peak,
+        pending_segment,
+        runtime_phase,
+        runtime_error,
+        realtime,
+    ) =
         match &*runtime {
             RecorderRuntime::Active(active) if active.session_id == session_id => {
-                let shared = active
+                let mut shared = active
                     .shared
                     .lock()
                     .map_err(|_| "failed to acquire recorder state lock".to_string())?;
@@ -1212,9 +2142,29 @@ pub fn recorder_status(
                     usize::from(shared.open_segment.is_some()),
                     runtime_phase,
                     shared.last_error.clone(),
+                    realtime_status_snapshot(&mut shared),
                 )
             }
-            _ => (0, 0.0, 0.0, 0, RecorderPhase::Idle, None),
+            _ => (
+                0,
+                0.0,
+                0.0,
+                0,
+                RecorderPhase::Idle,
+                None,
+                RecorderRealtimeStatus {
+                    enabled: false,
+                    source_language: DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string(),
+                    translation_enabled: false,
+                    translation_target_language:
+                        DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string(),
+                    state: RecorderRealtimeState::Idle,
+                    preview_text: String::new(),
+                    segment_count: 0,
+                    segments: vec![],
+                    last_error: None,
+                },
+            ),
         };
 
     let storage = state
@@ -1255,6 +2205,7 @@ pub fn recorder_status(
         phase,
         pending_jobs: pending_jobs_total,
         last_processing_error,
+        realtime,
     })
 }
 
@@ -1564,5 +2515,25 @@ pub(crate) fn convert_single_file(
         Err(error) => Err(format!(
             "failed to run ffmpeg for export; ensure ffmpeg is installed: {error}"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{make_input_device_id, parse_input_device_id};
+
+    #[test]
+    fn parse_input_device_id_accepts_valid_values() {
+        let id = make_input_device_id("Built-in Microphone", 2);
+        let (ordinal, name) = parse_input_device_id(&id).expect("expected parsed input device id");
+        assert_eq!(ordinal, 2);
+        assert_eq!(name, "Built-in Microphone");
+    }
+
+    #[test]
+    fn parse_input_device_id_rejects_invalid_values() {
+        assert!(parse_input_device_id("abc").is_none());
+        assert!(parse_input_device_id("0:Built-in").is_none());
+        assert!(parse_input_device_id("1:   ").is_none());
     }
 }

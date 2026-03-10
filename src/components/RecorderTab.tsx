@@ -1,23 +1,36 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import type { Translator } from "../i18n";
-import type { RecordingQualityPreset } from "../types/domain";
+import type { RecordingQualityPreset, TranscriptSegment } from "../types/domain";
 
 type RecorderTabProps = {
   statusMessage: string;
   canRecord: boolean;
   hasRecording: boolean;
-  canExport: boolean;
   elapsedMs: number;
   waveformPoints: number[];
+  realtimeEnabled: boolean;
+  realtimeToggleDisabled: boolean;
+  realtimeSourceLanguage: string;
+  realtimeSourceLanguageDisabled: boolean;
+  realtimeTranslationEnabled: boolean;
+  realtimeTranslationToggleDisabled: boolean;
+  realtimeTranslationTargetLanguage: string;
+  realtimeTranslationTargetDisabled: boolean;
+  realtimePreviewText: string;
+  realtimeSegments: TranscriptSegment[];
+  realtimeState: "idle" | "connecting" | "running" | "paused" | "stopping" | "error";
+  realtimeLastError?: string;
   qualityPreset: RecordingQualityPreset;
   onQualityChange: (preset: RecordingQualityPreset) => void;
+  onRealtimeToggle: (enabled: boolean) => void;
+  onRealtimeSourceLanguageChange: (sourceLanguage: string) => void;
+  onRealtimeTranslationToggle: (enabled: boolean) => void;
+  onRealtimeTranslationTargetChange: (targetLanguage: string) => void;
   onStart: () => void;
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
-  onExportM4a: () => void;
-  onExportMp3: () => void;
   t: Translator;
 };
 
@@ -63,16 +76,6 @@ function IconStop({ title }: IconProps) {
   );
 }
 
-function IconDownload({ title }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <title>{title}</title>
-      <path d="M11 4h2v8h3l-4 5-4-5h3z" fill="currentColor" />
-      <rect x="5" y="19" width="14" height="2" fill="currentColor" />
-    </svg>
-  );
-}
-
 function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -84,21 +87,41 @@ function formatDuration(ms: number): string {
   return `${hourPart}:${minutePart}:${secondPart}`;
 }
 
+function formatSegmentTime(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function RecorderTab({
   statusMessage,
   canRecord,
   hasRecording,
-  canExport,
   elapsedMs,
   waveformPoints,
+  realtimeEnabled,
+  realtimeToggleDisabled,
+  realtimeSourceLanguage,
+  realtimeSourceLanguageDisabled,
+  realtimeTranslationEnabled,
+  realtimeTranslationToggleDisabled,
+  realtimeTranslationTargetLanguage,
+  realtimeTranslationTargetDisabled,
+  realtimePreviewText,
+  realtimeSegments,
+  realtimeState,
+  realtimeLastError,
   qualityPreset,
   onQualityChange,
+  onRealtimeToggle,
+  onRealtimeSourceLanguageChange,
+  onRealtimeTranslationToggle,
+  onRealtimeTranslationTargetChange,
   onStart,
   onPause,
   onResume,
   onStop,
-  onExportM4a,
-  onExportMp3,
   t
 }: RecorderTabProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -146,7 +169,7 @@ function RecorderTab({
 
     waveformPoints.forEach((point, index) => {
       const x = index * step;
-      const normalized = Math.min(1, Math.max(0, point));
+      const normalized = Math.min(1, Math.max(0, point * 2.4));
       const y = height - normalized * height;
       if (index === 0) {
         context.moveTo(x, y);
@@ -157,6 +180,26 @@ function RecorderTab({
 
     context.stroke();
   }, [waveformPoints]);
+
+  const realtimeStateLabel = (() => {
+    switch (realtimeState) {
+      case "connecting":
+        return t("recorder.realtime.state.connecting");
+      case "running":
+        return t("recorder.realtime.state.running");
+      case "paused":
+        return t("recorder.realtime.state.paused");
+      case "stopping":
+        return t("recorder.realtime.state.stopping");
+      case "error":
+        return t("recorder.realtime.state.error");
+      default:
+        return t("recorder.realtime.state.idle");
+    }
+  })();
+
+  const realtimeStateClass = `realtime-state-badge state-${realtimeState}`;
+  const hasRealtimeSegments = realtimeSegments.length > 0;
 
   return (
     <section className="panel recorder-panel">
@@ -180,14 +223,15 @@ function RecorderTab({
               <option value="hifi">{t("recorder.quality.hifi")}</option>
             </select>
           </label>
-          <p className="segment-hint">{t("recorder.segmentLength")}</p>
         </div>
       </header>
 
       <div className="recorder-timer-section">
-        <div className="recorder-duration">{durationLabel}</div>
-        <div className="recorder-status-row">
-          <span className="status-chip">{statusMessage}</span>
+        <div className="recorder-timer-row">
+          <div className="recorder-duration">{durationLabel}</div>
+          <div className="recorder-status-row">
+            <span className="status-chip">{statusMessage}</span>
+          </div>
         </div>
       </div>
 
@@ -242,28 +286,96 @@ function RecorderTab({
         </button>
       </div>
 
-      <div className="export-grid">
-        <button
-          type="button"
-          onClick={onExportM4a}
-          disabled={!canExport}
-          className="icon-button secondary"
-          aria-label={t("recorder.exportM4a")}
-        >
-          <IconDownload title={t("recorder.exportM4a")} />
-          <span>{t("recorder.exportM4a")}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onExportMp3}
-          disabled={!canExport}
-          className="icon-button secondary"
-          aria-label={t("recorder.exportMp3")}
-        >
-          <IconDownload title={t("recorder.exportMp3")} />
-          <span>{t("recorder.exportMp3")}</span>
-        </button>
+      <div className="realtime-preview-panel">
+        <div className="realtime-preview-top">
+          <div className="realtime-preview-header">
+            <span>{t("recorder.realtime.title")}</span>
+            <strong className={realtimeStateClass}>{realtimeStateLabel}</strong>
+          </div>
+          <div className="realtime-controls">
+            <label className="ios-switch-control with-label" aria-label={t("recorder.realtime.toggle")}>
+              <span className="ios-switch-label">{t("recorder.realtime.toggle")}</span>
+              <input
+                type="checkbox"
+                checked={realtimeEnabled}
+                disabled={realtimeToggleDisabled}
+                onChange={(event) => onRealtimeToggle(event.target.checked)}
+              />
+              <span className="ios-switch-track">
+                <span className="ios-switch-thumb" />
+              </span>
+            </label>
+            <label className="ios-switch-control with-label" aria-label={t("recorder.realtime.translationToggle")}>
+              <span className="ios-switch-label">{t("recorder.realtime.translationToggle")}</span>
+              <input
+                type="checkbox"
+                checked={realtimeTranslationEnabled}
+                disabled={realtimeTranslationToggleDisabled}
+                onChange={(event) => onRealtimeTranslationToggle(event.target.checked)}
+              />
+              <span className="ios-switch-track">
+                <span className="ios-switch-thumb" />
+              </span>
+            </label>
+            <label className="realtime-translation-target">
+              <span>{t("recorder.realtime.sourceLanguage")}</span>
+              <select
+                value={realtimeSourceLanguage}
+                disabled={realtimeSourceLanguageDisabled}
+                onChange={(event) => onRealtimeSourceLanguageChange(event.target.value)}
+              >
+                <option value="cn">{t("recorder.realtime.sourceLanguage.cn")}</option>
+                <option value="en">{t("recorder.realtime.sourceLanguage.en")}</option>
+              </select>
+            </label>
+            <label className="realtime-translation-target">
+              <span>{t("recorder.realtime.translationTarget")}</span>
+              <select
+                value={realtimeTranslationTargetLanguage}
+                disabled={realtimeTranslationTargetDisabled}
+                onChange={(event) => onRealtimeTranslationTargetChange(event.target.value)}
+              >
+                <option value="en">{t("recorder.realtime.translationTargetLanguage.en")}</option>
+                <option value="cn">{t("recorder.realtime.translationTargetLanguage.zh")}</option>
+                <option value="ja">{t("recorder.realtime.translationTargetLanguage.ja")}</option>
+                <option value="ko">{t("recorder.realtime.translationTargetLanguage.ko")}</option>
+                <option value="fr">{t("recorder.realtime.translationTargetLanguage.fr")}</option>
+                <option value="de">{t("recorder.realtime.translationTargetLanguage.de")}</option>
+                <option value="es">{t("recorder.realtime.translationTargetLanguage.es")}</option>
+                <option value="ru">{t("recorder.realtime.translationTargetLanguage.ru")}</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        {realtimeLastError ? <p className="realtime-preview-error">{realtimeLastError}</p> : null}
+        {!hasRealtimeSegments && !realtimePreviewText && (
+          <p className="empty-hint">{t("recorder.realtime.empty")}</p>
+        )}
+        {hasRealtimeSegments && (
+          <ul className="transcript-list realtime-transcript-list">
+            {realtimeSegments.map((segment, index) => (
+              <li
+                key={`${index}-${segment.startMs}-${segment.endMs}`}
+                className="realtime-transcript-item"
+              >
+                <span className="realtime-segment-time">
+                  {formatSegmentTime(segment.startMs)} - {formatSegmentTime(segment.endMs)}
+                </span>
+                <span className="realtime-segment-content">
+                  <span className="realtime-segment-text">{segment.text}</span>
+                  {realtimeTranslationEnabled ? (
+                    <span className="realtime-segment-translation">
+                      {segment.translationText?.trim() || t("recorder.realtime.translationUnavailable")}
+                    </span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {!hasRealtimeSegments && realtimePreviewText && (
+          <pre className="realtime-preview-fallback">{realtimePreviewText}</pre>
+        )}
       </div>
     </section>
   );

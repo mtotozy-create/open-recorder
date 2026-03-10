@@ -23,6 +23,8 @@ export type TranscriptSegment = {
   startMs: number;
   endMs: number;
   text: string;
+  translationText?: string;
+  translationTargetLanguage?: string;
   confidence?: number;
   speakerId?: string;
   speakerLabel?: string;
@@ -83,6 +85,8 @@ export type AliyunTingwuProviderSettings = {
   transcriptionPunctuationPredictionEnabled: boolean;
   transcriptionDisfluencyRemovalEnabled: boolean;
   transcriptionSpeakerDiarizationEnabled: boolean;
+  realtimeEnabledByDefault: boolean;
+  realtimeOutputLevel: 1 | 2;
   pollIntervalSeconds: number;
   maxPollingMinutes: number;
 };
@@ -131,9 +135,23 @@ export type Settings = {
   selectedTranscriptionProviderId: string;
   selectedSummaryProviderId: string;
   recordingSegmentSeconds: number;
+  recordingInputDeviceId?: string | null;
   sessionTagCatalog: string[];
   defaultTemplateId: string;
   templates: PromptTemplate[];
+};
+
+export type RecorderInputDevice = {
+  id: string;
+  name: string;
+  isDefault: boolean;
+};
+
+export type StartRecordingResponse = {
+  sessionId: string;
+  inputDeviceId?: string;
+  inputDeviceName?: string;
+  fallbackFromInputDeviceId?: string;
 };
 
 export type LocalProviderStatus = {
@@ -201,6 +219,17 @@ export type RecorderRuntimeStatus = {
   phase: RecorderPhase;
   pendingJobs: number;
   lastProcessingError?: string;
+  realtime: {
+    enabled: boolean;
+    sourceLanguage: string;
+    translationEnabled: boolean;
+    translationTargetLanguage: string;
+    state: "idle" | "connecting" | "running" | "paused" | "stopping" | "error";
+    previewText: string;
+    segmentCount: number;
+    segments: TranscriptSegment[];
+    lastError?: string;
+  };
 };
 
 export type RecorderProcessingStatus = {

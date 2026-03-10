@@ -274,6 +274,8 @@ pub fn transcribe_with_local_stt(
             start_ms: segment.start_ms,
             end_ms: segment.end_ms.max(segment.start_ms),
             text: segment.text,
+            translation_text: None,
+            translation_target_language: None,
             confidence: segment.confidence,
             speaker_id: segment.speaker_id,
             speaker_label: segment.speaker_label,

@@ -226,6 +226,8 @@ pub struct AliyunTingwuProviderSettings {
     pub transcription_punctuation_prediction_enabled: bool,
     pub transcription_disfluency_removal_enabled: bool,
     pub transcription_speaker_diarization_enabled: bool,
+    pub realtime_enabled_by_default: bool,
+    pub realtime_output_level: u8,
     pub poll_interval_seconds: u64,
     pub max_polling_minutes: u64,
     #[serde(rename = "oss", default, skip_serializing)]
@@ -247,6 +249,8 @@ impl Default for AliyunTingwuProviderSettings {
             transcription_punctuation_prediction_enabled: true,
             transcription_disfluency_removal_enabled: false,
             transcription_speaker_diarization_enabled: true,
+            realtime_enabled_by_default: false,
+            realtime_output_level: 1,
             poll_interval_seconds: 60,
             max_polling_minutes: 180,
             legacy_oss: None,
@@ -380,6 +384,8 @@ pub struct TranscriptSegment {
     pub start_ms: u64,
     pub end_ms: u64,
     pub text: String,
+    pub translation_text: Option<String>,
+    pub translation_target_language: Option<String>,
     pub confidence: Option<f32>,
     pub speaker_id: Option<String>,
     pub speaker_label: Option<String>,
@@ -447,6 +453,8 @@ pub struct Settings {
     pub selected_summary_provider_id: String,
     #[serde(default = "default_recording_segment_seconds")]
     pub recording_segment_seconds: u64,
+    #[serde(default)]
+    pub recording_input_device_id: Option<String>,
     #[serde(default = "default_session_tag_catalog")]
     pub session_tag_catalog: Vec<String>,
     pub default_template_id: String,
@@ -537,6 +545,7 @@ impl Default for Settings {
             selected_transcription_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
             selected_summary_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
             recording_segment_seconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
+            recording_input_device_id: None,
             session_tag_catalog: default_session_tag_catalog(),
             default_template_id: "meeting-default".to_string(),
             templates: vec![create_default_template()],
@@ -654,6 +663,14 @@ impl Settings {
         self.recording_segment_seconds = self
             .recording_segment_seconds
             .clamp(MIN_RECORDING_SEGMENT_SECONDS, MAX_RECORDING_SEGMENT_SECONDS);
+        self.recording_input_device_id = self.recording_input_device_id.clone().and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
     }
 
     fn migrate_legacy_providers(&self) -> (Vec<ProviderConfig>, ProviderOssSettings) {
@@ -741,6 +758,8 @@ impl Settings {
                 transcription_speaker_diarization_enabled: self
                     .legacy_aliyun_transcription_speaker_diarization_enabled
                     .unwrap_or(default_aliyun.transcription_speaker_diarization_enabled),
+                realtime_enabled_by_default: default_aliyun.realtime_enabled_by_default,
+                realtime_output_level: default_aliyun.realtime_output_level,
                 poll_interval_seconds: self
                     .legacy_aliyun_poll_interval_seconds
                     .unwrap_or(default_aliyun.poll_interval_seconds),
@@ -906,6 +925,7 @@ fn normalize_provider(provider: &mut ProviderConfig) {
             let mut config = provider.aliyun_tingwu.clone().unwrap_or_default();
             config.poll_interval_seconds = config.poll_interval_seconds.clamp(60, 300);
             config.max_polling_minutes = config.max_polling_minutes.clamp(5, 720);
+            config.realtime_output_level = config.realtime_output_level.clamp(1, 2);
             config.legacy_oss = None;
             Some(config)
         }
@@ -1368,6 +1388,17 @@ pub struct Job {
 #[serde(rename_all = "camelCase")]
 pub struct StartSessionResponse {
     pub session_id: String,
+    pub input_device_id: Option<String>,
+    pub input_device_name: Option<String>,
+    pub fallback_from_input_device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecorderInputDevice {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1383,6 +1414,32 @@ pub struct RecorderStatus {
     pub phase: RecorderPhase,
     pub pending_jobs: usize,
     pub last_processing_error: Option<String>,
+    pub realtime: RecorderRealtimeStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecorderRealtimeState {
+    Idle,
+    Connecting,
+    Running,
+    Paused,
+    Stopping,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecorderRealtimeStatus {
+    pub enabled: bool,
+    pub source_language: String,
+    pub translation_enabled: bool,
+    pub translation_target_language: String,
+    pub state: RecorderRealtimeState,
+    pub preview_text: String,
+    pub segment_count: usize,
+    pub segments: Vec<TranscriptSegment>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1427,6 +1484,7 @@ pub struct SettingsPatch {
     pub selected_transcription_provider_id: Option<String>,
     pub selected_summary_provider_id: Option<String>,
     pub recording_segment_seconds: Option<u64>,
+    pub recording_input_device_id: Option<String>,
     pub session_tag_catalog: Option<Vec<String>>,
     pub default_template_id: Option<String>,
     pub templates: Option<Vec<PromptTemplate>>,
@@ -1509,6 +1567,21 @@ mod tests {
         settings.recording_segment_seconds = 3600;
         settings.normalize();
         assert_eq!(settings.recording_segment_seconds, 1800);
+    }
+
+    #[test]
+    fn normalize_trims_recording_input_device_id() {
+        let mut settings = Settings::default();
+        settings.recording_input_device_id = Some("  1:Built-in Microphone  ".to_string());
+        settings.normalize();
+        assert_eq!(
+            settings.recording_input_device_id.as_deref(),
+            Some("1:Built-in Microphone")
+        );
+
+        settings.recording_input_device_id = Some("   ".to_string());
+        settings.normalize();
+        assert!(settings.recording_input_device_id.is_none());
     }
 
     #[test]

@@ -161,6 +161,8 @@ pub fn transcribe_with_aliyun_tingwu(
             start_ms,
             end_ms,
             text,
+            translation_text: None,
+            translation_target_language: None,
             confidence: None,
             speaker_id: None,
             speaker_label: None,

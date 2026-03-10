@@ -2,23 +2,36 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   JobInfo,
   LocalProviderStatus,
+  RecorderInputDevice,
   RecorderProcessingStatus,
   RecorderRuntimeStatus,
   RecordingQualityPreset,
   SessionDetail,
   SessionSummary,
+  StartRecordingResponse,
   Settings
 } from "../types/domain";
 
 export async function startRecording(
   inputDeviceId?: string,
-  qualityPreset: RecordingQualityPreset = "standard"
-): Promise<string> {
-  const response = await invoke<{ sessionId: string }>("recorder_start", {
+  qualityPreset: RecordingQualityPreset = "standard",
+  realtimeEnabled?: boolean,
+  realtimeSourceLanguage?: string,
+  realtimeTranslateEnabled?: boolean,
+  realtimeTranslateTargetLanguage?: string
+): Promise<StartRecordingResponse> {
+  return invoke<StartRecordingResponse>("recorder_start", {
     inputDeviceId,
-    qualityPreset
+    qualityPreset,
+    realtimeEnabled,
+    realtimeSourceLanguage,
+    realtimeTranslateEnabled,
+    realtimeTranslateTargetLanguage
   });
-  return response.sessionId;
+}
+
+export async function listInputDevices(): Promise<RecorderInputDevice[]> {
+  return invoke("recorder_list_input_devices");
 }
 
 export async function pauseRecording(sessionId: string): Promise<void> {
@@ -31,6 +44,34 @@ export async function resumeRecording(sessionId: string): Promise<void> {
 
 export async function stopRecording(sessionId: string): Promise<void> {
   await invoke("recorder_stop", { sessionId });
+}
+
+export async function toggleRealtimeTranscription(
+  sessionId: string,
+  enabled: boolean
+): Promise<void> {
+  await invoke("recorder_toggle_realtime", { sessionId, enabled });
+}
+
+export async function toggleRealtimeTranslation(
+  sessionId: string,
+  enabled: boolean
+): Promise<void> {
+  await invoke("recorder_toggle_realtime_translation", { sessionId, enabled });
+}
+
+export async function setRealtimeTranslationTargetLanguage(
+  sessionId: string,
+  targetLanguage: string
+): Promise<void> {
+  await invoke("recorder_set_realtime_translation_target", { sessionId, targetLanguage });
+}
+
+export async function setRealtimeSourceLanguage(
+  sessionId: string,
+  sourceLanguage: string
+): Promise<void> {
+  await invoke("recorder_set_realtime_source_language", { sessionId, sourceLanguage });
 }
 
 export async function getRecorderStatus(sessionId: string): Promise<RecorderRuntimeStatus> {

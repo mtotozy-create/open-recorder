@@ -339,27 +339,33 @@ p {
   gap: 12px;
 }
 
-/* Large Timer */
 .recorder-duration {
   font-family: "Space Grotesk", sans-serif;
-  font-size: 3rem;
+  font-size: 2.05rem;
   font-weight: 700;
   color: var(--text-0);
-  text-align: center;
-  letter-spacing: 0.04em;
+  text-align: left;
+  letter-spacing: 0.02em;
   line-height: 1;
-  padding: 8px 0 4px;
+  padding: 0;
 }
 
 .recorder-timer-section {
-  text-align: center;
-  padding: 8px 0;
+  padding: 2px 0 4px;
+}
+
+.recorder-timer-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .recorder-status-row {
   display: flex;
-  justify-content: center;
-  margin-top: 8px;
+  align-items: center;
+  margin-top: 0;
 }
 
 /* Recording status chip */
@@ -368,12 +374,22 @@ p {
   align-items: center;
   gap: 6px;
   border-radius: 999px;
-  padding: 5px 14px;
+  padding: 4px 11px;
   background: var(--primary-soft);
   color: var(--primary);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 600;
   border: 1px solid #bfdbfe;
+}
+
+@media (max-width: 640px) {
+  .recorder-duration {
+    font-size: 1.8rem;
+  }
+
+  .recorder-timer-row {
+    gap: 8px;
+  }
 }
 
 .recorder-metric-card {
@@ -404,7 +420,7 @@ p {
 
 .recorder-controls-row {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) auto;
+  grid-template-columns: minmax(200px, 1fr);
   align-items: end;
   gap: 10px;
 }
@@ -452,9 +468,250 @@ p {
 
 .waveform-panel canvas {
   width: 100%;
-  height: 160px;
+  height: 80px;
   display: block;
   border-radius: 6px;
+}
+
+.realtime-preview-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.realtime-preview-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.realtime-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
+.realtime-preview-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.realtime-state-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.realtime-state-badge.state-idle {
+  color: #334155;
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+}
+
+.realtime-state-badge.state-connecting {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
+.realtime-state-badge.state-running {
+  color: #065f46;
+  background: #d1fae5;
+  border-color: #6ee7b7;
+}
+
+.realtime-state-badge.state-paused {
+  color: #854d0e;
+  background: #fef9c3;
+  border-color: #fde047;
+}
+
+.realtime-state-badge.state-stopping {
+  color: #1e40af;
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.realtime-state-badge.state-error {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.realtime-preview-error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 0.82rem;
+}
+
+.realtime-transcript-list {
+  margin: 0;
+  min-height: 240px;
+  max-height: 440px;
+  overflow: auto;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  padding: 8px 10px;
+  display: block;
+  gap: 0;
+}
+
+.realtime-transcript-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+  line-height: 1.35;
+}
+
+.realtime-transcript-item + .realtime-transcript-item {
+  margin-top: 2px;
+}
+
+.realtime-segment-time {
+  flex: 0 0 94px;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 0.73rem;
+  font-weight: 600;
+}
+
+.realtime-segment-text {
+  display: block;
+  color: var(--text-0);
+  font-size: 0.84rem;
+  word-break: break-word;
+}
+
+.realtime-segment-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.realtime-segment-translation {
+  margin-top: 2px;
+  display: block;
+  color: #475569;
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+.realtime-translation-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.realtime-translation-target select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: #ffffff;
+  color: var(--text-0);
+}
+
+.realtime-translation-target select:disabled {
+  opacity: 0.7;
+}
+
+.realtime-preview-fallback {
+  margin: 0;
+  min-height: 240px;
+  max-height: 440px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  padding: 10px;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--text-0);
+}
+
+.ios-switch-control {
+  display: inline-flex;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ios-switch-control.with-label {
+  gap: 6px;
+  align-items: center;
+}
+
+.ios-switch-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.ios-switch-control input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.ios-switch-track {
+  width: 46px;
+  height: 28px;
+  border-radius: 999px;
+  background: #d1d5db;
+  padding: 2px;
+  transition: background-color 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ios-switch-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
+  transform: translateX(0);
+  transition: transform 0.2s ease;
+}
+
+.ios-switch-control input:checked + .ios-switch-track {
+  background: #22c55e;
+}
+
+.ios-switch-control input:checked + .ios-switch-track .ios-switch-thumb {
+  transform: translateX(18px);
+}
+
+.ios-switch-control input:disabled + .ios-switch-track {
+  opacity: 0.5;
+}
+
+.ios-switch-control input:focus-visible + .ios-switch-track {
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25);
 }
 
 /* Button grids */
