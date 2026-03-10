@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 const DEFAULT_BAILIAN_PROVIDER_ID: &str = "bailian-default";
 const DEFAULT_ALIYUN_PROVIDER_ID: &str = "aliyun-tingwu-default";
@@ -227,7 +228,31 @@ pub struct AliyunTingwuProviderSettings {
     pub transcription_disfluency_removal_enabled: bool,
     pub transcription_speaker_diarization_enabled: bool,
     pub realtime_enabled_by_default: bool,
+    #[serde(default, skip_serializing)]
     pub realtime_output_level: u8,
+    pub realtime_format: String,
+    pub realtime_sample_rate: u32,
+    pub realtime_source_language: String,
+    pub realtime_language_hints: Option<String>,
+    pub realtime_task_key: Option<String>,
+    pub realtime_progressive_callbacks_enabled: bool,
+    pub realtime_transcoding_target_audio_format: Option<String>,
+    pub realtime_transcription_output_level: u8,
+    pub realtime_transcription_diarization_enabled: bool,
+    pub realtime_transcription_diarization_speaker_count: Option<u32>,
+    pub realtime_transcription_phrase_id: Option<String>,
+    pub realtime_translation_enabled: bool,
+    pub realtime_translation_output_level: u8,
+    pub realtime_translation_target_languages: Option<String>,
+    pub realtime_auto_chapters_enabled: bool,
+    pub realtime_meeting_assistance_enabled: bool,
+    pub realtime_summarization_enabled: bool,
+    pub realtime_summarization_types: Option<String>,
+    pub realtime_text_polish_enabled: bool,
+    pub realtime_service_inspection_enabled: bool,
+    pub realtime_service_inspection: Option<Value>,
+    pub realtime_custom_prompt_enabled: bool,
+    pub realtime_custom_prompt: Option<Value>,
     pub poll_interval_seconds: u64,
     pub max_polling_minutes: u64,
     #[serde(rename = "oss", default, skip_serializing)]
@@ -251,6 +276,29 @@ impl Default for AliyunTingwuProviderSettings {
             transcription_speaker_diarization_enabled: true,
             realtime_enabled_by_default: false,
             realtime_output_level: 1,
+            realtime_format: "pcm".to_string(),
+            realtime_sample_rate: 16000,
+            realtime_source_language: "cn".to_string(),
+            realtime_language_hints: None,
+            realtime_task_key: None,
+            realtime_progressive_callbacks_enabled: false,
+            realtime_transcoding_target_audio_format: None,
+            realtime_transcription_output_level: 1,
+            realtime_transcription_diarization_enabled: false,
+            realtime_transcription_diarization_speaker_count: None,
+            realtime_transcription_phrase_id: None,
+            realtime_translation_enabled: false,
+            realtime_translation_output_level: 1,
+            realtime_translation_target_languages: Some("en".to_string()),
+            realtime_auto_chapters_enabled: false,
+            realtime_meeting_assistance_enabled: false,
+            realtime_summarization_enabled: false,
+            realtime_summarization_types: None,
+            realtime_text_polish_enabled: false,
+            realtime_service_inspection_enabled: false,
+            realtime_service_inspection: None,
+            realtime_custom_prompt_enabled: false,
+            realtime_custom_prompt: None,
             poll_interval_seconds: 60,
             max_polling_minutes: 180,
             legacy_oss: None,
@@ -760,6 +808,41 @@ impl Settings {
                     .unwrap_or(default_aliyun.transcription_speaker_diarization_enabled),
                 realtime_enabled_by_default: default_aliyun.realtime_enabled_by_default,
                 realtime_output_level: default_aliyun.realtime_output_level,
+                realtime_format: default_aliyun.realtime_format.clone(),
+                realtime_sample_rate: default_aliyun.realtime_sample_rate,
+                realtime_source_language: default_aliyun.realtime_source_language.clone(),
+                realtime_language_hints: default_aliyun.realtime_language_hints.clone(),
+                realtime_task_key: default_aliyun.realtime_task_key.clone(),
+                realtime_progressive_callbacks_enabled: default_aliyun
+                    .realtime_progressive_callbacks_enabled,
+                realtime_transcoding_target_audio_format: default_aliyun
+                    .realtime_transcoding_target_audio_format
+                    .clone(),
+                realtime_transcription_output_level: default_aliyun
+                    .realtime_transcription_output_level,
+                realtime_transcription_diarization_enabled: default_aliyun
+                    .realtime_transcription_diarization_enabled,
+                realtime_transcription_diarization_speaker_count: default_aliyun
+                    .realtime_transcription_diarization_speaker_count,
+                realtime_transcription_phrase_id: default_aliyun
+                    .realtime_transcription_phrase_id
+                    .clone(),
+                realtime_translation_enabled: default_aliyun.realtime_translation_enabled,
+                realtime_translation_output_level: default_aliyun.realtime_translation_output_level,
+                realtime_translation_target_languages: default_aliyun
+                    .realtime_translation_target_languages
+                    .clone(),
+                realtime_auto_chapters_enabled: default_aliyun.realtime_auto_chapters_enabled,
+                realtime_meeting_assistance_enabled: default_aliyun
+                    .realtime_meeting_assistance_enabled,
+                realtime_summarization_enabled: default_aliyun.realtime_summarization_enabled,
+                realtime_summarization_types: default_aliyun.realtime_summarization_types.clone(),
+                realtime_text_polish_enabled: default_aliyun.realtime_text_polish_enabled,
+                realtime_service_inspection_enabled: default_aliyun
+                    .realtime_service_inspection_enabled,
+                realtime_service_inspection: default_aliyun.realtime_service_inspection.clone(),
+                realtime_custom_prompt_enabled: default_aliyun.realtime_custom_prompt_enabled,
+                realtime_custom_prompt: default_aliyun.realtime_custom_prompt.clone(),
                 poll_interval_seconds: self
                     .legacy_aliyun_poll_interval_seconds
                     .unwrap_or(default_aliyun.poll_interval_seconds),
@@ -926,6 +1009,58 @@ fn normalize_provider(provider: &mut ProviderConfig) {
             config.poll_interval_seconds = config.poll_interval_seconds.clamp(60, 300);
             config.max_polling_minutes = config.max_polling_minutes.clamp(5, 720);
             config.realtime_output_level = config.realtime_output_level.clamp(1, 2);
+            if config.realtime_transcription_output_level == 1
+                && config.realtime_translation_output_level == 1
+                && config.realtime_output_level == 2
+            {
+                config.realtime_transcription_output_level = 2;
+                config.realtime_translation_output_level = 2;
+            }
+            config.realtime_transcription_output_level =
+                config.realtime_transcription_output_level.clamp(1, 2);
+            config.realtime_translation_output_level =
+                config.realtime_translation_output_level.clamp(1, 2);
+            config.realtime_sample_rate = if config.realtime_sample_rate == 8000 {
+                8000
+            } else {
+                16000
+            };
+            config.realtime_format = match config.realtime_format.trim().to_ascii_lowercase().as_str()
+            {
+                "pcm" | "opus" | "aac" | "speex" | "mp3" => {
+                    config.realtime_format.trim().to_ascii_lowercase()
+                }
+                _ => "pcm".to_string(),
+            };
+            config.realtime_source_language = match config
+                .realtime_source_language
+                .trim()
+                .to_ascii_lowercase()
+                .replace('_', "-")
+                .as_str()
+            {
+                "zh" | "zh-cn" | "cn" => "cn".to_string(),
+                "en" | "yue" | "ja" | "ko" | "multilingual" => config
+                    .realtime_source_language
+                    .trim()
+                    .to_ascii_lowercase()
+                    .replace('_', "-"),
+                _ => "cn".to_string(),
+            };
+            config.realtime_transcoding_target_audio_format = config
+                .realtime_transcoding_target_audio_format
+                .clone()
+                .and_then(|value| {
+                    let normalized = value.trim().to_ascii_lowercase();
+                    if normalized == "mp3" {
+                        Some("mp3".to_string())
+                    } else {
+                        None
+                    }
+                });
+            config.realtime_transcription_diarization_speaker_count = config
+                .realtime_transcription_diarization_speaker_count
+                .map(|value| value.clamp(0, 64));
             config.legacy_oss = None;
             Some(config)
         }

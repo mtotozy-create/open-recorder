@@ -22,7 +22,7 @@ const ALIYUN_SIGNATURE_METHOD: &str = "HMAC-SHA1";
 const ALIYUN_SIGNATURE_VERSION: &str = "1.0";
 const TINGWU_WS_NAMESPACE: &str = "SpeechTranscriber";
 const TINGWU_WS_APPKEY_DEFAULT: &str = "default";
-const TINGWU_WS_AUDIO_CHUNK_BYTES: usize = 3200;
+const TINGWU_WS_AUDIO_CHUNK_BYTES_16K: usize = 3200;
 
 #[derive(Debug, Clone)]
 pub struct AliyunTingwuRealtimeConfig {
@@ -30,11 +30,29 @@ pub struct AliyunTingwuRealtimeConfig {
     pub access_key_secret: String,
     pub app_key: String,
     pub endpoint: String,
+    pub format: String,
+    pub sample_rate: u32,
     pub source_language: String,
     pub language_hints: Vec<String>,
-    pub output_level: u8,
+    pub task_key: Option<String>,
+    pub progressive_callbacks_enabled: bool,
+    pub transcoding_target_audio_format: Option<String>,
+    pub transcription_output_level: u8,
+    pub transcription_diarization_enabled: bool,
+    pub transcription_diarization_speaker_count: Option<u32>,
+    pub transcription_phrase_id: Option<String>,
     pub translation_enabled: bool,
-    pub translation_target_language: String,
+    pub translation_output_level: u8,
+    pub translation_target_languages: Vec<String>,
+    pub auto_chapters_enabled: bool,
+    pub meeting_assistance_enabled: bool,
+    pub summarization_enabled: bool,
+    pub summarization_types: Vec<String>,
+    pub text_polish_enabled: bool,
+    pub service_inspection_enabled: bool,
+    pub service_inspection: Option<Value>,
+    pub custom_prompt_enabled: bool,
+    pub custom_prompt: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -149,6 +167,14 @@ pub fn start_realtime_worker(
     }
 }
 
+fn realtime_audio_chunk_bytes(sample_rate: u32) -> usize {
+    if sample_rate == 8000 {
+        1600
+    } else {
+        TINGWU_WS_AUDIO_CHUNK_BYTES_16K
+    }
+}
+
 async fn run_realtime_worker(
     config: AliyunTingwuRealtimeConfig,
     mut command_rx: tokio_mpsc::Receiver<RealtimeWorkerCommand>,
@@ -174,7 +200,9 @@ async fn run_realtime_worker(
     send_start_transcription(
         &mut writer,
         &stream_task_id,
-        config.output_level,
+        &config.format,
+        config.sample_rate,
+        config.transcription_output_level,
         TINGWU_WS_APPKEY_DEFAULT,
     )
     .await?;
@@ -184,6 +212,7 @@ async fn run_realtime_worker(
     let mut stop_requested = false;
     let mut last_server_text: Option<String> = None;
     let mut transcription_started = false;
+    let audio_chunk_bytes = realtime_audio_chunk_bytes(config.sample_rate);
 
     while !should_stop {
         tokio::select! {
@@ -192,7 +221,7 @@ async fn run_realtime_worker(
                     Some(RealtimeWorkerCommand::AudioFrame(frame)) => {
                         if !paused && transcription_started && !frame.is_empty() {
                             let bytes = pcm16_to_le_bytes(&frame);
-                            for chunk in bytes.chunks(TINGWU_WS_AUDIO_CHUNK_BYTES) {
+                            for chunk in bytes.chunks(audio_chunk_bytes) {
                                 writer
                                     .send(Message::Binary(chunk.to_vec().into()))
                                     .await
@@ -221,7 +250,9 @@ async fn run_realtime_worker(
                             send_start_transcription(
                                 &mut writer,
                                 &stream_task_id,
-                                config.output_level,
+                                &config.format,
+                                config.sample_rate,
+                                config.transcription_output_level,
                                 TINGWU_WS_APPKEY_DEFAULT,
                             )
                             .await?;
@@ -440,31 +471,98 @@ fn create_realtime_task(config: &AliyunTingwuRealtimeConfig) -> Result<(String, 
     let resource = format!("{path}?{query}");
 
     let mut input = json!({
-        "Format": "pcm",
-        "SampleRate": 16000,
-        "SourceLanguage": config.source_language,
-        "TaskKey": format!("open-recorder-realtime-{}", Uuid::new_v4()),
+        "Format": config.format.as_str(),
+        "SampleRate": config.sample_rate,
+        "SourceLanguage": config.source_language.as_str(),
+        "TaskKey": config
+            .task_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| format!("open-recorder-realtime-{}", Uuid::new_v4())),
     });
     if !config.language_hints.is_empty() {
-        input["LanguageHints"] = json!(config.language_hints);
+        input["LanguageHints"] = json!(config.language_hints.clone());
+    }
+    if config.progressive_callbacks_enabled {
+        input["ProgressiveCallbacksEnabled"] = json!(true);
     }
 
-    let mut body = json!({
-        "AppKey": config.app_key,
-        "Input": input,
-        "Parameters": {
-            "Transcription": {
-                "OutputLevel": config.output_level.clamp(1, 2)
-            }
-        }
+    let mut transcription = json!({
+        "OutputLevel": config.transcription_output_level.clamp(1, 2)
     });
-    if config.translation_enabled && !config.translation_target_language.trim().is_empty() {
-        body["Parameters"]["TranslationEnabled"] = json!(true);
-        body["Parameters"]["Translation"] = json!({
-            "OutputLevel": config.output_level.clamp(1, 2),
-            "TargetLanguages": [config.translation_target_language.as_str()]
+    if config.transcription_diarization_enabled {
+        transcription["DiarizationEnabled"] = json!(true);
+        if let Some(speaker_count) = config.transcription_diarization_speaker_count {
+            transcription["Diarization"] = json!({
+                "SpeakerCount": speaker_count
+            });
+        }
+    }
+    if let Some(phrase_id) = config
+        .transcription_phrase_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        transcription["PhraseId"] = json!(phrase_id);
+    }
+
+    let mut parameters = json!({
+        "Transcription": transcription
+    });
+    if let Some(target_audio_format) = config
+        .transcoding_target_audio_format
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| value.eq_ignore_ascii_case("mp3"))
+    {
+        parameters["Transcoding"] = json!({
+            "TargetAudioFormat": target_audio_format.to_ascii_lowercase()
         });
     }
+    if config.translation_enabled && !config.translation_target_languages.is_empty() {
+        parameters["TranslationEnabled"] = json!(true);
+        parameters["Translation"] = json!({
+            "OutputLevel": config.translation_output_level.clamp(1, 2),
+            "TargetLanguages": config.translation_target_languages.clone()
+        });
+    }
+    if config.auto_chapters_enabled {
+        parameters["AutoChaptersEnabled"] = json!(true);
+    }
+    if config.meeting_assistance_enabled {
+        parameters["MeetingAssistanceEnabled"] = json!(true);
+    }
+    if config.summarization_enabled {
+        parameters["SummarizationEnabled"] = json!(true);
+        if !config.summarization_types.is_empty() {
+            parameters["Summarization"] = json!({
+                "Types": config.summarization_types.clone()
+            });
+        }
+    }
+    if config.text_polish_enabled {
+        parameters["TextPolishEnabled"] = json!(true);
+    }
+    if config.service_inspection_enabled {
+        parameters["ServiceInspectionEnabled"] = json!(true);
+        if let Some(value) = config.service_inspection.clone() {
+            parameters["ServiceInspection"] = value;
+        }
+    }
+    if config.custom_prompt_enabled {
+        parameters["CustomPromptEnabled"] = json!(true);
+        if let Some(value) = config.custom_prompt.clone() {
+            parameters["CustomPrompt"] = value;
+        }
+    }
+
+    let body = json!({
+        "AppKey": config.app_key.as_str(),
+        "Input": input,
+        "Parameters": parameters
+    });
 
     let payload = send_signed_json_request(
         &client,
@@ -552,6 +650,8 @@ fn extract_string(payload: &Value, pointers: &[&str]) -> Option<String> {
 async fn send_start_transcription<S>(
     writer: &mut S,
     task_id: &str,
+    format: &str,
+    sample_rate: u32,
     output_level: u8,
     appkey: &str,
 ) -> Result<(), String>
@@ -568,8 +668,8 @@ where
             "appkey": appkey
         },
         "payload": {
-            "format": "pcm",
-            "sample_rate": 16000,
+            "format": format,
+            "sample_rate": sample_rate,
             "enable_intermediate_result": output_level.clamp(1, 2) == 2
         }
     });

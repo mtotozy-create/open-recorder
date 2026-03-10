@@ -40,9 +40,10 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const UNKNOWN_INPUT_DEVICE_NAME: &str = "Unknown Input Device";
 const DEFAULT_REALTIME_SOURCE_LANGUAGE: &str = "cn";
 const DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE: &str = "en";
-const SUPPORTED_REALTIME_SOURCE_LANGUAGES: [&str; 2] = ["cn", "en"];
-const SUPPORTED_REALTIME_TRANSLATION_TARGET_LANGUAGES: [&str; 8] =
-    ["en", "cn", "ja", "ko", "fr", "de", "es", "ru"];
+const SUPPORTED_REALTIME_SOURCE_LANGUAGES: [&str; 6] =
+    ["cn", "en", "yue", "ja", "ko", "multilingual"];
+const SUPPORTED_REALTIME_TRANSLATION_TARGET_LANGUAGES: [&str; 7] =
+    ["en", "cn", "ja", "ko", "fr", "de", "ru"];
 
 struct QualityConfig {
     capture_sample_rate: u32,
@@ -81,6 +82,8 @@ struct PendingRealtimeTranslation {
 
 struct RecorderRealtimeRuntime {
     enabled: bool,
+    format: String,
+    sample_rate: u32,
     source_language: String,
     translation_enabled: bool,
     translation_target_language: String,
@@ -100,6 +103,8 @@ impl Default for RecorderRealtimeRuntime {
     fn default() -> Self {
         Self {
             enabled: false,
+            format: "pcm".to_string(),
+            sample_rate: 16000,
             source_language: DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string(),
             translation_enabled: false,
             translation_target_language: DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string(),
@@ -222,13 +227,18 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339()
 }
 
-fn parse_language_hints(raw: Option<&str>) -> Vec<String> {
+fn parse_csv_values(raw: Option<&str>) -> Vec<String> {
     raw.unwrap_or_default()
+        .replace('，', ",")
         .split(',')
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string())
         .collect()
+}
+
+fn parse_language_hints(raw: Option<&str>) -> Vec<String> {
+    parse_csv_values(raw)
 }
 
 fn normalize_realtime_translation_target_language(raw: &str) -> Option<String> {
@@ -257,6 +267,38 @@ fn normalize_realtime_source_language(raw: &str) -> Option<String> {
     SUPPORTED_REALTIME_SOURCE_LANGUAGES
         .contains(&canonical.as_str())
         .then_some(canonical)
+}
+
+fn parse_realtime_translation_target_languages(raw: Option<&str>) -> Vec<String> {
+    let mut values = Vec::new();
+    for item in parse_csv_values(raw) {
+        if let Some(normalized) = normalize_realtime_translation_target_language(&item) {
+            if !values.contains(&normalized) {
+                values.push(normalized);
+            }
+        }
+    }
+    values
+}
+
+fn parse_realtime_summarization_types(raw: Option<&str>) -> Vec<String> {
+    let mut values = Vec::new();
+    for item in parse_csv_values(raw) {
+        let normalized = item.trim().to_ascii_lowercase().replace(' ', "");
+        let canonical = match normalized.as_str() {
+            "paragraph" => Some("Paragraph".to_string()),
+            "conversational" => Some("Conversational".to_string()),
+            "questionsanswering" => Some("QuestionsAnswering".to_string()),
+            "mindmap" => Some("MindMap".to_string()),
+            _ => None,
+        };
+        if let Some(value) = canonical {
+            if !values.contains(&value) {
+                values.push(value);
+            }
+        }
+    }
+    values
 }
 
 fn map_realtime_state(state: RealtimeWorkerState) -> RecorderRealtimeState {
@@ -431,20 +473,21 @@ fn drain_realtime_events(shared: &mut RecorderShared) {
     }
 }
 
-fn resample_to_mono_16k(
+fn resample_to_mono_target(
     data: &[i16],
     input_sample_rate: u32,
     input_channels: u16,
+    target_sample_rate: u32,
     state: &mut RealtimeResampleState,
 ) -> Vec<i16> {
-    if data.is_empty() || input_sample_rate == 0 {
+    if data.is_empty() || input_sample_rate == 0 || target_sample_rate == 0 {
         return vec![];
     }
 
     let channels = usize::from(input_channels.max(1));
     let mut output = Vec::with_capacity(data.len() / channels);
     let mut phase = state.phase;
-    let target_rate = 16_000_u32;
+    let target_rate = target_sample_rate;
 
     for frame in data.chunks_exact(channels) {
         let sample_sum = frame.iter().map(|value| i32::from(*value)).sum::<i32>();
@@ -505,25 +548,100 @@ fn resolve_realtime_provider_config(
         return Err("aliyun realtime requires access key id, access key secret and app key".to_string());
     }
 
-    let _provider_source_language = aliyun.source_language.trim().to_ascii_lowercase();
-    let source_language = normalize_realtime_source_language(&source_language)
+    let provider_source_language = normalize_realtime_source_language(&aliyun.realtime_source_language)
         .unwrap_or_else(|| DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string());
-    let translation_target_language =
+    let source_language = normalize_realtime_source_language(&source_language)
+        .unwrap_or(provider_source_language);
+
+    let mut translation_target_languages = if let Some(runtime_target) =
         normalize_realtime_translation_target_language(&translation_target_language)
-            .unwrap_or_else(|| DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string());
-    let translation_enabled =
-        translation_enabled && translation_target_language != source_language;
+    {
+        vec![runtime_target]
+    } else {
+        parse_realtime_translation_target_languages(aliyun.realtime_translation_target_languages.as_deref())
+    };
+    if translation_target_languages.is_empty() {
+        translation_target_languages.push(DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string());
+    }
+    let translation_enabled = translation_enabled
+        && translation_target_languages
+            .iter()
+            .any(|item| item.as_str() != source_language.as_str());
+
+    let realtime_format = match aliyun.realtime_format.trim().to_ascii_lowercase().as_str() {
+        "pcm" | "opus" | "aac" | "speex" | "mp3" => aliyun.realtime_format.trim().to_ascii_lowercase(),
+        _ => "pcm".to_string(),
+    };
+    if realtime_format != "pcm" {
+        return Err("open-recorder realtime currently supports Input.Format=pcm only".to_string());
+    }
+    let realtime_sample_rate = if aliyun.realtime_sample_rate == 8000 {
+        8000
+    } else {
+        16000
+    };
+    let language_hints = if source_language == "multilingual" {
+        parse_language_hints(aliyun.realtime_language_hints.as_deref())
+    } else {
+        Vec::new()
+    };
+    let task_key = aliyun.realtime_task_key.as_deref().map(str::trim).and_then(|value| {
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    });
+    let transcription_phrase_id = aliyun
+        .realtime_transcription_phrase_id
+        .as_deref()
+        .map(str::trim)
+        .and_then(|value| {
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        });
+    let transcoding_target_audio_format = aliyun
+        .realtime_transcoding_target_audio_format
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .filter(|value| value == "mp3");
 
     Ok(AliyunTingwuRealtimeConfig {
         access_key_id,
         access_key_secret,
         app_key,
         endpoint: aliyun.endpoint.clone(),
+        format: realtime_format,
+        sample_rate: realtime_sample_rate,
         source_language,
-        language_hints: parse_language_hints(aliyun.language_hints.as_deref()),
-        output_level: aliyun.realtime_output_level.clamp(1, 2),
+        language_hints,
+        task_key,
+        progressive_callbacks_enabled: aliyun.realtime_progressive_callbacks_enabled,
+        transcoding_target_audio_format,
+        transcription_output_level: aliyun.realtime_transcription_output_level.clamp(1, 2),
+        transcription_diarization_enabled: aliyun.realtime_transcription_diarization_enabled,
+        transcription_diarization_speaker_count: aliyun
+            .realtime_transcription_diarization_speaker_count
+            .map(|value| value.clamp(0, 64)),
+        transcription_phrase_id,
         translation_enabled,
-        translation_target_language,
+        translation_output_level: aliyun.realtime_translation_output_level.clamp(1, 2),
+        translation_target_languages,
+        auto_chapters_enabled: aliyun.realtime_auto_chapters_enabled,
+        meeting_assistance_enabled: aliyun.realtime_meeting_assistance_enabled,
+        summarization_enabled: aliyun.realtime_summarization_enabled,
+        summarization_types: parse_realtime_summarization_types(
+            aliyun.realtime_summarization_types.as_deref(),
+        ),
+        text_polish_enabled: aliyun.realtime_text_polish_enabled,
+        service_inspection_enabled: aliyun.realtime_service_inspection_enabled,
+        service_inspection: aliyun.realtime_service_inspection.clone(),
+        custom_prompt_enabled: aliyun.realtime_custom_prompt_enabled,
+        custom_prompt: aliyun.realtime_custom_prompt.clone(),
     })
 }
 
@@ -552,11 +670,16 @@ fn start_realtime_runtime(
             translation_target_language,
         )?
     };
+    let realtime_format = config.format.clone();
+    let realtime_sample_rate = config.sample_rate;
 
     let mut shared = shared_ref
         .lock()
         .map_err(|_| "failed to acquire recorder state lock".to_string())?;
     drain_realtime_events(&mut shared);
+    shared.realtime.format = realtime_format;
+    shared.realtime.sample_rate = realtime_sample_rate;
+    shared.realtime.resample_state = RealtimeResampleState::default();
     if shared.realtime.worker.is_some() {
         shared.realtime.enabled = true;
         return Ok(());
@@ -1336,10 +1459,11 @@ fn process_i16_samples(
     state.last_peak = peak;
 
     if state.realtime.enabled {
-        let realtime_frame = resample_to_mono_16k(
+        let realtime_frame = resample_to_mono_target(
             data,
             state.sample_rate,
             state.channels,
+            state.realtime.sample_rate,
             &mut state.realtime.resample_state,
         );
         if !realtime_frame.is_empty() {
@@ -1621,21 +1745,48 @@ pub fn recorder_start(
         segment_duration_secs,
         settings_input_device_id,
         realtime_enabled_by_default,
+        realtime_format_by_default,
+        realtime_sample_rate_by_default,
+        realtime_source_language_by_default,
+        realtime_translation_enabled_by_default,
+        realtime_translation_target_language_by_default,
     ) = {
         let mut storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
         storage.data.settings.normalize();
-        let realtime_default = storage
+        let realtime_provider = storage
             .data
             .settings
             .providers
             .iter()
             .find(|provider| provider.kind == ProviderKind::AliyunTingwu)
-            .and_then(|provider| provider.aliyun_tingwu.as_ref())
+            .and_then(|provider| provider.aliyun_tingwu.as_ref());
+        let realtime_default = realtime_provider
             .map(|config| config.realtime_enabled_by_default)
             .unwrap_or(false);
+        let realtime_source_language_default = realtime_provider
+            .and_then(|config| normalize_realtime_source_language(&config.realtime_source_language))
+            .unwrap_or_else(|| DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string());
+        let realtime_translation_enabled_default = realtime_provider
+            .map(|config| config.realtime_translation_enabled)
+            .unwrap_or(false);
+        let realtime_translation_target_default = realtime_provider
+            .map(|config| {
+                parse_realtime_translation_target_languages(
+                    config.realtime_translation_target_languages.as_deref(),
+                )
+            })
+            .and_then(|items| items.first().cloned())
+            .unwrap_or_else(|| DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string());
+        let realtime_format_default = realtime_provider
+            .map(|config| config.realtime_format.trim().to_ascii_lowercase())
+            .filter(|value| value == "pcm")
+            .unwrap_or_else(|| "pcm".to_string());
+        let realtime_sample_rate_default = realtime_provider
+            .map(|config| if config.realtime_sample_rate == 8000 { 8000 } else { 16000 })
+            .unwrap_or(16000);
         (
             storage.session_audio_dir(&session_id)?,
             storage.data.settings.recording_segment_seconds,
@@ -1643,6 +1794,11 @@ pub fn recorder_start(
                 storage.data.settings.recording_input_device_id.clone(),
             ),
             realtime_default,
+            realtime_format_default,
+            realtime_sample_rate_default,
+            realtime_source_language_default,
+            realtime_translation_enabled_default,
+            realtime_translation_target_default,
         )
     };
     let preferred_input_device_id = requested_input_device_id.or(settings_input_device_id);
@@ -1707,13 +1863,13 @@ pub fn recorder_start(
     let realtime_source_language = realtime_source_language
         .as_deref()
         .and_then(normalize_realtime_source_language)
-        .unwrap_or_else(|| DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string());
+        .unwrap_or(realtime_source_language_by_default);
     let realtime_translation_target_language = realtime_translate_target_language
         .as_deref()
         .and_then(normalize_realtime_translation_target_language)
-        .unwrap_or_else(|| DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string());
-    let realtime_translation_enabled =
-        realtime_requested && realtime_translate_enabled.unwrap_or(false);
+        .unwrap_or(realtime_translation_target_language_by_default);
+    let realtime_translation_enabled = realtime_requested
+        && realtime_translate_enabled.unwrap_or(realtime_translation_enabled_by_default);
     let shared = Arc::new(Mutex::new(RecorderShared {
         session_id: session_id.clone(),
         segment_dir,
@@ -1731,6 +1887,8 @@ pub fn recorder_start(
         last_error: None,
         realtime: RecorderRealtimeRuntime {
             enabled: false,
+            format: realtime_format_by_default,
+            sample_rate: realtime_sample_rate_by_default,
             source_language: realtime_source_language,
             translation_enabled: realtime_translation_enabled,
             translation_target_language: realtime_translation_target_language,

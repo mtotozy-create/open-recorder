@@ -326,6 +326,10 @@ function RecorderTab({
               >
                 <option value="cn">{t("recorder.realtime.sourceLanguage.cn")}</option>
                 <option value="en">{t("recorder.realtime.sourceLanguage.en")}</option>
+                <option value="yue">{t("recorder.realtime.sourceLanguage.yue")}</option>
+                <option value="ja">{t("recorder.realtime.sourceLanguage.ja")}</option>
+                <option value="ko">{t("recorder.realtime.sourceLanguage.ko")}</option>
+                <option value="multilingual">{t("recorder.realtime.sourceLanguage.multilingual")}</option>
               </select>
             </label>
             <label className="realtime-translation-target">
@@ -341,7 +345,6 @@ function RecorderTab({
                 <option value="ko">{t("recorder.realtime.translationTargetLanguage.ko")}</option>
                 <option value="fr">{t("recorder.realtime.translationTargetLanguage.fr")}</option>
                 <option value="de">{t("recorder.realtime.translationTargetLanguage.de")}</option>
-                <option value="es">{t("recorder.realtime.translationTargetLanguage.es")}</option>
                 <option value="ru">{t("recorder.realtime.translationTargetLanguage.ru")}</option>
               </select>
             </label>

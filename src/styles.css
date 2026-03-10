@@ -295,6 +295,8 @@ p {
   border-radius: var(--radius);
   background: var(--bg-1);
   padding: 12px;
+  display: grid;
+  gap: 12px;
 }
 
 .provider-editor-header {
@@ -324,6 +326,29 @@ p {
   margin: 12px 0 0;
   color: var(--text-muted);
   font-size: 0.84rem;
+}
+
+.provider-subsection {
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.provider-subsection:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.provider-subsection h4 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.provider-validation-error {
+  margin: 2px 0 0;
+  color: var(--danger);
+  font-size: 0.78rem;
 }
 
 .provider-selectors {

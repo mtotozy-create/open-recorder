@@ -153,7 +153,29 @@ function createDefaultProvider(kind: ProviderConfig["kind"]): ProviderConfig {
         transcriptionDisfluencyRemovalEnabled: false,
         transcriptionSpeakerDiarizationEnabled: true,
         realtimeEnabledByDefault: false,
-        realtimeOutputLevel: 1,
+        realtimeFormat: "pcm",
+        realtimeSampleRate: 16000,
+        realtimeSourceLanguage: "cn",
+        realtimeLanguageHints: "",
+        realtimeTaskKey: "",
+        realtimeProgressiveCallbacksEnabled: false,
+        realtimeTranscodingTargetAudioFormat: undefined,
+        realtimeTranscriptionOutputLevel: 1,
+        realtimeTranscriptionDiarizationEnabled: false,
+        realtimeTranscriptionDiarizationSpeakerCount: undefined,
+        realtimeTranscriptionPhraseId: "",
+        realtimeTranslationEnabled: false,
+        realtimeTranslationOutputLevel: 1,
+        realtimeTranslationTargetLanguages: "en",
+        realtimeAutoChaptersEnabled: false,
+        realtimeMeetingAssistanceEnabled: false,
+        realtimeSummarizationEnabled: false,
+        realtimeSummarizationTypes: "",
+        realtimeTextPolishEnabled: false,
+        realtimeServiceInspectionEnabled: false,
+        realtimeServiceInspection: undefined,
+        realtimeCustomPromptEnabled: false,
+        realtimeCustomPrompt: undefined,
         pollIntervalSeconds: 60,
         maxPollingMinutes: 180
       }
@@ -358,6 +380,65 @@ function normalizeSettings(input: Settings): Settings {
     if (kind === "aliyun_tingwu") {
       const aliyunConfig =
         candidates.map((item) => item.aliyunTingwu).find(Boolean) ?? defaults.aliyunTingwu!;
+      const legacyRealtimeOutputLevel = (
+        aliyunConfig as { realtimeOutputLevel?: number } | undefined
+      )?.realtimeOutputLevel;
+      const realtimeSourceLanguage =
+        aliyunConfig.realtimeSourceLanguage === "cn" ||
+        aliyunConfig.realtimeSourceLanguage === "en" ||
+        aliyunConfig.realtimeSourceLanguage === "yue" ||
+        aliyunConfig.realtimeSourceLanguage === "ja" ||
+        aliyunConfig.realtimeSourceLanguage === "ko" ||
+        aliyunConfig.realtimeSourceLanguage === "multilingual"
+          ? aliyunConfig.realtimeSourceLanguage
+          : defaults.aliyunTingwu!.realtimeSourceLanguage;
+      const realtimeFormat =
+        aliyunConfig.realtimeFormat === "pcm" ||
+        aliyunConfig.realtimeFormat === "opus" ||
+        aliyunConfig.realtimeFormat === "aac" ||
+        aliyunConfig.realtimeFormat === "speex" ||
+        aliyunConfig.realtimeFormat === "mp3"
+          ? aliyunConfig.realtimeFormat
+          : defaults.aliyunTingwu!.realtimeFormat;
+      const realtimeSampleRate =
+        aliyunConfig.realtimeSampleRate === 8000 || aliyunConfig.realtimeSampleRate === 16000
+          ? aliyunConfig.realtimeSampleRate
+          : defaults.aliyunTingwu!.realtimeSampleRate;
+      const realtimeTranscodingTargetAudioFormat =
+        aliyunConfig.realtimeTranscodingTargetAudioFormat === "mp3" ? "mp3" : undefined;
+      const realtimeLanguageHints =
+        realtimeSourceLanguage === "multilingual"
+          ? parseCsvList(aliyunConfig.realtimeLanguageHints).join(",")
+          : parseCsvList(aliyunConfig.realtimeLanguageHints).join(",");
+      const realtimeTranslationTargetLanguages = normalizeRealtimeTranslationTargetLanguagesCsv(
+        aliyunConfig.realtimeTranslationTargetLanguages
+      );
+      const realtimeSummarizationTypes = normalizeSummarizationTypesCsv(
+        aliyunConfig.realtimeSummarizationTypes
+      );
+      const transcriptionOutputLevel =
+        aliyunConfig.realtimeTranscriptionOutputLevel === 2
+          ? 2
+          : legacyRealtimeOutputLevel === 2
+            ? 2
+            : defaults.aliyunTingwu!.realtimeTranscriptionOutputLevel;
+      const translationOutputLevel =
+        aliyunConfig.realtimeTranslationOutputLevel === 2
+          ? 2
+          : legacyRealtimeOutputLevel === 2
+            ? 2
+            : defaults.aliyunTingwu!.realtimeTranslationOutputLevel;
+      const diarizationSpeakerCount = Number.isFinite(
+        aliyunConfig.realtimeTranscriptionDiarizationSpeakerCount
+      )
+        ? Math.min(
+            64,
+            Math.max(
+              0,
+              Math.floor(aliyunConfig.realtimeTranscriptionDiarizationSpeakerCount as number)
+            )
+          )
+        : undefined;
       return {
         ...defaults,
         name: mergedName,
@@ -369,10 +450,16 @@ function normalizeSettings(input: Settings): Settings {
             typeof aliyunConfig.realtimeEnabledByDefault === "boolean"
               ? aliyunConfig.realtimeEnabledByDefault
               : defaults.aliyunTingwu!.realtimeEnabledByDefault,
-          realtimeOutputLevel:
-            aliyunConfig.realtimeOutputLevel === 2
-              ? 2
-              : defaults.aliyunTingwu!.realtimeOutputLevel,
+          realtimeFormat,
+          realtimeSampleRate,
+          realtimeSourceLanguage,
+          realtimeLanguageHints,
+          realtimeTranscodingTargetAudioFormat,
+          realtimeTranscriptionOutputLevel: transcriptionOutputLevel,
+          realtimeTranslationOutputLevel: translationOutputLevel,
+          realtimeTranscriptionDiarizationSpeakerCount: diarizationSpeakerCount,
+          realtimeTranslationTargetLanguages,
+          realtimeSummarizationTypes,
           pollIntervalSeconds: Number.isFinite(aliyunConfig.pollIntervalSeconds)
             ? Math.min(300, Math.max(60, Math.floor(aliyunConfig.pollIntervalSeconds)))
             : defaults.aliyunTingwu!.pollIntervalSeconds,
@@ -448,9 +535,89 @@ function normalizeSettings(input: Settings): Settings {
   };
 }
 
-function getAliyunRealtimeEnabledDefault(settings: Settings): boolean {
+type AliyunRealtimeDefaults = {
+  enabled: boolean;
+  sourceLanguage: string;
+  translationEnabled: boolean;
+  translationTargetLanguage: string;
+};
+
+function parseCsvList(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .replaceAll("，", ",")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizeRealtimeSourceLanguage(raw: string | undefined): string {
+  const value = (raw ?? "").trim().toLowerCase();
+  if (value === "zh" || value === "zh-cn") {
+    return "cn";
+  }
+  if (
+    value === "cn" ||
+    value === "en" ||
+    value === "yue" ||
+    value === "ja" ||
+    value === "ko" ||
+    value === "multilingual"
+  ) {
+    return value;
+  }
+  return DEFAULT_REALTIME_SOURCE_LANGUAGE;
+}
+
+function normalizeRealtimeTranslationTargetLanguage(raw: string | undefined): string {
+  const value = (raw ?? "").trim().toLowerCase().replaceAll("_", "-");
+  const canonical = value === "zh" || value === "zh-cn" ? "cn" : value;
+  const allowed = new Set(["cn", "en", "ja", "ko", "de", "fr", "ru"]);
+  return allowed.has(canonical) ? canonical : DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE;
+}
+
+function normalizeRealtimeTranslationTargetLanguagesCsv(raw: string | undefined): string {
+  const result = parseCsvList(raw)
+    .map((item) => normalizeRealtimeTranslationTargetLanguage(item))
+    .filter((item, index, list) => list.indexOf(item) === index);
+  return result.join(",");
+}
+
+function normalizeSummarizationTypesCsv(raw: string | undefined): string {
+  const alias: Record<string, string> = {
+    paragraph: "Paragraph",
+    conversational: "Conversational",
+    questionsanswering: "QuestionsAnswering",
+    mindmap: "MindMap"
+  };
+  const result = (raw ?? "")
+    .replaceAll("，", ",")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => alias[item.toLowerCase().replace(/\s+/g, "")])
+    .filter((item): item is string => Boolean(item))
+    .filter((item, index, list) => list.indexOf(item) === index);
+  return result.join(",");
+}
+
+function getAliyunRealtimeDefaults(settings: Settings): AliyunRealtimeDefaults {
   const provider = settings.providers.find((item) => item.kind === "aliyun_tingwu");
-  return provider?.aliyunTingwu?.realtimeEnabledByDefault ?? false;
+  const aliyun = provider?.aliyunTingwu;
+  if (!aliyun) {
+    return {
+      enabled: false,
+      sourceLanguage: DEFAULT_REALTIME_SOURCE_LANGUAGE,
+      translationEnabled: false,
+      translationTargetLanguage: DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE
+    };
+  }
+  const targetLanguages = parseCsvList(aliyun.realtimeTranslationTargetLanguages);
+  return {
+    enabled: aliyun.realtimeEnabledByDefault,
+    sourceLanguage: normalizeRealtimeSourceLanguage(aliyun.realtimeSourceLanguage),
+    translationEnabled: aliyun.realtimeTranslationEnabled,
+    translationTargetLanguage: normalizeRealtimeTranslationTargetLanguage(targetLanguages[0])
+  };
 }
 
 function App() {
@@ -465,15 +632,18 @@ function App() {
   const [recordingQuality, setRecordingQuality] = useState<RecordingQualityPreset>("standard");
   const [recordingElapsedMs, setRecordingElapsedMs] = useState<number>(0);
   const [waveformPoints, setWaveformPoints] = useState<number[]>([]);
+  const initialRealtimeDefaults = getAliyunRealtimeDefaults(initialSettings);
   const [realtimeTranscriptionEnabled, setRealtimeTranscriptionEnabled] = useState<boolean>(
-    getAliyunRealtimeEnabledDefault(initialSettings)
+    initialRealtimeDefaults.enabled
   );
   const [realtimeSourceLanguage, setRealtimeSourceLanguage] = useState<string>(
-    DEFAULT_REALTIME_SOURCE_LANGUAGE
+    initialRealtimeDefaults.sourceLanguage
   );
-  const [realtimeTranslationEnabled, setRealtimeTranslationEnabled] = useState<boolean>(false);
+  const [realtimeTranslationEnabled, setRealtimeTranslationEnabled] = useState<boolean>(
+    initialRealtimeDefaults.translationEnabled
+  );
   const [realtimeTranslationTargetLanguage, setRealtimeTranslationTargetLanguage] = useState<string>(
-    DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE
+    initialRealtimeDefaults.translationTargetLanguage
   );
   const [realtimePreviewText, setRealtimePreviewText] = useState<string>("");
   const [realtimeSegments, setRealtimeSegments] = useState<TranscriptSegment[]>([]);
@@ -559,9 +729,13 @@ function App() {
     void getSettings()
       .then((loaded) => {
         const normalized = normalizeSettings(loaded);
+        const realtimeDefaults = getAliyunRealtimeDefaults(normalized);
         setSettings(normalized);
         setSummaryTemplateId(normalized.defaultTemplateId);
-        setRealtimeTranscriptionEnabled(getAliyunRealtimeEnabledDefault(normalized));
+        setRealtimeTranscriptionEnabled(realtimeDefaults.enabled);
+        setRealtimeSourceLanguage(realtimeDefaults.sourceLanguage);
+        setRealtimeTranslationEnabled(realtimeDefaults.translationEnabled);
+        setRealtimeTranslationTargetLanguage(realtimeDefaults.translationTargetLanguage);
       })
       .catch((error) => setStatus("status.settingsLoadFailed", { error: String(error) }));
   }, []);
@@ -645,6 +819,7 @@ function App() {
           setStatus("status.recorderError", { error: status.lastProcessingError });
         }
         if (status.phase === "idle") {
+          const realtimeDefaults = getAliyunRealtimeDefaults(settings);
           setCurrentRecording(undefined);
           setWaveformPoints([]);
           setRecorderPhase("idle");
@@ -652,10 +827,10 @@ function App() {
           setRealtimeSegments([]);
           setRealtimeTranscriptionState("idle");
           setRealtimeLastError(undefined);
-          setRealtimeSourceLanguage(DEFAULT_REALTIME_SOURCE_LANGUAGE);
-          setRealtimeTranslationEnabled(false);
-          setRealtimeTranslationTargetLanguage(DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE);
-          setRealtimeTranscriptionEnabled(getAliyunRealtimeEnabledDefault(settings));
+          setRealtimeSourceLanguage(realtimeDefaults.sourceLanguage);
+          setRealtimeTranslationEnabled(realtimeDefaults.translationEnabled);
+          setRealtimeTranslationTargetLanguage(realtimeDefaults.translationTargetLanguage);
+          setRealtimeTranscriptionEnabled(realtimeDefaults.enabled);
           setStatus("status.recordingPostProcessDone");
           await refreshSessionDetail(currentRecording);
           await refreshSessions();
@@ -1114,6 +1289,7 @@ function App() {
     try {
       const updated = await updateSettings(settings);
       const normalized = normalizeSettings(updated);
+      const realtimeDefaults = getAliyunRealtimeDefaults(normalized);
       setSettings(normalized);
       setSummaryTemplateId((previous) =>
         normalized.templates.some((template) => template.id === previous)
@@ -1121,7 +1297,10 @@ function App() {
           : normalized.defaultTemplateId
       );
       if (!currentRecording) {
-        setRealtimeTranscriptionEnabled(getAliyunRealtimeEnabledDefault(normalized));
+        setRealtimeTranscriptionEnabled(realtimeDefaults.enabled);
+        setRealtimeSourceLanguage(realtimeDefaults.sourceLanguage);
+        setRealtimeTranslationEnabled(realtimeDefaults.translationEnabled);
+        setRealtimeTranslationTargetLanguage(realtimeDefaults.translationTargetLanguage);
       }
       setStatus("status.settingsSaved");
     } catch (error) {

@@ -90,6 +90,17 @@ function whisperModelOptionLabel(modelId: string): string {
   return `${profile.label} | faster-whisper: ${profile.fasterWhisperModel} | mlx-whisper: ${profile.mlxWhisperModel}`;
 }
 
+function stringifyJsonObject(value: Record<string, unknown> | undefined): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "";
+  }
+}
+
 function SettingsTab({
   locale,
   settings,
@@ -106,6 +117,13 @@ function SettingsTab({
   const [activeOssConfigId, setActiveOssConfigId] = useState<string>(
     settings.selectedOssConfigId || settings.ossConfigs[0]?.id || ""
   );
+  const [aliyunServiceInspectionDraft, setAliyunServiceInspectionDraft] = useState<
+    Record<string, string>
+  >({});
+  const [aliyunCustomPromptDraft, setAliyunCustomPromptDraft] = useState<Record<string, string>>({});
+  const [aliyunJsonFieldErrors, setAliyunJsonFieldErrors] = useState<
+    Record<string, { serviceInspection?: TranslationKey; customPrompt?: TranslationKey }>
+  >({});
 
   useEffect(() => {
     if (settings.providers.length === 0) {
@@ -133,6 +151,49 @@ function SettingsTab({
       setActiveOssConfigId(settings.selectedOssConfigId || settings.ossConfigs[0].id);
     }
   }, [settings.ossConfigs, settings.selectedOssConfigId, activeOssConfigId]);
+
+  useEffect(() => {
+    const aliyunProviders = settings.providers.filter(
+      (provider) => provider.kind === "aliyun_tingwu" && provider.aliyunTingwu
+    );
+
+    setAliyunServiceInspectionDraft((previous) => {
+      const next: Record<string, string> = {};
+      for (const provider of aliyunProviders) {
+        const current = previous[provider.id];
+        if (typeof current === "string") {
+          next[provider.id] = current;
+          continue;
+        }
+        next[provider.id] = stringifyJsonObject(provider.aliyunTingwu?.realtimeServiceInspection);
+      }
+      return next;
+    });
+
+    setAliyunCustomPromptDraft((previous) => {
+      const next: Record<string, string> = {};
+      for (const provider of aliyunProviders) {
+        const current = previous[provider.id];
+        if (typeof current === "string") {
+          next[provider.id] = current;
+          continue;
+        }
+        next[provider.id] = stringifyJsonObject(provider.aliyunTingwu?.realtimeCustomPrompt);
+      }
+      return next;
+    });
+
+    setAliyunJsonFieldErrors((previous) => {
+      const next: Record<
+        string,
+        { serviceInspection?: TranslationKey; customPrompt?: TranslationKey }
+      > = {};
+      for (const provider of aliyunProviders) {
+        next[provider.id] = previous[provider.id] ?? {};
+      }
+      return next;
+    });
+  }, [settings.providers]);
 
   function handleLocaleChange(event: ChangeEvent<HTMLSelectElement>) {
     onLocaleChange(event.target.value as Locale);
@@ -204,6 +265,56 @@ function SettingsTab({
       provider.id === providerId ? next(provider) : provider
     );
     updateProviders(providers);
+  }
+
+  function updateAliyunJsonField(
+    providerId: string,
+    field: "serviceInspection" | "customPrompt",
+    rawText: string,
+    onValid: (value: Record<string, unknown> | undefined) => void
+  ) {
+    const setDraft =
+      field === "serviceInspection" ? setAliyunServiceInspectionDraft : setAliyunCustomPromptDraft;
+    setDraft((previous) => ({
+      ...previous,
+      [providerId]: rawText
+    }));
+
+    const trimmed = rawText.trim();
+    if (!trimmed) {
+      setAliyunJsonFieldErrors((previous) => ({
+        ...previous,
+        [providerId]: {
+          ...(previous[providerId] ?? {}),
+          [field]: undefined
+        }
+      }));
+      onValid(undefined);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("not object");
+      }
+      setAliyunJsonFieldErrors((previous) => ({
+        ...previous,
+        [providerId]: {
+          ...(previous[providerId] ?? {}),
+          [field]: undefined
+        }
+      }));
+      onValid(parsed as Record<string, unknown>);
+    } catch {
+      setAliyunJsonFieldErrors((previous) => ({
+        ...previous,
+        [providerId]: {
+          ...(previous[providerId] ?? {}),
+          [field]: "settings.aliyunJsonInvalidObject"
+        }
+      }));
+    }
   }
 
   function updateOssConfigs(ossConfigs: OssConfig[]) {
@@ -292,172 +403,470 @@ function SettingsTab({
           ...current,
           aliyunTingwu: { ...aliyun, ...next }
         }));
+      const serviceInspectionDraft =
+        aliyunServiceInspectionDraft[provider.id] ??
+        stringifyJsonObject(aliyun.realtimeServiceInspection);
+      const customPromptDraft =
+        aliyunCustomPromptDraft[provider.id] ?? stringifyJsonObject(aliyun.realtimeCustomPrompt);
+      const serviceInspectionError = aliyunJsonFieldErrors[provider.id]?.serviceInspection;
+      const customPromptError = aliyunJsonFieldErrors[provider.id]?.customPrompt;
 
       return (
         <>
-          <label>
-            {t("settings.aliyunAccessKeyId")}
-            <input
-              value={aliyun.accessKeyId ?? ""}
-              onChange={(event) => updateAliyun({ accessKeyId: event.target.value })}
-            />
-          </label>
-          <label>
-            {t("settings.aliyunAccessKeySecret")}
-            <input
-              type="password"
-              value={aliyun.accessKeySecret ?? ""}
-              onChange={(event) => updateAliyun({ accessKeySecret: event.target.value })}
-            />
-          </label>
-          <label>
-            {t("settings.aliyunAppKey")}
-            <input
-              value={aliyun.appKey ?? ""}
-              onChange={(event) => updateAliyun({ appKey: event.target.value })}
-            />
-          </label>
-          <label>
-            {t("settings.aliyunEndpoint")}
-            <input
-              value={aliyun.endpoint}
-              onChange={(event) => updateAliyun({ endpoint: event.target.value })}
-            />
-          </label>
-          <label>
-            {t("settings.aliyunSourceLanguage")}
-            <select
-              value={aliyun.sourceLanguage}
-              onChange={(event) => updateAliyun({ sourceLanguage: event.target.value })}
-            >
-              <option value="cn">{t("settings.aliyunSourceLanguage.cn")}</option>
-              <option value="en">{t("settings.aliyunSourceLanguage.en")}</option>
-            </select>
-          </label>
-          <label>
-            {t("settings.aliyunLanguageHints")}
-            <input
-              value={aliyun.languageHints ?? ""}
-              onChange={(event) => updateAliyun({ languageHints: event.target.value })}
-            />
-          </label>
-          <label>
-            {t("settings.aliyunFileUrlPrefix")}
-            <input
-              value={aliyun.fileUrlPrefix ?? ""}
-              onChange={(event) => updateAliyun({ fileUrlPrefix: event.target.value })}
-            />
-          </label>
-          <label>
-            {t("settings.aliyunNormalizationEnabled")}
-            <select
-              value={String(aliyun.transcriptionNormalizationEnabled)}
-              onChange={(event) =>
-                updateAliyun({ transcriptionNormalizationEnabled: event.target.value === "true" })
-              }
-            >
-              <option value="true">{t("settings.option.enabled")}</option>
-              <option value="false">{t("settings.option.disabled")}</option>
-            </select>
-          </label>
-          <label>
-            {t("settings.aliyunParagraphEnabled")}
-            <select
-              value={String(aliyun.transcriptionParagraphEnabled)}
-              onChange={(event) =>
-                updateAliyun({ transcriptionParagraphEnabled: event.target.value === "true" })
-              }
-            >
-              <option value="true">{t("settings.option.enabled")}</option>
-              <option value="false">{t("settings.option.disabled")}</option>
-            </select>
-          </label>
-          <label>
-            {t("settings.aliyunPunctuationPredictionEnabled")}
-            <select
-              value={String(aliyun.transcriptionPunctuationPredictionEnabled)}
-              onChange={(event) =>
-                updateAliyun({ transcriptionPunctuationPredictionEnabled: event.target.value === "true" })
-              }
-            >
-              <option value="true">{t("settings.option.enabled")}</option>
-              <option value="false">{t("settings.option.disabled")}</option>
-            </select>
-          </label>
-          <label>
-            {t("settings.aliyunDisfluencyRemovalEnabled")}
-            <select
-              value={String(aliyun.transcriptionDisfluencyRemovalEnabled)}
-              onChange={(event) =>
-                updateAliyun({ transcriptionDisfluencyRemovalEnabled: event.target.value === "true" })
-              }
-            >
-              <option value="true">{t("settings.option.enabled")}</option>
-              <option value="false">{t("settings.option.disabled")}</option>
-            </select>
-          </label>
-          <label>
-            {t("settings.aliyunSpeakerDiarizationEnabled")}
-            <select
-              value={String(aliyun.transcriptionSpeakerDiarizationEnabled)}
-              onChange={(event) =>
-                updateAliyun({
-                  transcriptionSpeakerDiarizationEnabled: event.target.value === "true"
-                })
-              }
-            >
-              <option value="true">{t("settings.option.enabled")}</option>
-              <option value="false">{t("settings.option.disabled")}</option>
-            </select>
-          </label>
-          <label>
-            {t("settings.aliyunRealtimeEnabledByDefault")}
-            <select
-              value={String(aliyun.realtimeEnabledByDefault)}
-              onChange={(event) =>
-                updateAliyun({ realtimeEnabledByDefault: event.target.value === "true" })
-              }
-            >
-              <option value="true">{t("settings.option.enabled")}</option>
-              <option value="false">{t("settings.option.disabled")}</option>
-            </select>
-          </label>
-          <label>
-            {t("settings.aliyunRealtimeOutputLevel")}
-            <select
-              value={String(aliyun.realtimeOutputLevel)}
-              onChange={(event) =>
-                updateAliyun({ realtimeOutputLevel: event.target.value === "2" ? 2 : 1 })
-              }
-            >
-              <option value="1">{t("settings.aliyunRealtimeOutputLevel.finalOnly")}</option>
-              <option value="2">{t("settings.aliyunRealtimeOutputLevel.intermediate")}</option>
-            </select>
-          </label>
-          <label>
-            {t("settings.aliyunPollIntervalSeconds")}
-            <input
-              type="number"
-              min={60}
-              max={300}
-              value={aliyun.pollIntervalSeconds}
-              onChange={(event) =>
-                updateAliyun({ pollIntervalSeconds: Number.parseInt(event.target.value || "0", 10) || 60 })
-              }
-            />
-          </label>
-          <label>
-            {t("settings.aliyunMaxPollingMinutes")}
-            <input
-              type="number"
-              min={5}
-              max={720}
-              value={aliyun.maxPollingMinutes}
-              onChange={(event) =>
-                updateAliyun({ maxPollingMinutes: Number.parseInt(event.target.value || "0", 10) || 180 })
-              }
-            />
-          </label>
+          <section className="provider-subsection">
+            <h4>{t("settings.aliyunSection.commonAccess")}</h4>
+            <label>
+              {t("settings.aliyunAccessKeyId")}
+              <input
+                value={aliyun.accessKeyId ?? ""}
+                onChange={(event) => updateAliyun({ accessKeyId: event.target.value })}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunAccessKeySecret")}
+              <input
+                type="password"
+                value={aliyun.accessKeySecret ?? ""}
+                onChange={(event) => updateAliyun({ accessKeySecret: event.target.value })}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunAppKey")}
+              <input
+                value={aliyun.appKey ?? ""}
+                onChange={(event) => updateAliyun({ appKey: event.target.value })}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunEndpoint")}
+              <input
+                value={aliyun.endpoint}
+                onChange={(event) => updateAliyun({ endpoint: event.target.value })}
+              />
+            </label>
+          </section>
+
+          <section className="provider-subsection">
+            <h4>{t("settings.aliyunSection.offlineTranscription")}</h4>
+            <label>
+              {t("settings.aliyunSourceLanguage")}
+              <select
+                value={aliyun.sourceLanguage}
+                onChange={(event) => updateAliyun({ sourceLanguage: event.target.value })}
+              >
+                <option value="cn">{t("settings.aliyunSourceLanguage.cn")}</option>
+                <option value="en">{t("settings.aliyunSourceLanguage.en")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunLanguageHints")}
+              <input
+                value={aliyun.languageHints ?? ""}
+                onChange={(event) => updateAliyun({ languageHints: event.target.value })}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunFileUrlPrefix")}
+              <input
+                value={aliyun.fileUrlPrefix ?? ""}
+                onChange={(event) => updateAliyun({ fileUrlPrefix: event.target.value })}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunNormalizationEnabled")}
+              <select
+                value={String(aliyun.transcriptionNormalizationEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ transcriptionNormalizationEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunParagraphEnabled")}
+              <select
+                value={String(aliyun.transcriptionParagraphEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ transcriptionParagraphEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunPunctuationPredictionEnabled")}
+              <select
+                value={String(aliyun.transcriptionPunctuationPredictionEnabled)}
+                onChange={(event) =>
+                  updateAliyun({
+                    transcriptionPunctuationPredictionEnabled: event.target.value === "true"
+                  })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunDisfluencyRemovalEnabled")}
+              <select
+                value={String(aliyun.transcriptionDisfluencyRemovalEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ transcriptionDisfluencyRemovalEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunSpeakerDiarizationEnabled")}
+              <select
+                value={String(aliyun.transcriptionSpeakerDiarizationEnabled)}
+                onChange={(event) =>
+                  updateAliyun({
+                    transcriptionSpeakerDiarizationEnabled: event.target.value === "true"
+                  })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunPollIntervalSeconds")}
+              <input
+                type="number"
+                min={60}
+                max={300}
+                value={aliyun.pollIntervalSeconds}
+                onChange={(event) =>
+                  updateAliyun({ pollIntervalSeconds: Number.parseInt(event.target.value || "0", 10) || 60 })
+                }
+              />
+            </label>
+            <label>
+              {t("settings.aliyunMaxPollingMinutes")}
+              <input
+                type="number"
+                min={5}
+                max={720}
+                value={aliyun.maxPollingMinutes}
+                onChange={(event) =>
+                  updateAliyun({ maxPollingMinutes: Number.parseInt(event.target.value || "0", 10) || 180 })
+                }
+              />
+            </label>
+          </section>
+
+          <section className="provider-subsection">
+            <h4>{t("settings.aliyunSection.realtimeRecording")}</h4>
+            <label>
+              {t("settings.aliyunRealtimeEnabledByDefault")}
+              <select
+                value={String(aliyun.realtimeEnabledByDefault)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeEnabledByDefault: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeFormat")}
+              <select
+                value={aliyun.realtimeFormat}
+                onChange={(event) =>
+                  updateAliyun({ realtimeFormat: event.target.value as typeof aliyun.realtimeFormat })
+                }
+              >
+                <option value="pcm">pcm</option>
+                <option value="opus">opus</option>
+                <option value="aac">aac</option>
+                <option value="speex">speex</option>
+                <option value="mp3">mp3</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeSampleRate")}
+              <select
+                value={String(aliyun.realtimeSampleRate)}
+                onChange={(event) =>
+                  updateAliyun({
+                    realtimeSampleRate: event.target.value === "8000" ? 8000 : 16000
+                  })
+                }
+              >
+                <option value="16000">16000</option>
+                <option value="8000">8000</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeSourceLanguage")}
+              <select
+                value={aliyun.realtimeSourceLanguage}
+                onChange={(event) =>
+                  updateAliyun({
+                    realtimeSourceLanguage: event.target.value as typeof aliyun.realtimeSourceLanguage
+                  })
+                }
+              >
+                <option value="cn">{t("settings.aliyunSourceLanguage.cn")}</option>
+                <option value="en">{t("settings.aliyunSourceLanguage.en")}</option>
+                <option value="yue">{t("settings.aliyunSourceLanguage.yue")}</option>
+                <option value="ja">{t("settings.aliyunSourceLanguage.ja")}</option>
+                <option value="ko">{t("settings.aliyunSourceLanguage.ko")}</option>
+                <option value="multilingual">{t("settings.aliyunSourceLanguage.multilingual")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeLanguageHints")}
+              <input
+                value={aliyun.realtimeLanguageHints ?? ""}
+                onChange={(event) => updateAliyun({ realtimeLanguageHints: event.target.value })}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTaskKey")}
+              <input
+                value={aliyun.realtimeTaskKey ?? ""}
+                onChange={(event) => updateAliyun({ realtimeTaskKey: event.target.value })}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeProgressiveCallbacksEnabled")}
+              <select
+                value={String(aliyun.realtimeProgressiveCallbacksEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeProgressiveCallbacksEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTranscodingTargetAudioFormat")}
+              <select
+                value={aliyun.realtimeTranscodingTargetAudioFormat ?? ""}
+                onChange={(event) =>
+                  updateAliyun({
+                    realtimeTranscodingTargetAudioFormat:
+                      event.target.value === "mp3" ? "mp3" : undefined
+                  })
+                }
+              >
+                <option value="">{t("settings.option.disabled")}</option>
+                <option value="mp3">mp3</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTranscriptionOutputLevel")}
+              <select
+                value={String(aliyun.realtimeTranscriptionOutputLevel)}
+                onChange={(event) =>
+                  updateAliyun({
+                    realtimeTranscriptionOutputLevel: event.target.value === "2" ? 2 : 1
+                  })
+                }
+              >
+                <option value="1">{t("settings.aliyunRealtimeOutputLevel.finalOnly")}</option>
+                <option value="2">{t("settings.aliyunRealtimeOutputLevel.intermediate")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTranscriptionDiarizationEnabled")}
+              <select
+                value={String(aliyun.realtimeTranscriptionDiarizationEnabled)}
+                onChange={(event) =>
+                  updateAliyun({
+                    realtimeTranscriptionDiarizationEnabled: event.target.value === "true"
+                  })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTranscriptionDiarizationSpeakerCount")}
+              <input
+                type="number"
+                min={0}
+                max={64}
+                value={aliyun.realtimeTranscriptionDiarizationSpeakerCount ?? ""}
+                onChange={(event) => {
+                  const value = Number.parseInt(event.target.value, 10);
+                  updateAliyun({
+                    realtimeTranscriptionDiarizationSpeakerCount: Number.isFinite(value)
+                      ? value
+                      : undefined
+                  });
+                }}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTranscriptionPhraseId")}
+              <input
+                value={aliyun.realtimeTranscriptionPhraseId ?? ""}
+                onChange={(event) =>
+                  updateAliyun({ realtimeTranscriptionPhraseId: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTranslationEnabled")}
+              <select
+                value={String(aliyun.realtimeTranslationEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeTranslationEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTranslationOutputLevel")}
+              <select
+                value={String(aliyun.realtimeTranslationOutputLevel)}
+                onChange={(event) =>
+                  updateAliyun({
+                    realtimeTranslationOutputLevel: event.target.value === "2" ? 2 : 1
+                  })
+                }
+              >
+                <option value="1">{t("settings.aliyunRealtimeOutputLevel.finalOnly")}</option>
+                <option value="2">{t("settings.aliyunRealtimeOutputLevel.intermediate")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTranslationTargetLanguages")}
+              <input
+                value={aliyun.realtimeTranslationTargetLanguages ?? ""}
+                onChange={(event) =>
+                  updateAliyun({ realtimeTranslationTargetLanguages: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeAutoChaptersEnabled")}
+              <select
+                value={String(aliyun.realtimeAutoChaptersEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeAutoChaptersEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeMeetingAssistanceEnabled")}
+              <select
+                value={String(aliyun.realtimeMeetingAssistanceEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeMeetingAssistanceEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeSummarizationEnabled")}
+              <select
+                value={String(aliyun.realtimeSummarizationEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeSummarizationEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeSummarizationTypes")}
+              <input
+                value={aliyun.realtimeSummarizationTypes ?? ""}
+                onChange={(event) => updateAliyun({ realtimeSummarizationTypes: event.target.value })}
+              />
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeTextPolishEnabled")}
+              <select
+                value={String(aliyun.realtimeTextPolishEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeTextPolishEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeServiceInspectionEnabled")}
+              <select
+                value={String(aliyun.realtimeServiceInspectionEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeServiceInspectionEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeServiceInspection")}
+              <textarea
+                value={serviceInspectionDraft}
+                onChange={(event) =>
+                  updateAliyunJsonField(
+                    provider.id,
+                    "serviceInspection",
+                    event.target.value,
+                    (value) => updateAliyun({ realtimeServiceInspection: value })
+                  )
+                }
+              />
+              {serviceInspectionError ? (
+                <span className="provider-validation-error">{t(serviceInspectionError)}</span>
+              ) : null}
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeCustomPromptEnabled")}
+              <select
+                value={String(aliyun.realtimeCustomPromptEnabled)}
+                onChange={(event) =>
+                  updateAliyun({ realtimeCustomPromptEnabled: event.target.value === "true" })
+                }
+              >
+                <option value="true">{t("settings.option.enabled")}</option>
+                <option value="false">{t("settings.option.disabled")}</option>
+              </select>
+            </label>
+            <label>
+              {t("settings.aliyunRealtimeCustomPrompt")}
+              <textarea
+                value={customPromptDraft}
+                onChange={(event) =>
+                  updateAliyunJsonField(
+                    provider.id,
+                    "customPrompt",
+                    event.target.value,
+                    (value) => updateAliyun({ realtimeCustomPrompt: value })
+                  )
+                }
+              />
+              {customPromptError ? (
+                <span className="provider-validation-error">{t(customPromptError)}</span>
+              ) : null}
+            </label>
+          </section>
         </>
       );
     }
@@ -718,6 +1127,9 @@ function SettingsTab({
   );
   const activeProvider = settings.providers.find((provider) => provider.id === activeProviderId);
   const activeOssConfig = settings.ossConfigs.find((config) => config.id === activeOssConfigId);
+  const hasValidationErrors = Object.values(aliyunJsonFieldErrors).some(
+    (value) => Boolean(value.serviceInspection || value.customPrompt)
+  );
 
   return (
     <section className="panel settings-panel">
@@ -1192,7 +1604,15 @@ function SettingsTab({
       </div>
 
       <div className="settings-save-row">
-        <button type="button" className="settings-save-btn" onClick={onSave}>
+        {hasValidationErrors ? (
+          <p className="provider-validation-error">{t("settings.aliyunJsonFixBeforeSave")}</p>
+        ) : null}
+        <button
+          type="button"
+          className="settings-save-btn"
+          onClick={onSave}
+          disabled={hasValidationErrors}
+        >
           {t("settings.save")}
         </button>
       </div>
