@@ -23,6 +23,10 @@
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform">
 </p>
 
+## Screenshot
+
+![Open Recorder Desktop Home (English)](assets/home-en-optimized.png)
+
 ---
 
 ## Features

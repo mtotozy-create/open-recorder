@@ -14,15 +14,12 @@ const MIN_RECORDING_SEGMENT_SECONDS: u64 = 10;
 const MAX_RECORDING_SEGMENT_SECONDS: u64 = 1800;
 pub const MAX_SESSION_TAGS: usize = 3;
 pub const DEFAULT_RECORDING_SESSION_TAG: &str = "#or";
-pub const DEFAULT_IMPORTED_SESSION_TAG: &str = "#导入";
-pub const BUILTIN_SESSION_TAGS: [&str; 7] = [
+pub const DEFAULT_IMPORTED_SESSION_TAG: &str = "#imported";
+pub const BUILTIN_SESSION_TAGS: [&str; 4] = [
     "#or",
-    "#会议",
-    "#电话",
-    "#导入",
-    "#总经理会",
-    "#军工规划会",
-    "#625项目",
+    "#meeting",
+    "#call",
+    "#imported",
 ];
 
 fn default_recording_segment_seconds() -> u64 {

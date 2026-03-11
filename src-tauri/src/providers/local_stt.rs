@@ -184,7 +184,7 @@ pub fn transcribe_with_local_stt(
     fs::write(&request_path, payload)
         .map_err(|error| format!("failed to write local stt request file: {error}"))?;
 
-    progress_callback("本地模型转写中...");
+    progress_callback("Running local STT model...");
     let python_executable = resolve_python_executable(config);
     let command_output = Command::new(&python_executable)
         .arg(&script_path)
@@ -258,7 +258,7 @@ pub fn transcribe_with_local_stt(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
     {
-        let warning_msg = format!("告警: {warning}");
+        let warning_msg = format!("Warning: {warning}");
         progress_callback(&warning_msg);
         eprintln!("[local-stt] {warning_msg}");
     }

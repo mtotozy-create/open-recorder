@@ -79,7 +79,7 @@ pub fn transcribe_with_bailian(
         "bailian transcription requires OSS config (access key, secret, endpoint, bucket)"
             .to_string()
     })?;
-    progress_callback("上传OSS中...");
+    progress_callback("Uploading to OSS...");
     let file_urls = upload_segments_and_sign_urls(segment_paths, session_id, oss)?;
     let endpoint = build_endpoint(&config.base_url, BAILIAN_ASR_PATH);
 
@@ -98,7 +98,7 @@ pub fn transcribe_with_bailian(
             }
         });
 
-        progress_callback("提交转写任务中...");
+        progress_callback("Submitting transcription task...");
         let response = client
             .post(endpoint.as_str())
             .bearer_auth(&config.api_key)
@@ -184,7 +184,7 @@ fn resolve_transcription_text(
         )
     })?;
 
-    progress_callback("正在轮询结果...");
+    progress_callback("Polling transcription result...");
     let task_payload = poll_bailian_task(
         client,
         base_url,
@@ -238,7 +238,7 @@ fn poll_bailian_task(
         )
     );
 
-    progress_callback("正在轮询结果...");
+    progress_callback("Polling transcription result...");
     for _ in 0..MAX_BAILIAN_POLL_COUNT {
         let response = client
             .get(endpoint.as_str())

@@ -241,7 +241,7 @@ pub fn summary_enqueue(
             }
         };
 
-        update_progress("正在生成纪要...");
+        update_progress("Generating summary...");
 
         let summary_result = summarize_with_chat_compatible(
             &transcript,

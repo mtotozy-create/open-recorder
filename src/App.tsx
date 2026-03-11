@@ -63,12 +63,9 @@ const MIN_RECORDING_SEGMENT_SECONDS = 10;
 const MAX_RECORDING_SEGMENT_SECONDS = 1800;
 const DEFAULT_SESSION_TAG_CATALOG = [
   "#or",
-  "#会议",
-  "#电话",
-  "#导入",
-  "#总经理会",
-  "#军工规划会",
-  "#625项目"
+  "#meeting",
+  "#call",
+  "#imported"
 ];
 
 function normalizeSessionTag(rawTag: string): string | undefined {

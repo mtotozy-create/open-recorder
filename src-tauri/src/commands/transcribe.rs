@@ -265,7 +265,7 @@ fn resolve_transcription_audio_input(
         });
     }
 
-    update_progress("合并音频中...");
+    update_progress("Merging audio...");
     let merged_path = export_dir.join(format!("recording-{session_id}.m4a"));
 
     match merge_segments_with_ffmpeg(&raw_segment_paths, &merged_path, "m4a") {
@@ -796,7 +796,7 @@ pub fn transcribe_enqueue(
                         let keep_warning = job
                             .progress_msg
                             .as_ref()
-                            .map(|value| value.starts_with("告警:"))
+                            .map(|value| value.starts_with("Warning:"))
                             .unwrap_or(false);
                         if !keep_warning {
                             job.progress_msg = None;

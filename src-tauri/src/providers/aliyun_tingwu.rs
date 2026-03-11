@@ -96,7 +96,7 @@ pub fn transcribe_with_aliyun_tingwu(
             "Parameters": parameters
         });
 
-        progress_callback("提交转写任务中...");
+        progress_callback("Submitting transcription task...");
         let create_url = format!("{endpoint}{create_path}?{create_query}");
         let create_payload = send_signed_json_request(
             &client,
@@ -279,7 +279,7 @@ fn poll_task_result_url(
     let poll_interval = Duration::from_secs(config.poll_interval_seconds.clamp(60, 300));
     let max_poll_count = max_poll_count(config);
 
-    progress_callback("正在轮询结果...");
+    progress_callback("Polling transcription result...");
     for _ in 0..max_poll_count {
         let payload = send_signed_json_request(
             client,
@@ -435,7 +435,7 @@ fn resolve_segment_file_urls(
         let oss = config.oss.as_ref().ok_or_else(|| {
             "aliyun tingwu requires public FileUrl: configure current OSS for auto upload or set aliyunFileUrlPrefix".to_string()
         })?;
-        progress_callback("上传OSS中...");
+        progress_callback("Uploading to OSS...");
         let signed_urls = upload_segments_and_sign_urls(&pending_local_paths, session_id, oss)?;
         if signed_urls.len() != pending_local_indexes.len() {
             return Err("aliyun tingwu failed to map signed OSS urls to segment list".to_string());
