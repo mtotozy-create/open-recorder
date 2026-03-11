@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import type { Translator } from "../i18n";
-import type { RecordingQualityPreset, TranscriptSegment } from "../types/domain";
+import type {
+  RecorderInputDevice,
+  RecordingQualityPreset,
+  TranscriptSegment
+} from "../types/domain";
 
 type RecorderTabProps = {
   statusMessage: string;
@@ -9,6 +13,9 @@ type RecorderTabProps = {
   hasRecording: boolean;
   elapsedMs: number;
   waveformPoints: number[];
+  inputDevices: RecorderInputDevice[];
+  recordingInputDeviceId: string;
+  recordingInputDeviceDisabled: boolean;
   realtimeEnabled: boolean;
   realtimeToggleDisabled: boolean;
   realtimeSourceLanguage: string;
@@ -22,6 +29,7 @@ type RecorderTabProps = {
   realtimeState: "idle" | "connecting" | "running" | "paused" | "stopping" | "error";
   realtimeLastError?: string;
   qualityPreset: RecordingQualityPreset;
+  onRecordingInputDeviceChange: (inputDeviceId: string) => void;
   onQualityChange: (preset: RecordingQualityPreset) => void;
   onRealtimeToggle: (enabled: boolean) => void;
   onRealtimeSourceLanguageChange: (sourceLanguage: string) => void;
@@ -100,6 +108,9 @@ function RecorderTab({
   hasRecording,
   elapsedMs,
   waveformPoints,
+  inputDevices,
+  recordingInputDeviceId,
+  recordingInputDeviceDisabled,
   realtimeEnabled,
   realtimeToggleDisabled,
   realtimeSourceLanguage,
@@ -113,6 +124,7 @@ function RecorderTab({
   realtimeState,
   realtimeLastError,
   qualityPreset,
+  onRecordingInputDeviceChange,
   onQualityChange,
   onRealtimeToggle,
   onRealtimeSourceLanguageChange,
@@ -200,6 +212,9 @@ function RecorderTab({
 
   const realtimeStateClass = `realtime-state-badge state-${realtimeState}`;
   const hasRealtimeSegments = realtimeSegments.length > 0;
+  const hasSelectedInputDevice =
+    recordingInputDeviceId.length === 0 ||
+    inputDevices.some((device) => device.id === recordingInputDeviceId);
 
   return (
     <section className="panel recorder-panel">
@@ -209,6 +224,31 @@ function RecorderTab({
           <p>{t("recorder.subtitle")}</p>
         </div>
         <div className="recorder-controls-row" style={{ margin: 0 }}>
+          <label className="quality-select">
+            <span>{t("settings.recordingInputDevice")}</span>
+            <select
+              value={recordingInputDeviceId}
+              onChange={(event) => onRecordingInputDeviceChange(event.target.value)}
+              disabled={recordingInputDeviceDisabled}
+            >
+              <option value="">{t("settings.recordingInputDevice.systemDefault")}</option>
+              {inputDevices.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {device.name}
+                  {device.isDefault
+                    ? ` (${t("settings.recordingInputDevice.defaultSuffix")})`
+                    : ""}
+                </option>
+              ))}
+              {!hasSelectedInputDevice && recordingInputDeviceId.length > 0 && (
+                <option value={recordingInputDeviceId}>
+                  {t("settings.recordingInputDevice.unavailable", {
+                    deviceId: recordingInputDeviceId
+                  })}
+                </option>
+              )}
+            </select>
+          </label>
           <label className="quality-select">
             <span>{t("recorder.quality")}</span>
             <select

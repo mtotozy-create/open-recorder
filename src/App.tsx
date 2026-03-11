@@ -653,6 +653,11 @@ function App() {
   const [realtimeLastError, setRealtimeLastError] = useState<string>();
   const [inputDevices, setInputDevices] = useState<RecorderInputDevice[]>([]);
   const [settings, setSettings] = useState<Settings>(initialSettings);
+  const [runtimeRecordingInputDeviceId, setRuntimeRecordingInputDeviceId] = useState<string>(
+    typeof initialSettings.recordingInputDeviceId === "string"
+      ? initialSettings.recordingInputDeviceId
+      : ""
+  );
   const [summaryTemplateId, setSummaryTemplateId] = useState<string>(initialSettings.defaultTemplateId);
   const [statusState, setStatusState] = useState<StatusState>({ key: "status.ready" });
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -731,6 +736,11 @@ function App() {
         const normalized = normalizeSettings(loaded);
         const realtimeDefaults = getAliyunRealtimeDefaults(normalized);
         setSettings(normalized);
+        setRuntimeRecordingInputDeviceId(
+          typeof normalized.recordingInputDeviceId === "string"
+            ? normalized.recordingInputDeviceId
+            : ""
+        );
         setSummaryTemplateId(normalized.defaultTemplateId);
         setRealtimeTranscriptionEnabled(realtimeDefaults.enabled);
         setRealtimeSourceLanguage(realtimeDefaults.sourceLanguage);
@@ -762,7 +772,7 @@ function App() {
   }, [settings.defaultTemplateId, settings.templates, summaryTemplateId]);
 
   useEffect(() => {
-    if (activeTab !== "settings") {
+    if (activeTab !== "settings" && activeTab !== "recorder") {
       return;
     }
     void refreshInputDevices().catch((error) => {
@@ -857,9 +867,8 @@ function App() {
   async function onStart() {
     try {
       const preferredInputDeviceId =
-        typeof settings.recordingInputDeviceId === "string" &&
-        settings.recordingInputDeviceId.trim().length > 0
-          ? settings.recordingInputDeviceId.trim()
+        runtimeRecordingInputDeviceId.trim().length > 0
+          ? runtimeRecordingInputDeviceId.trim()
           : undefined;
       const response = await startRecording(
         preferredInputDeviceId,
@@ -1325,6 +1334,9 @@ function App() {
           hasRecording={hasRecording}
           elapsedMs={recordingElapsedMs}
           waveformPoints={waveformPoints}
+          inputDevices={inputDevices}
+          recordingInputDeviceId={runtimeRecordingInputDeviceId}
+          recordingInputDeviceDisabled={hasRecording}
           realtimeEnabled={realtimeTranscriptionEnabled}
           realtimeToggleDisabled={!canToggleRealtime}
           realtimeSourceLanguage={realtimeSourceLanguage}
@@ -1338,6 +1350,7 @@ function App() {
           realtimeState={realtimeTranscriptionState}
           realtimeLastError={realtimeLastError}
           qualityPreset={recordingQuality}
+          onRecordingInputDeviceChange={setRuntimeRecordingInputDeviceId}
           onQualityChange={setRecordingQuality}
           onRealtimeToggle={(enabled) => void onToggleRealtime(enabled)}
           onRealtimeSourceLanguageChange={(sourceLanguage) =>

@@ -23,6 +23,8 @@ const ALIYUN_SIGNATURE_VERSION: &str = "1.0";
 const TINGWU_WS_NAMESPACE: &str = "SpeechTranscriber";
 const TINGWU_WS_APPKEY_DEFAULT: &str = "default";
 const TINGWU_WS_AUDIO_CHUNK_BYTES_16K: usize = 3200;
+const REALTIME_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const REALTIME_RECONNECT_MAX_RETRIES: usize = 3;
 
 #[derive(Debug, Clone)]
 pub struct AliyunTingwuRealtimeConfig {
@@ -175,16 +177,141 @@ fn realtime_audio_chunk_bytes(sample_rate: u32) -> usize {
     }
 }
 
-async fn run_realtime_worker(
-    config: AliyunTingwuRealtimeConfig,
-    mut command_rx: tokio_mpsc::Receiver<RealtimeWorkerCommand>,
-    event_tx: mpsc::Sender<RealtimeWorkerEvent>,
-) -> Result<(), String> {
-    let _ = event_tx.send(RealtimeWorkerEvent::StateChanged {
-        state: RealtimeWorkerState::Connecting,
-        error: None,
-    });
+type RealtimeWsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type RealtimeWsWriter = futures_util::stream::SplitSink<RealtimeWsStream, Message>;
+type RealtimeWsReader = futures_util::stream::SplitStream<RealtimeWsStream>;
 
+enum WaitReconnectOutcome {
+    Continue,
+    StopRequested,
+}
+
+enum RealtimeSessionOutcome {
+    StopRequested,
+    RetryableDisconnect(String),
+    Fatal(String),
+}
+
+fn emit_state(event_tx: &mpsc::Sender<RealtimeWorkerEvent>, state: RealtimeWorkerState) {
+    let _ = event_tx.send(RealtimeWorkerEvent::StateChanged { state, error: None });
+}
+
+fn apply_disconnected_command(
+    command: RealtimeWorkerCommand,
+    paused: &mut bool,
+    event_tx: &mpsc::Sender<RealtimeWorkerEvent>,
+) -> bool {
+    match command {
+        RealtimeWorkerCommand::AudioFrame(_) => false,
+        RealtimeWorkerCommand::Pause => {
+            if !*paused {
+                *paused = true;
+                emit_state(event_tx, RealtimeWorkerState::Paused);
+            }
+            false
+        }
+        RealtimeWorkerCommand::Resume => {
+            if *paused {
+                *paused = false;
+                emit_state(event_tx, RealtimeWorkerState::Connecting);
+            }
+            false
+        }
+        RealtimeWorkerCommand::Stop => {
+            emit_state(event_tx, RealtimeWorkerState::Stopping);
+            true
+        }
+    }
+}
+
+fn drain_disconnected_commands(
+    command_rx: &mut tokio_mpsc::Receiver<RealtimeWorkerCommand>,
+    paused: &mut bool,
+    event_tx: &mpsc::Sender<RealtimeWorkerEvent>,
+) -> bool {
+    loop {
+        match command_rx.try_recv() {
+            Ok(command) => {
+                if apply_disconnected_command(command, paused, event_tx) {
+                    return true;
+                }
+            }
+            Err(tokio_mpsc::error::TryRecvError::Empty) => return false,
+            Err(tokio_mpsc::error::TryRecvError::Disconnected) => {
+                emit_state(event_tx, RealtimeWorkerState::Stopping);
+                return true;
+            }
+        }
+    }
+}
+
+async fn wait_for_reconnect_or_stop(
+    command_rx: &mut tokio_mpsc::Receiver<RealtimeWorkerCommand>,
+    paused: &mut bool,
+    event_tx: &mpsc::Sender<RealtimeWorkerEvent>,
+) -> WaitReconnectOutcome {
+    let delay = tokio::time::sleep(REALTIME_RECONNECT_DELAY);
+    tokio::pin!(delay);
+
+    loop {
+        tokio::select! {
+            _ = &mut delay => {
+                return WaitReconnectOutcome::Continue;
+            }
+            maybe_command = command_rx.recv() => {
+                match maybe_command {
+                    Some(command) => {
+                        if apply_disconnected_command(command, paused, event_tx) {
+                            return WaitReconnectOutcome::StopRequested;
+                        }
+                    }
+                    None => {
+                        emit_state(event_tx, RealtimeWorkerState::Stopping);
+                        return WaitReconnectOutcome::StopRequested;
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn close_realtime_connection(
+    writer: &mut RealtimeWsWriter,
+    config: &AliyunTingwuRealtimeConfig,
+    task_id: &str,
+    emit_stop_error: bool,
+    event_tx: &mpsc::Sender<RealtimeWorkerEvent>,
+) {
+    let _ = writer.close().await;
+    let stop_config = config.clone();
+    let stop_task_id = task_id.to_string();
+    let stop_result =
+        tokio::task::spawn_blocking(move || stop_realtime_task(&stop_config, &stop_task_id))
+            .await;
+
+    if !emit_stop_error {
+        return;
+    }
+
+    let stop_error = match stop_result {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(error),
+        Err(error) => Some(format!("failed to join realtime stop task: {error}")),
+    };
+    if let Some(error) = stop_error {
+        let _ = event_tx.send(RealtimeWorkerEvent::StateChanged {
+            state: RealtimeWorkerState::Error,
+            error: Some(error),
+        });
+    }
+}
+
+async fn establish_realtime_connection(
+    config: &AliyunTingwuRealtimeConfig,
+    event_tx: &mpsc::Sender<RealtimeWorkerEvent>,
+    paused: bool,
+) -> Result<(String, String, RealtimeWsWriter, RealtimeWsReader, bool), String> {
     let create_config = config.clone();
     let create_result = tokio::task::spawn_blocking(move || create_realtime_task(&create_config))
         .await
@@ -194,91 +321,114 @@ async fn run_realtime_worker(
     let (websocket, _) = connect_async(meeting_join_url)
         .await
         .map_err(|error| format!("failed to connect realtime websocket: {error}"))?;
-    let (mut writer, mut reader) = websocket.split();
+    let (mut writer, reader) = websocket.split();
     let stream_task_id = Uuid::new_v4().simple().to_string();
+    let transcription_started = false;
 
-    send_start_transcription(
-        &mut writer,
-        &stream_task_id,
-        &config.format,
-        config.sample_rate,
-        config.transcription_output_level,
-        TINGWU_WS_APPKEY_DEFAULT,
-    )
-    .await?;
+    if paused {
+        emit_state(event_tx, RealtimeWorkerState::Paused);
+    } else {
+        send_start_transcription(
+            &mut writer,
+            &stream_task_id,
+            &config.format,
+            config.sample_rate,
+            config.transcription_output_level,
+            TINGWU_WS_APPKEY_DEFAULT,
+        )
+        .await?;
+    }
 
-    let mut paused = false;
-    let mut should_stop = false;
-    let mut stop_requested = false;
+    Ok((
+        task_id,
+        stream_task_id,
+        writer,
+        reader,
+        transcription_started,
+    ))
+}
+
+async fn run_connected_session(
+    config: &AliyunTingwuRealtimeConfig,
+    event_tx: &mpsc::Sender<RealtimeWorkerEvent>,
+    command_rx: &mut tokio_mpsc::Receiver<RealtimeWorkerCommand>,
+    writer: &mut RealtimeWsWriter,
+    reader: &mut RealtimeWsReader,
+    stream_task_id: &str,
+    paused: &mut bool,
+    transcription_started: &mut bool,
+    audio_chunk_bytes: usize,
+) -> RealtimeSessionOutcome {
     let mut last_server_text: Option<String> = None;
-    let mut transcription_started = false;
-    let audio_chunk_bytes = realtime_audio_chunk_bytes(config.sample_rate);
 
-    while !should_stop {
+    loop {
         tokio::select! {
             maybe_command = command_rx.recv() => {
                 match maybe_command {
                     Some(RealtimeWorkerCommand::AudioFrame(frame)) => {
-                        if !paused && transcription_started && !frame.is_empty() {
+                        if !*paused && *transcription_started && !frame.is_empty() {
                             let bytes = pcm16_to_le_bytes(&frame);
                             for chunk in bytes.chunks(audio_chunk_bytes) {
-                                writer
-                                    .send(Message::Binary(chunk.to_vec().into()))
-                                    .await
-                                    .map_err(|error| format!("failed to send realtime audio frame: {error}"))?;
+                                if let Err(error) = writer.send(Message::Binary(chunk.to_vec().into())).await {
+                                    return RealtimeSessionOutcome::RetryableDisconnect(
+                                        format!("failed to send realtime audio frame: {error}")
+                                    );
+                                }
                             }
                         }
                     }
                     Some(RealtimeWorkerCommand::Pause) => {
-                        if !paused {
-                            send_stop_transcription(
-                                &mut writer,
-                                &stream_task_id,
+                        if !*paused {
+                            if let Err(error) = send_stop_transcription(
+                                writer,
+                                stream_task_id,
                                 TINGWU_WS_APPKEY_DEFAULT,
-                            )
-                            .await?;
-                            paused = true;
-                            transcription_started = false;
-                            let _ = event_tx.send(RealtimeWorkerEvent::StateChanged {
-                                state: RealtimeWorkerState::Paused,
-                                error: None,
-                            });
+                            ).await {
+                                return RealtimeSessionOutcome::RetryableDisconnect(error);
+                            }
+                            *paused = true;
+                            *transcription_started = false;
+                            emit_state(event_tx, RealtimeWorkerState::Paused);
                         }
                     }
                     Some(RealtimeWorkerCommand::Resume) => {
-                        if paused {
-                            send_start_transcription(
-                                &mut writer,
-                                &stream_task_id,
+                        if *paused {
+                            if let Err(error) = send_start_transcription(
+                                writer,
+                                stream_task_id,
                                 &config.format,
                                 config.sample_rate,
                                 config.transcription_output_level,
                                 TINGWU_WS_APPKEY_DEFAULT,
-                            )
-                            .await?;
-                            paused = false;
-                            transcription_started = false;
-                            let _ = event_tx.send(RealtimeWorkerEvent::StateChanged {
-                                state: RealtimeWorkerState::Connecting,
-                                error: None,
-                            });
+                            ).await {
+                                return RealtimeSessionOutcome::RetryableDisconnect(error);
+                            }
+                            *paused = false;
+                            *transcription_started = false;
+                            emit_state(event_tx, RealtimeWorkerState::Connecting);
                         }
                     }
-                    Some(RealtimeWorkerCommand::Stop) | None => {
-                        stop_requested = true;
-                        let _ = event_tx.send(RealtimeWorkerEvent::StateChanged {
-                            state: RealtimeWorkerState::Stopping,
-                            error: None,
-                        });
-                        if !paused {
+                    Some(RealtimeWorkerCommand::Stop) => {
+                        emit_state(event_tx, RealtimeWorkerState::Stopping);
+                        if !*paused {
                             let _ = send_stop_transcription(
-                                &mut writer,
-                                &stream_task_id,
+                                writer,
+                                stream_task_id,
                                 TINGWU_WS_APPKEY_DEFAULT,
-                            )
-                            .await;
+                            ).await;
                         }
-                        should_stop = true;
+                        return RealtimeSessionOutcome::StopRequested;
+                    }
+                    None => {
+                        emit_state(event_tx, RealtimeWorkerState::Stopping);
+                        if !*paused {
+                            let _ = send_stop_transcription(
+                                writer,
+                                stream_task_id,
+                                TINGWU_WS_APPKEY_DEFAULT,
+                            ).await;
+                        }
+                        return RealtimeSessionOutcome::StopRequested;
                     }
                 }
             }
@@ -287,71 +437,154 @@ async fn run_realtime_worker(
                     Some(Ok(Message::Text(raw_text))) => {
                         last_server_text = Some(raw_text.to_string());
                         if let Some(error) = extract_ws_error_message(raw_text.as_str()) {
-                            return Err(format!("realtime service error: {error}"));
+                            return RealtimeSessionOutcome::Fatal(format!("realtime service error: {error}"));
                         }
                         let name = extract_ws_event_name(raw_text.as_str());
                         if name.as_deref() == Some("transcriptionstarted") {
-                            transcription_started = true;
-                            let _ = event_tx.send(RealtimeWorkerEvent::StateChanged {
-                                state: RealtimeWorkerState::Running,
-                                error: None,
-                            });
+                            *transcription_started = true;
+                            emit_state(event_tx, RealtimeWorkerState::Running);
                         }
                         if name.as_deref() == Some("transcriptioncompleted") {
-                            transcription_started = false;
+                            *transcription_started = false;
                         }
-                        handle_ws_text_message(raw_text.as_str(), &event_tx);
+                        handle_ws_text_message(raw_text.as_str(), event_tx);
                     }
                     Some(Ok(Message::Binary(_))) => {}
                     Some(Ok(Message::Close(frame))) => {
-                        if !stop_requested {
-                            return Err(format!(
-                                "realtime websocket closed unexpectedly{}{}{}",
-                                close_frame_reason(frame.as_ref()),
-                                if transcription_started { "" } else { ", before transcription started ack" },
-                                last_server_text_suffix(last_server_text.as_deref())
-                            ));
-                        }
-                        should_stop = true;
+                        return RealtimeSessionOutcome::RetryableDisconnect(format!(
+                            "realtime websocket closed unexpectedly{}{}{}",
+                            close_frame_reason(frame.as_ref()),
+                            if *transcription_started { "" } else { ", before transcription started ack" },
+                            last_server_text_suffix(last_server_text.as_deref())
+                        ));
                     }
                     Some(Err(error)) => {
-                        return Err(format!("realtime websocket read error: {error}"));
+                        return RealtimeSessionOutcome::RetryableDisconnect(format!(
+                            "realtime websocket read error: {error}"
+                        ));
                     }
                     None => {
-                        if !stop_requested {
-                            return Err(format!(
-                                "realtime websocket closed unexpectedly by peer{}{}",
-                                if transcription_started { "" } else { ", before transcription started ack" },
-                                last_server_text_suffix(last_server_text.as_deref())
-                            ));
-                        }
-                        should_stop = true;
+                        return RealtimeSessionOutcome::RetryableDisconnect(format!(
+                            "realtime websocket closed unexpectedly by peer{}{}",
+                            if *transcription_started { "" } else { ", before transcription started ack" },
+                            last_server_text_suffix(last_server_text.as_deref())
+                        ));
                     }
                     _ => {}
                 }
             }
         }
     }
+}
 
-    let _ = writer.close().await;
+async fn run_realtime_worker(
+    config: AliyunTingwuRealtimeConfig,
+    mut command_rx: tokio_mpsc::Receiver<RealtimeWorkerCommand>,
+    event_tx: mpsc::Sender<RealtimeWorkerEvent>,
+) -> Result<(), String> {
+    let mut paused = false;
+    let mut retry_attempts = 0usize;
+    let audio_chunk_bytes = realtime_audio_chunk_bytes(config.sample_rate);
 
-    let stop_config = config.clone();
-    let stop_task_id = task_id.clone();
-    let stop_result =
-        tokio::task::spawn_blocking(move || stop_realtime_task(&stop_config, &stop_task_id))
-            .await
-            .map_err(|error| format!("failed to join realtime stop task: {error}"))?;
-    if let Err(error) = stop_result {
-        let _ = event_tx.send(RealtimeWorkerEvent::StateChanged {
-            state: RealtimeWorkerState::Error,
-            error: Some(error),
-        });
+    loop {
+        if drain_disconnected_commands(&mut command_rx, &mut paused, &event_tx) {
+            break;
+        }
+
+        emit_state(
+            &event_tx,
+            if paused {
+                RealtimeWorkerState::Paused
+            } else {
+                RealtimeWorkerState::Connecting
+            },
+        );
+
+        let connection = establish_realtime_connection(&config, &event_tx, paused).await;
+        let (task_id, stream_task_id, mut writer, mut reader, mut transcription_started) =
+            match connection {
+                Ok(items) => {
+                    retry_attempts = 0;
+                    items
+                }
+                Err(error) => {
+                    if retry_attempts == 0 {
+                        return Err(error);
+                    }
+                    retry_attempts += 1;
+                    if retry_attempts > REALTIME_RECONNECT_MAX_RETRIES {
+                        return Err(format!(
+                            "realtime websocket disconnected; retried every {} seconds for {} times but still failed: {}",
+                            REALTIME_RECONNECT_DELAY.as_secs(),
+                            REALTIME_RECONNECT_MAX_RETRIES,
+                            error
+                        ));
+                    }
+                    emit_state(
+                        &event_tx,
+                        if paused {
+                            RealtimeWorkerState::Paused
+                        } else {
+                            RealtimeWorkerState::Connecting
+                        },
+                    );
+                    if matches!(
+                        wait_for_reconnect_or_stop(&mut command_rx, &mut paused, &event_tx).await,
+                        WaitReconnectOutcome::StopRequested
+                    ) {
+                        break;
+                    }
+                    continue;
+                }
+            };
+
+        let outcome = run_connected_session(
+            &config,
+            &event_tx,
+            &mut command_rx,
+            &mut writer,
+            &mut reader,
+            &stream_task_id,
+            &mut paused,
+            &mut transcription_started,
+            audio_chunk_bytes,
+        )
+        .await;
+
+        let emit_stop_error = matches!(outcome, RealtimeSessionOutcome::StopRequested);
+        close_realtime_connection(&mut writer, &config, &task_id, emit_stop_error, &event_tx).await;
+
+        match outcome {
+            RealtimeSessionOutcome::StopRequested => break,
+            RealtimeSessionOutcome::Fatal(error) => return Err(error),
+            RealtimeSessionOutcome::RetryableDisconnect(error) => {
+                retry_attempts += 1;
+                if retry_attempts > REALTIME_RECONNECT_MAX_RETRIES {
+                    return Err(format!(
+                        "realtime websocket disconnected; retried every {} seconds for {} times but still failed: {}",
+                        REALTIME_RECONNECT_DELAY.as_secs(),
+                        REALTIME_RECONNECT_MAX_RETRIES,
+                        error
+                    ));
+                }
+                emit_state(
+                    &event_tx,
+                    if paused {
+                        RealtimeWorkerState::Paused
+                    } else {
+                        RealtimeWorkerState::Connecting
+                    },
+                );
+                if matches!(
+                    wait_for_reconnect_or_stop(&mut command_rx, &mut paused, &event_tx).await,
+                    WaitReconnectOutcome::StopRequested
+                ) {
+                    break;
+                }
+            }
+        }
     }
-
-    let _ = event_tx.send(RealtimeWorkerEvent::StateChanged {
-        state: RealtimeWorkerState::Idle,
-        error: None,
-    });
+    emit_state(&event_tx, RealtimeWorkerState::Idle);
     Ok(())
 }
 
