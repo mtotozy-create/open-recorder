@@ -9,7 +9,14 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "release": "release-it",
+    "release:dry": "npm run version:check && node scripts/release-dry-run.mjs",
+    "release:patch": "release-it patch",
+    "release:minor": "release-it minor",
+    "release:major": "release-it major"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
@@ -20,10 +27,12 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@release-it/conventional-changelog": "^10.0.5",
     "@tauri-apps/cli": "^2.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "release-it": "^19.2.4",
     "typescript": "^5.8.2",
     "vite": "^6.0.0"
   }
