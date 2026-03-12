@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.1.1...v0.1.2) (2026-03-12)
+
+### Features
+
+* add ollama provider settings and optional auth ([2eb2a70](https://github-mtotozy/mtotozy-create/open-recorder/commit/2eb2a705061fe0ec2f3e0eee5d06cbeec319fa6e))
+
 ## [0.1.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/0.1.0...v0.1.1) (2026-03-11)
 
 ### Features
