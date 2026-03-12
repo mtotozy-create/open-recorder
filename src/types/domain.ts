@@ -47,7 +47,7 @@ export type PromptTemplate = {
   variables: string[];
 };
 
-export type ProviderKind = "bailian" | "aliyun_tingwu" | "openrouter" | "local_stt";
+export type ProviderKind = "bailian" | "aliyun_tingwu" | "openrouter" | "ollama" | "local_stt";
 
 export type ProviderCapability = "transcription" | "summary";
 
@@ -119,6 +119,12 @@ export type OpenrouterProviderSettings = {
   summaryModel: string;
 };
 
+export type OllamaProviderSettings = {
+  apiKey?: string;
+  baseUrl: string;
+  summaryModel: string;
+};
+
 export type LocalSttEngine = "whisper" | "sensevoice_small";
 
 export type LocalSttProviderSettings = {
@@ -147,6 +153,7 @@ export type ProviderConfig = {
   bailian?: BailianProviderSettings;
   aliyunTingwu?: AliyunTingwuProviderSettings;
   openrouter?: OpenrouterProviderSettings;
+  ollama?: OllamaProviderSettings;
   localStt?: LocalSttProviderSettings;
 };
 

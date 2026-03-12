@@ -6,6 +6,7 @@ use serde_json::Value;
 const DEFAULT_BAILIAN_PROVIDER_ID: &str = "bailian-default";
 const DEFAULT_ALIYUN_PROVIDER_ID: &str = "aliyun-tingwu-default";
 const DEFAULT_OPENROUTER_PROVIDER_ID: &str = "openrouter-default";
+const DEFAULT_OLLAMA_PROVIDER_ID: &str = "ollama-default";
 const DEFAULT_LOCAL_STT_PROVIDER_ID: &str = "local-stt-default";
 const DEFAULT_SELECTED_OSS_CONFIG_ID: &str = "oss-aliyun-default";
 const DEFAULT_R2_OSS_CONFIG_ID: &str = "oss-r2-default";
@@ -114,6 +115,7 @@ pub enum ProviderKind {
     Bailian,
     AliyunTingwu,
     Openrouter,
+    Ollama,
     LocalStt,
 }
 
@@ -321,6 +323,24 @@ impl Default for OpenrouterProviderSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OllamaProviderSettings {
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub summary_model: String,
+}
+
+impl Default for OllamaProviderSettings {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            base_url: "http://127.0.0.1:11434/v1".to_string(),
+            summary_model: "qwen2.5:7b-instruct".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalSttEngine {
@@ -385,6 +405,7 @@ pub struct ProviderConfig {
     pub bailian: Option<BailianProviderSettings>,
     pub aliyun_tingwu: Option<AliyunTingwuProviderSettings>,
     pub openrouter: Option<OpenrouterProviderSettings>,
+    pub ollama: Option<OllamaProviderSettings>,
     pub local_stt: Option<LocalSttProviderSettings>,
 }
 
@@ -402,6 +423,7 @@ impl Default for ProviderConfig {
             bailian: Some(BailianProviderSettings::default()),
             aliyun_tingwu: None,
             openrouter: None,
+            ollama: None,
             local_stt: None,
         }
     }
@@ -588,7 +610,7 @@ impl Default for Settings {
             oss_configs: create_default_oss_configs(),
             selected_oss_config_id: DEFAULT_SELECTED_OSS_CONFIG_ID.to_string(),
             selected_transcription_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
-            selected_summary_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
+            selected_summary_provider_id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
             recording_segment_seconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
             recording_input_device_id: None,
             session_tag_catalog: default_session_tag_catalog(),
@@ -723,6 +745,7 @@ impl Settings {
         let default_aliyun = AliyunTingwuProviderSettings::default();
         let default_oss = ProviderOssSettings::default();
         let default_openrouter = OpenrouterProviderSettings::default();
+        let default_ollama = OllamaProviderSettings::default();
 
         let legacy_oss = ProviderOssSettings {
             access_key_id: self.legacy_bailian_oss_access_key_id.clone(),
@@ -765,6 +788,7 @@ impl Settings {
             }),
             aliyun_tingwu: None,
             openrouter: None,
+            ollama: None,
             local_stt: None,
         };
         let aliyun_provider = ProviderConfig {
@@ -849,6 +873,7 @@ impl Settings {
                 legacy_oss: None,
             }),
             openrouter: None,
+            ollama: None,
             local_stt: None,
         };
         let openrouter_provider = ProviderConfig {
@@ -864,6 +889,23 @@ impl Settings {
                 base_url: default_openrouter.base_url,
                 summary_model: default_openrouter.summary_model,
             }),
+            ollama: None,
+            local_stt: None,
+        };
+        let ollama_provider = ProviderConfig {
+            id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
+            name: "Ollama".to_string(),
+            kind: ProviderKind::Ollama,
+            capabilities: vec![ProviderCapability::Summary],
+            enabled: true,
+            bailian: None,
+            aliyun_tingwu: None,
+            openrouter: None,
+            ollama: Some(OllamaProviderSettings {
+                api_key: None,
+                base_url: default_ollama.base_url,
+                summary_model: default_ollama.summary_model,
+            }),
             local_stt: None,
         };
         let local_stt_provider = ProviderConfig {
@@ -875,6 +917,7 @@ impl Settings {
             bailian: None,
             aliyun_tingwu: None,
             openrouter: None,
+            ollama: None,
             local_stt: Some(LocalSttProviderSettings::default()),
         };
 
@@ -883,6 +926,7 @@ impl Settings {
                 bailian_provider,
                 aliyun_provider,
                 openrouter_provider,
+                ollama_provider,
                 local_stt_provider,
             ],
             legacy_oss,
@@ -940,6 +984,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             bailian: Some(BailianProviderSettings::default()),
             aliyun_tingwu: None,
             openrouter: None,
+            ollama: None,
             local_stt: None,
         },
         ProviderConfig {
@@ -951,6 +996,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             bailian: None,
             aliyun_tingwu: Some(AliyunTingwuProviderSettings::default()),
             openrouter: None,
+            ollama: None,
             local_stt: None,
         },
         ProviderConfig {
@@ -962,6 +1008,19 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             bailian: None,
             aliyun_tingwu: None,
             openrouter: Some(OpenrouterProviderSettings::default()),
+            ollama: None,
+            local_stt: None,
+        },
+        ProviderConfig {
+            id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
+            name: "Ollama".to_string(),
+            kind: ProviderKind::Ollama,
+            capabilities: vec![ProviderCapability::Summary],
+            enabled: true,
+            bailian: None,
+            aliyun_tingwu: None,
+            openrouter: None,
+            ollama: Some(OllamaProviderSettings::default()),
             local_stt: None,
         },
         ProviderConfig {
@@ -973,6 +1032,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             bailian: None,
             aliyun_tingwu: None,
             openrouter: None,
+            ollama: None,
             local_stt: Some(LocalSttProviderSettings::default()),
         },
     ]
@@ -1069,6 +1129,11 @@ fn normalize_provider(provider: &mut ProviderConfig) {
         _ => None,
     };
 
+    provider.ollama = match provider.kind {
+        ProviderKind::Ollama => Some(provider.ollama.clone().unwrap_or_default()),
+        _ => None,
+    };
+
     provider.local_stt = match provider.kind {
         ProviderKind::LocalStt => {
             let mut config = provider.local_stt.clone().unwrap_or_default();
@@ -1090,6 +1155,7 @@ fn default_capabilities_for_kind(kind: &ProviderKind) -> Vec<ProviderCapability>
         ],
         ProviderKind::AliyunTingwu => vec![ProviderCapability::Transcription],
         ProviderKind::Openrouter => vec![ProviderCapability::Summary],
+        ProviderKind::Ollama => vec![ProviderCapability::Summary],
         ProviderKind::LocalStt => vec![ProviderCapability::Transcription],
     }
 }
@@ -1101,6 +1167,7 @@ fn normalize_provider_id_alias(value: &str) -> String {
         }
         "aliyun-transcription-default" => DEFAULT_ALIYUN_PROVIDER_ID.to_string(),
         "openrouter-summary-default" => DEFAULT_OPENROUTER_PROVIDER_ID.to_string(),
+        "ollama-summary-default" => DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
         other => other.to_string(),
     }
 }
@@ -1111,6 +1178,7 @@ fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderC
         ProviderKind::Bailian,
         ProviderKind::AliyunTingwu,
         ProviderKind::Openrouter,
+        ProviderKind::Ollama,
         ProviderKind::LocalStt,
     ];
 
@@ -1166,6 +1234,13 @@ fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderC
                         provider.openrouter = Some(config);
                     }
                 }
+                ProviderKind::Ollama => {
+                    if let Some(config) =
+                        candidates.iter().find_map(|item| item.ollama.as_ref()).cloned()
+                    {
+                        provider.ollama = Some(config);
+                    }
+                }
                 ProviderKind::LocalStt => {
                     if let Some(config) = candidates
                         .iter()
@@ -1198,6 +1273,18 @@ fn resolve_selected_provider_id(
         return current.to_string();
     }
 
+    let preferred_id = match capability {
+        ProviderCapability::Transcription => DEFAULT_BAILIAN_PROVIDER_ID,
+        ProviderCapability::Summary => DEFAULT_OLLAMA_PROVIDER_ID,
+    };
+    if let Some(provider) = providers
+        .iter()
+        .find(|provider| provider.id == preferred_id)
+        .filter(|provider| provider_supports_capability(provider, capability.clone()))
+    {
+        return provider.id.clone();
+    }
+
     providers
         .iter()
         .find(|provider| provider_supports_capability(provider, capability.clone()))
@@ -1226,17 +1313,19 @@ fn ensure_capability_provider(providers: &mut Vec<ProviderConfig>, capability: P
             bailian: Some(BailianProviderSettings::default()),
             aliyun_tingwu: None,
             openrouter: None,
+            ollama: None,
             local_stt: None,
         },
         ProviderCapability::Summary => ProviderConfig {
-            id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
-            name: "Bailian".to_string(),
-            kind: ProviderKind::Bailian,
+            id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
+            name: "Ollama".to_string(),
+            kind: ProviderKind::Ollama,
             capabilities: vec![ProviderCapability::Summary],
             enabled: true,
-            bailian: Some(BailianProviderSettings::default()),
+            bailian: None,
             aliyun_tingwu: None,
             openrouter: None,
+            ollama: Some(OllamaProviderSettings::default()),
             local_stt: None,
         },
     };
@@ -1401,6 +1490,7 @@ impl ProviderConfig {
             ProviderKind::Bailian => "bailian",
             ProviderKind::AliyunTingwu => "aliyun_tingwu",
             ProviderKind::Openrouter => "openrouter",
+            ProviderKind::Ollama => "ollama",
             ProviderKind::LocalStt => "local_stt",
         }
     }
@@ -1624,7 +1714,37 @@ pub struct SettingsPatch {
 
 #[cfg(test)]
 mod tests {
-    use super::{OssConfig, OssProviderKind, ProviderOssSettings, Settings};
+    use super::{OssConfig, OssProviderKind, ProviderKind, ProviderOssSettings, Settings};
+
+    #[test]
+    fn default_settings_select_ollama_for_summary() {
+        let settings = Settings::default();
+        assert_eq!(settings.selected_summary_provider_id, "ollama-default");
+        assert!(settings
+            .providers
+            .iter()
+            .any(|provider| provider.kind == ProviderKind::Ollama));
+    }
+
+    #[test]
+    fn normalize_preserves_existing_valid_summary_provider_selection() {
+        let mut settings = Settings::default();
+        settings.selected_summary_provider_id = "bailian-default".to_string();
+
+        settings.normalize();
+
+        assert_eq!(settings.selected_summary_provider_id, "bailian-default");
+    }
+
+    #[test]
+    fn normalize_prefers_ollama_when_summary_selection_is_missing() {
+        let mut settings = Settings::default();
+        settings.selected_summary_provider_id = "missing-provider".to_string();
+
+        settings.normalize();
+
+        assert_eq!(settings.selected_summary_provider_id, "ollama-default");
+    }
 
     #[test]
     fn normalize_migrates_legacy_single_oss_to_oss_configs() {

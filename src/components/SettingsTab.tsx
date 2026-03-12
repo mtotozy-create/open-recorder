@@ -75,6 +75,9 @@ function providerKindLabel(kind: ProviderKind, t: Translator): string {
   if (kind === "openrouter") {
     return "OpenRouter";
   }
+  if (kind === "ollama") {
+    return "Ollama";
+  }
   return t("settings.localStt");
 }
 
@@ -911,6 +914,54 @@ function SettingsTab({
                 patchProvider(provider.id, (current) => ({
                   ...current,
                   openrouter: { ...openrouter, summaryModel: event.target.value }
+                }))
+              }
+            />
+          </label>
+        </>
+      );
+    }
+
+    if (provider.kind === "ollama") {
+      const ollama = provider.ollama;
+      if (!ollama) {
+        return null;
+      }
+      return (
+        <>
+          <label>
+            {t("settings.ollamaApiKey")}
+            <input
+              type="password"
+              value={ollama.apiKey ?? ""}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  ollama: { ...ollama, apiKey: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ollamaBaseUrl")}
+            <input
+              value={ollama.baseUrl}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  ollama: { ...ollama, baseUrl: event.target.value }
+                }))
+              }
+            />
+          </label>
+          <label>
+            {t("settings.ollamaSummaryModel")}
+            <input
+              value={ollama.summaryModel}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  ollama: { ...ollama, summaryModel: event.target.value }
                 }))
               }
             />

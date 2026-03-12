@@ -56,6 +56,7 @@ import type {
 const DEFAULT_BAILIAN_PROVIDER_ID = "bailian-default";
 const DEFAULT_ALIYUN_PROVIDER_ID = "aliyun-tingwu-default";
 const DEFAULT_OPENROUTER_PROVIDER_ID = "openrouter-default";
+const DEFAULT_OLLAMA_PROVIDER_ID = "ollama-default";
 const DEFAULT_LOCAL_STT_PROVIDER_ID = "local-stt-default";
 const DEFAULT_OSS_CONFIG_ID = "oss-aliyun-default";
 const DEFAULT_RECORDING_SEGMENT_SECONDS = 120;
@@ -194,6 +195,21 @@ function createDefaultProvider(kind: ProviderConfig["kind"]): ProviderConfig {
     };
   }
 
+  if (kind === "ollama") {
+    return {
+      id: DEFAULT_OLLAMA_PROVIDER_ID,
+      name: "Ollama",
+      kind: "ollama",
+      capabilities: ["summary"],
+      enabled: true,
+      ollama: {
+        apiKey: "",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        summaryModel: "qwen2.5:7b-instruct"
+      }
+    };
+  }
+
   return {
     id: DEFAULT_LOCAL_STT_PROVIDER_ID,
     name: "Local STT",
@@ -224,6 +240,7 @@ function createDefaultProviders(): ProviderConfig[] {
     createDefaultProvider("bailian"),
     createDefaultProvider("aliyun_tingwu"),
     createDefaultProvider("openrouter"),
+    createDefaultProvider("ollama"),
     createDefaultProvider("local_stt")
   ];
 }
@@ -233,7 +250,7 @@ const emptySettings: Settings = {
   ossConfigs: createDefaultOssConfigs(),
   selectedOssConfigId: DEFAULT_OSS_CONFIG_ID,
   selectedTranscriptionProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
-  selectedSummaryProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
+  selectedSummaryProviderId: DEFAULT_OLLAMA_PROVIDER_ID,
   recordingSegmentSeconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
   recordingInputDeviceId: "",
   sessionTagCatalog: DEFAULT_SESSION_TAG_CATALOG,
@@ -285,6 +302,9 @@ function normalizeAliasProviderId(providerId: string): string {
   }
   if (value === "openrouter-summary-default") {
     return DEFAULT_OPENROUTER_PROVIDER_ID;
+  }
+  if (value === "ollama-summary-default") {
+    return DEFAULT_OLLAMA_PROVIDER_ID;
   }
   return value;
 }
@@ -345,6 +365,7 @@ function normalizeSettings(input: Settings): Settings {
     "bailian",
     "aliyun_tingwu",
     "openrouter",
+    "ollama",
     "local_stt"
   ];
 
@@ -370,6 +391,7 @@ function normalizeSettings(input: Settings): Settings {
         },
         aliyunTingwu: undefined,
         openrouter: undefined,
+        ollama: undefined,
         localStt: undefined
       };
     }
@@ -466,6 +488,7 @@ function normalizeSettings(input: Settings): Settings {
         },
         bailian: undefined,
         openrouter: undefined,
+        ollama: undefined,
         localStt: undefined
       };
     }
@@ -483,6 +506,24 @@ function normalizeSettings(input: Settings): Settings {
         },
         bailian: undefined,
         aliyunTingwu: undefined,
+        ollama: undefined,
+        localStt: undefined
+      };
+    }
+
+    if (kind === "ollama") {
+      const ollamaConfig = candidates.map((item) => item.ollama).find(Boolean) ?? defaults.ollama!;
+      return {
+        ...defaults,
+        name: mergedName,
+        enabled: mergedEnabled,
+        ollama: {
+          ...defaults.ollama!,
+          ...ollamaConfig
+        },
+        bailian: undefined,
+        aliyunTingwu: undefined,
+        openrouter: undefined,
         localStt: undefined
       };
     }
@@ -502,7 +543,8 @@ function normalizeSettings(input: Settings): Settings {
       },
       bailian: undefined,
       aliyunTingwu: undefined,
-      openrouter: undefined
+      openrouter: undefined,
+      ollama: undefined
     };
   });
 
@@ -515,6 +557,10 @@ function normalizeSettings(input: Settings): Settings {
     "";
   const selectedSummaryProviderId =
     providers.find((provider) => provider.id === aliasedSummarySelection && supportsCapability(provider, "summary"))?.id ??
+    providers.find(
+      (provider) =>
+        provider.id === DEFAULT_OLLAMA_PROVIDER_ID && supportsCapability(provider, "summary")
+    )?.id ??
     providers.find((provider) => supportsCapability(provider, "summary"))?.id ??
     "";
 

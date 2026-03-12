@@ -58,7 +58,7 @@ fn resolve_summary_config(
                     &bailian.base_url,
                     crate::providers::bailian::BAILIAN_COMPATIBLE_CHAT_PATH,
                 ),
-                api_key,
+                api_key: Some(api_key),
                 model: bailian.summary_model.clone(),
             })
         }
@@ -95,8 +95,38 @@ fn resolve_summary_config(
             Ok(ChatCompatibleSummaryConfig {
                 provider_name: provider.name.clone(),
                 endpoint,
-                api_key,
+                api_key: Some(api_key),
                 model: openrouter.summary_model.clone(),
+            })
+        }
+        ProviderKind::Ollama => {
+            let ollama = provider
+                .ollama
+                .as_ref()
+                .ok_or_else(|| format!("provider '{}' missing ollama config", provider.name))?;
+            if ollama.base_url.trim().is_empty() {
+                return Err(format!(
+                    "provider '{}' requires base URL for summary",
+                    provider.name
+                ));
+            }
+            if ollama.summary_model.trim().is_empty() {
+                return Err(format!(
+                    "provider '{}' requires summary model",
+                    provider.name
+                ));
+            }
+
+            let mut endpoint = ollama.base_url.trim_end_matches('/').to_string();
+            if !endpoint.ends_with("/chat/completions") {
+                endpoint.push_str("/chat/completions");
+            }
+
+            Ok(ChatCompatibleSummaryConfig {
+                provider_name: provider.name.clone(),
+                endpoint,
+                api_key: ollama.api_key.clone(),
+                model: ollama.summary_model.clone(),
             })
         }
         ProviderKind::AliyunTingwu => Err(format!(

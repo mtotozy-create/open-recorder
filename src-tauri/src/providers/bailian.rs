@@ -29,7 +29,7 @@ pub struct BailianConfig {
 pub struct ChatCompatibleSummaryConfig {
     pub provider_name: String,
     pub endpoint: String,
-    pub api_key: String,
+    pub api_key: Option<String>,
     pub model: String,
 }
 
@@ -359,9 +359,19 @@ pub fn summarize_with_chat_compatible(
         .build()
         .map_err(|error| format!("failed to create http client: {error}"))?;
 
-    let response = client
-        .post(&config.endpoint)
-        .bearer_auth(&config.api_key)
+    let request_builder = client.post(&config.endpoint);
+    let request_builder = if let Some(api_key) = config
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        request_builder.bearer_auth(api_key)
+    } else {
+        request_builder
+    };
+
+    let response = request_builder
         .json(&request)
         .send()
         .map_err(|error| format!("{} request failed: {error}", config.provider_name))?;
