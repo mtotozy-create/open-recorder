@@ -117,6 +117,7 @@ export type OpenrouterProviderSettings = {
   apiKey?: string;
   baseUrl: string;
   summaryModel: string;
+  discoverModel: string;
 };
 
 export type OllamaProviderSettings = {
@@ -163,11 +164,69 @@ export type Settings = {
   selectedOssConfigId: string;
   selectedTranscriptionProviderId: string;
   selectedSummaryProviderId: string;
+  selectedDiscoverProviderId: string;
   recordingSegmentSeconds: number;
   recordingInputDeviceId?: string | null;
   sessionTagCatalog: string[];
   defaultTemplateId: string;
   templates: PromptTemplate[];
+};
+
+export type InsightTimeRange = "1d" | "2d" | "3d" | "1w" | "1m";
+export type InsightSelectionMode = "timeRange" | "sessions";
+
+export type InsightQueryRequest = {
+  selectionMode: InsightSelectionMode;
+  timeRange?: InsightTimeRange;
+  sessionIds?: string[];
+  keyword?: string;
+};
+
+export type DiscoverSubView = "people" | "topics" | "actions";
+
+export type InsightTask = {
+  description: string;
+  status: "pending" | "in_progress" | "completed";
+  deadline?: string;
+  sourceSessionId: string;
+  sourceDate: string;
+};
+
+export type InsightPerson = {
+  name: string;
+  tasks: InsightTask[];
+  decisions: string[];
+  risks: string[];
+};
+
+export type InsightTopicProgress = {
+  date: string;
+  description: string;
+  sourceSessionId: string;
+};
+
+export type InsightTopic = {
+  name: string;
+  progress: InsightTopicProgress[];
+  status: "active" | "completed" | "blocked";
+  relatedPeople: string[];
+};
+
+export type InsightAction = {
+  description: string;
+  assignee?: string;
+  deadline?: string;
+  sourceSessionId: string;
+  sourceDate: string;
+};
+
+export type InsightResult = {
+  people: InsightPerson[];
+  topics: InsightTopic[];
+  upcomingActions: InsightAction[];
+  generatedAt: string;
+  timeRangeType: InsightTimeRange | "sessions";
+  sessionIds: string[];
 };
 
 export type RecorderInputDevice = {
@@ -196,6 +255,7 @@ export type LocalProviderStatus = {
 export type SessionSummary = {
   id: string;
   name?: string;
+  discoverable: boolean;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
@@ -271,7 +331,7 @@ export type RecorderProcessingStatus = {
 export type JobInfo = {
   id: string;
   sessionId: string;
-  kind: "transcription" | "summary";
+  kind: "transcription" | "summary" | "insight";
   status: JobStatus;
   createdAt: string;
   updatedAt: string;

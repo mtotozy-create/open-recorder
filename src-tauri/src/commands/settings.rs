@@ -50,6 +50,10 @@ pub fn settings_update(
         storage.data.settings.selected_summary_provider_id = selected_summary_provider_id;
     }
 
+    if let Some(selected_discover_provider_id) = request.selected_discover_provider_id {
+        storage.data.settings.selected_discover_provider_id = selected_discover_provider_id;
+    }
+
     if let Some(recording_segment_seconds) = request.recording_segment_seconds {
         storage.data.settings.recording_segment_seconds = recording_segment_seconds;
     }

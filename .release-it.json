@@ -22,6 +22,6 @@
   "hooks": {
     "before:init": "npm run version:check",
     "after:bump": "npm run version:sync",
-    "before:git:release": "npm run version:check"
+    "before:git:release": "npm run version:check && npm run tauri:build"
   }
 }

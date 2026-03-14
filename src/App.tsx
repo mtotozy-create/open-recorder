@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import DiscoverTab from "./components/DiscoverTab";
 import RecorderTab from "./components/RecorderTab";
 import SettingsTab from "./components/SettingsTab";
 import SessionsTab from "./components/SessionsTab";
@@ -22,7 +23,9 @@ import {
   renameSession,
   resumeRecording,
   setRealtimeSourceLanguage as setRealtimeSourceLanguageApi,
+  setSessionDiscoverable,
   setSessionTags as saveSessionTags,
+  updateSessionSummaryRawMarkdown as updateSessionSummaryRawMarkdownApi,
   startRecording,
   setRealtimeTranslationTargetLanguage as setRealtimeTranslationTargetLanguageApi,
   stopRecording,
@@ -190,7 +193,8 @@ function createDefaultProvider(kind: ProviderConfig["kind"]): ProviderConfig {
       openrouter: {
         apiKey: "",
         baseUrl: "https://openrouter.ai/api/v1",
-        summaryModel: "qwen/qwen-plus"
+        summaryModel: "qwen/qwen-plus",
+        discoverModel: "qwen/qwen-plus"
       }
     };
   }
@@ -251,6 +255,7 @@ const emptySettings: Settings = {
   selectedOssConfigId: DEFAULT_OSS_CONFIG_ID,
   selectedTranscriptionProviderId: DEFAULT_BAILIAN_PROVIDER_ID,
   selectedSummaryProviderId: DEFAULT_OLLAMA_PROVIDER_ID,
+  selectedDiscoverProviderId: DEFAULT_OLLAMA_PROVIDER_ID,
   recordingSegmentSeconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
   recordingInputDeviceId: "",
   sessionTagCatalog: DEFAULT_SESSION_TAG_CATALOG,
@@ -496,13 +501,18 @@ function normalizeSettings(input: Settings): Settings {
     if (kind === "openrouter") {
       const openrouterConfig =
         candidates.map((item) => item.openrouter).find(Boolean) ?? defaults.openrouter!;
+      const discoverModel =
+        (openrouterConfig.discoverModel ?? "").trim().length > 0
+          ? openrouterConfig.discoverModel
+          : openrouterConfig.summaryModel;
       return {
         ...defaults,
         name: mergedName,
         enabled: mergedEnabled,
         openrouter: {
           ...defaults.openrouter!,
-          ...openrouterConfig
+          ...openrouterConfig,
+          discoverModel
         },
         bailian: undefined,
         aliyunTingwu: undefined,
@@ -550,6 +560,11 @@ function normalizeSettings(input: Settings): Settings {
 
   const aliasedTranscriptionSelection = normalizeAliasProviderId(input.selectedTranscriptionProviderId);
   const aliasedSummarySelection = normalizeAliasProviderId(input.selectedSummaryProviderId);
+  const aliasedDiscoverSelection = normalizeAliasProviderId(
+    typeof input.selectedDiscoverProviderId === "string"
+      ? input.selectedDiscoverProviderId
+      : input.selectedSummaryProviderId
+  );
   const selectedTranscriptionProviderId =
     providers.find((provider) => provider.id === aliasedTranscriptionSelection && supportsCapability(provider, "transcription"))
       ?.id ??
@@ -563,6 +578,14 @@ function normalizeSettings(input: Settings): Settings {
     )?.id ??
     providers.find((provider) => supportsCapability(provider, "summary"))?.id ??
     "";
+  const selectedDiscoverProviderId =
+    providers.find((provider) => provider.id === aliasedDiscoverSelection && supportsCapability(provider, "summary"))?.id ??
+    providers.find(
+      (provider) =>
+        provider.id === DEFAULT_OLLAMA_PROVIDER_ID && supportsCapability(provider, "summary")
+    )?.id ??
+    providers.find((provider) => supportsCapability(provider, "summary"))?.id ??
+    "";
 
   return {
     providers,
@@ -570,6 +593,7 @@ function normalizeSettings(input: Settings): Settings {
     selectedOssConfigId,
     selectedTranscriptionProviderId,
     selectedSummaryProviderId,
+    selectedDiscoverProviderId,
     recordingSegmentSeconds,
     recordingInputDeviceId,
     sessionTagCatalog,
@@ -1322,6 +1346,56 @@ function App() {
     }
   }
 
+  async function onSetSessionDiscoverable(sessionId: string, discoverable: boolean) {
+    const previousSession = sessions.find((session) => session.id === sessionId);
+    const previousDiscoverable = previousSession?.discoverable ?? true;
+
+    setSessions((previous) =>
+      previous.map((session) =>
+        session.id === sessionId ? { ...session, discoverable } : session
+      )
+    );
+    setActiveSession((previous) =>
+      previous && previous.id === sessionId ? { ...previous, discoverable } : previous
+    );
+
+    try {
+      await setSessionDiscoverable(sessionId, discoverable);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionDiscoverableUpdated");
+    } catch (error) {
+      setSessions((previous) =>
+        previous.map((session) =>
+          session.id === sessionId ? { ...session, discoverable: previousDiscoverable } : session
+        )
+      );
+      setActiveSession((previous) =>
+        previous && previous.id === sessionId
+          ? { ...previous, discoverable: previousDiscoverable }
+          : previous
+      );
+      setStatus("status.sessionDiscoverableUpdateFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
+  async function onUpdateSessionSummaryRawMarkdown(sessionId: string, rawMarkdown: string) {
+    try {
+      await updateSessionSummaryRawMarkdownApi(sessionId, rawMarkdown);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionSummaryUpdated");
+    } catch (error) {
+      setStatus("status.sessionSummaryUpdateFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
   async function handleDeleteSession(sessionId: string) {
     try {
       await deleteSession(sessionId);
@@ -1433,6 +1507,12 @@ function App() {
           onSelectSession={setActiveSessionId}
           onRenameSession={(sessionId, name) => void onRenameSession(sessionId, name)}
           onSetSessionTags={(sessionId, tags) => void onSetSessionTags(sessionId, tags)}
+          onSetSessionDiscoverable={(sessionId, discoverable) =>
+            void onSetSessionDiscoverable(sessionId, discoverable)
+          }
+          onUpdateSessionSummaryRawMarkdown={(sessionId, rawMarkdown) =>
+            void onUpdateSessionSummaryRawMarkdown(sessionId, rawMarkdown)
+          }
           onDeleteSession={(sessionId) => void handleDeleteSession(sessionId)}
           onPreparePlaybackAudio={() => onPrepareSessionPlaybackAudio()}
           onExportM4a={() => void onExport("m4a")}
@@ -1442,6 +1522,16 @@ function App() {
           t={t}
         />
       )}
+
+      <div
+        style={{ display: activeTab === "discover" ? "block" : "none" }}
+        aria-hidden={activeTab !== "discover"}
+      >
+        <DiscoverTab
+          sessions={sessions}
+          t={t}
+        />
+      </div>
 
       {activeTab === "settings" && (
         <SettingsTab

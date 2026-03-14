@@ -313,10 +313,10 @@ The Aliyun Tingwu realtime transcription WebSocket couldn't reconnect after 3 at
 | `npm run version:sync` | Sync version from `package.json` to Tauri/Cargo/README badges |
 | `npm run version:check` | Check whether version files are synchronized |
 | `npm run release:dry` | Preview next release version and changelog (no file changes) |
-| `npm run release` | Interactive release (SemVer + Conventional Commits) |
-| `npm run release:patch` | Non-interactive patch release |
-| `npm run release:minor` | Non-interactive minor release |
-| `npm run release:major` | Non-interactive major release |
+| `npm run release` | Interactive release (SemVer + Conventional Commits, includes one `tauri:build`) |
+| `npm run release:patch` | Non-interactive patch release (includes one `tauri:build`) |
+| `npm run release:minor` | Non-interactive minor release (includes one `tauri:build`) |
+| `npm run release:major` | Non-interactive major release (includes one `tauri:build`) |
 
 ### Project Structure
 

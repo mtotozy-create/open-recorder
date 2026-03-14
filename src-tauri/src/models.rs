@@ -311,6 +311,7 @@ pub struct OpenrouterProviderSettings {
     pub api_key: Option<String>,
     pub base_url: String,
     pub summary_model: String,
+    pub discover_model: String,
 }
 
 impl Default for OpenrouterProviderSettings {
@@ -319,6 +320,7 @@ impl Default for OpenrouterProviderSettings {
             api_key: None,
             base_url: "https://openrouter.ai/api/v1".to_string(),
             summary_model: "qwen/qwen-plus".to_string(),
+            discover_model: "qwen/qwen-plus".to_string(),
         }
     }
 }
@@ -443,6 +445,7 @@ pub enum JobStatus {
 pub enum JobKind {
     Transcription,
     Summary,
+    Insight,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,6 +470,115 @@ pub struct SummaryResult {
     pub risks: Vec<String>,
     pub timeline: Vec<String>,
     pub raw_markdown: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InsightTaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InsightTopicStatus {
+    #[serde(alias = "in_progress")]
+    Active,
+    Completed,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightTask {
+    pub description: String,
+    pub status: InsightTaskStatus,
+    pub deadline: Option<String>,
+    pub source_session_id: String,
+    pub source_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightPerson {
+    pub name: String,
+    pub tasks: Vec<InsightTask>,
+    pub decisions: Vec<String>,
+    pub risks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightTopicProgress {
+    pub date: String,
+    pub description: String,
+    pub source_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightTopic {
+    pub name: String,
+    pub progress: Vec<InsightTopicProgress>,
+    pub status: InsightTopicStatus,
+    pub related_people: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightAction {
+    pub description: String,
+    pub assignee: Option<String>,
+    pub deadline: Option<String>,
+    pub source_session_id: String,
+    pub source_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightResult {
+    pub people: Vec<InsightPerson>,
+    pub topics: Vec<InsightTopic>,
+    pub upcoming_actions: Vec<InsightAction>,
+    pub generated_at: String,
+    pub time_range_type: String,
+    pub session_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct InsightCacheEntry {
+    pub key: String,
+    pub result: InsightResult,
+    pub cached_at: String,
+    pub session_fingerprint: String,
+    pub provider_id: String,
+    pub model: String,
+    pub prompt_version: String,
+    pub keyword: Option<String>,
+}
+
+impl Default for InsightCacheEntry {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            result: InsightResult {
+                people: vec![],
+                topics: vec![],
+                upcoming_actions: vec![],
+                generated_at: String::new(),
+                time_range_type: String::new(),
+                session_ids: vec![],
+            },
+            cached_at: String::new(),
+            session_fingerprint: String::new(),
+            provider_id: String::new(),
+            model: String::new(),
+            prompt_version: String::new(),
+            keyword: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,6 +630,7 @@ pub struct Settings {
     pub selected_oss_config_id: String,
     pub selected_transcription_provider_id: String,
     pub selected_summary_provider_id: String,
+    pub selected_discover_provider_id: String,
     #[serde(default = "default_recording_segment_seconds")]
     pub recording_segment_seconds: u64,
     #[serde(default)]
@@ -611,6 +724,7 @@ impl Default for Settings {
             selected_oss_config_id: DEFAULT_SELECTED_OSS_CONFIG_ID.to_string(),
             selected_transcription_provider_id: DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
             selected_summary_provider_id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
+            selected_discover_provider_id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
             recording_segment_seconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
             recording_input_device_id: None,
             session_tag_catalog: default_session_tag_catalog(),
@@ -658,6 +772,7 @@ impl Settings {
                 _ => DEFAULT_BAILIAN_PROVIDER_ID.to_string(),
             };
             self.selected_summary_provider_id = DEFAULT_BAILIAN_PROVIDER_ID.to_string();
+            self.selected_discover_provider_id = self.selected_summary_provider_id.clone();
             if self.legacy_oss.is_none() {
                 self.legacy_oss = Some(legacy_oss);
             }
@@ -711,6 +826,8 @@ impl Settings {
             normalize_provider_id_alias(self.selected_transcription_provider_id.as_str());
         self.selected_summary_provider_id =
             normalize_provider_id_alias(self.selected_summary_provider_id.as_str());
+        self.selected_discover_provider_id =
+            normalize_provider_id_alias(self.selected_discover_provider_id.as_str());
 
         self.selected_transcription_provider_id = resolve_selected_provider_id(
             &self.providers,
@@ -720,6 +837,11 @@ impl Settings {
         self.selected_summary_provider_id = resolve_selected_provider_id(
             &self.providers,
             &self.selected_summary_provider_id,
+            ProviderCapability::Summary,
+        );
+        self.selected_discover_provider_id = resolve_selected_provider_id(
+            &self.providers,
+            &self.selected_discover_provider_id,
             ProviderCapability::Summary,
         );
         self.session_tag_catalog = normalize_tags(&self.session_tag_catalog);
@@ -888,6 +1010,7 @@ impl Settings {
                 api_key: None,
                 base_url: default_openrouter.base_url,
                 summary_model: default_openrouter.summary_model,
+                discover_model: default_openrouter.discover_model,
             }),
             ollama: None,
             local_stt: None,
@@ -1125,7 +1248,13 @@ fn normalize_provider(provider: &mut ProviderConfig) {
     };
 
     provider.openrouter = match provider.kind {
-        ProviderKind::Openrouter => Some(provider.openrouter.clone().unwrap_or_default()),
+        ProviderKind::Openrouter => {
+            let mut config = provider.openrouter.clone().unwrap_or_default();
+            if config.discover_model.trim().is_empty() {
+                config.discover_model = config.summary_model.clone();
+            }
+            Some(config)
+        }
         _ => None,
     };
 
@@ -1505,11 +1634,17 @@ impl OssConfig {
     }
 }
 
+fn default_session_discoverable() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
     pub name: Option<String>,
+    #[serde(default = "default_session_discoverable")]
+    pub discoverable: bool,
     pub status: SessionStatus,
     pub created_at: String,
     pub updated_at: String,
@@ -1539,6 +1674,7 @@ impl Default for Session {
         Self {
             id: String::new(),
             name: None,
+            discoverable: default_session_discoverable(),
             status: SessionStatus::Stopped,
             created_at: String::new(),
             updated_at: String::new(),
@@ -1570,6 +1706,7 @@ impl Default for Session {
 pub struct SessionSummary {
     pub id: String,
     pub name: Option<String>,
+    pub discoverable: bool,
     pub status: SessionStatus,
     pub created_at: String,
     pub updated_at: String,
@@ -1583,6 +1720,7 @@ impl From<&Session> for SessionSummary {
         Self {
             id: value.id.clone(),
             name: value.name.clone(),
+            discoverable: value.discoverable,
             status: value.status.clone(),
             created_at: value.created_at.clone(),
             updated_at: value.updated_at.clone(),
@@ -1705,6 +1843,7 @@ pub struct SettingsPatch {
     pub legacy_oss: Option<ProviderOssSettings>,
     pub selected_transcription_provider_id: Option<String>,
     pub selected_summary_provider_id: Option<String>,
+    pub selected_discover_provider_id: Option<String>,
     pub recording_segment_seconds: Option<u64>,
     pub recording_input_device_id: Option<String>,
     pub session_tag_catalog: Option<Vec<String>>,
@@ -1720,6 +1859,7 @@ mod tests {
     fn default_settings_select_ollama_for_summary() {
         let settings = Settings::default();
         assert_eq!(settings.selected_summary_provider_id, "ollama-default");
+        assert_eq!(settings.selected_discover_provider_id, "ollama-default");
         assert!(settings
             .providers
             .iter()
@@ -1730,20 +1870,24 @@ mod tests {
     fn normalize_preserves_existing_valid_summary_provider_selection() {
         let mut settings = Settings::default();
         settings.selected_summary_provider_id = "bailian-default".to_string();
+        settings.selected_discover_provider_id = "bailian-default".to_string();
 
         settings.normalize();
 
         assert_eq!(settings.selected_summary_provider_id, "bailian-default");
+        assert_eq!(settings.selected_discover_provider_id, "bailian-default");
     }
 
     #[test]
     fn normalize_prefers_ollama_when_summary_selection_is_missing() {
         let mut settings = Settings::default();
         settings.selected_summary_provider_id = "missing-provider".to_string();
+        settings.selected_discover_provider_id = "missing-provider".to_string();
 
         settings.normalize();
 
         assert_eq!(settings.selected_summary_provider_id, "ollama-default");
+        assert_eq!(settings.selected_discover_provider_id, "ollama-default");
     }
 
     #[test]

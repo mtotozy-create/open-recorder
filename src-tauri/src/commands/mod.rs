@@ -1,3 +1,4 @@
+pub mod insight;
 pub mod job;
 pub mod local_provider;
 pub mod recorder;

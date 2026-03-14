@@ -309,10 +309,10 @@ brew install ffmpeg
 | `npm run version:sync` | 将 `package.json` 版本同步到 Tauri/Cargo/README 徽章 |
 | `npm run version:check` | 检查版本文件是否一致 |
 | `npm run release:dry` | 预览下一版本和 changelog（不改文件） |
-| `npm run release` | 交互式发布（SemVer + Conventional Commits） |
-| `npm run release:patch` | 非交互 patch 发布 |
-| `npm run release:minor` | 非交互 minor 发布 |
-| `npm run release:major` | 非交互 major 发布 |
+| `npm run release` | 交互式发布（SemVer + Conventional Commits，内含一次 `tauri:build`） |
+| `npm run release:patch` | 非交互 patch 发布（内含一次 `tauri:build`） |
+| `npm run release:minor` | 非交互 minor 发布（内含一次 `tauri:build`） |
+| `npm run release:major` | 非交互 major 发布（内含一次 `tauri:build`） |
 
 ### 项目结构
 

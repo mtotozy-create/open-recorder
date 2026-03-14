@@ -2,7 +2,7 @@ import type { TranslationKey } from "../i18n/messages";
 import type { Translator } from "../i18n";
 import type { KeyboardEvent } from "react";
 
-export type AppTab = "recorder" | "sessions" | "settings";
+export type AppTab = "recorder" | "sessions" | "discover" | "settings";
 
 type TabItem = {
   id: AppTab;
@@ -18,6 +18,7 @@ type TabNavProps = {
 const tabs: TabItem[] = [
   { id: "recorder", labelKey: "nav.recorder" },
   { id: "sessions", labelKey: "nav.sessions" },
+  { id: "discover", labelKey: "nav.discover" },
   { id: "settings", labelKey: "nav.settings" }
 ];
 

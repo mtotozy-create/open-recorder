@@ -1126,6 +1126,71 @@ p {
   white-space: nowrap;
 }
 
+.summary-edit-btn {
+  width: auto;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 0.75rem;
+}
+
+.summary-edit-btn:hover:not(:disabled) {
+  background: var(--primary-soft);
+  border-color: #bfdbfe;
+  color: var(--primary);
+}
+
+.summary-edit-btn.secondary {
+  background: transparent;
+}
+
+.summary-edit-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.summary-create-btn {
+  width: auto;
+  margin-top: 4px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 0.78rem;
+}
+
+.summary-create-btn:hover:not(:disabled) {
+  border-color: #bfdbfe;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.summary-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  flex: 1;
+}
+
+.summary-editor-input {
+  min-height: 220px;
+  resize: vertical;
+  line-height: 1.5;
+  flex: 1;
+}
+
+.summary-edit-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
 .view-switch {
   display: inline-flex;
   gap: 6px;
@@ -1445,6 +1510,41 @@ p {
   display: flex;
   gap: 5px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.session-discoverable-btn {
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-discoverable-btn svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-discoverable-btn.enabled {
+  color: var(--primary);
+  border-color: #bfdbfe;
+  background: var(--primary-soft);
+}
+
+.session-discoverable-btn.disabled {
+  color: var(--text-muted);
 }
 
 .session-badge {
@@ -1868,6 +1968,34 @@ button:focus-visible,
     grid-template-columns: 1fr;
   }
 
+  .discover-topic-search-row {
+    grid-template-columns: 1fr;
+  }
+
+  .discover-topic-search-btn,
+  .discover-refresh-btn {
+    width: 100%;
+  }
+
+  .discover-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .discover-toolbar {
+    align-items: stretch;
+  }
+
+  .discover-selection-mode-group,
+  .discover-time-range-group,
+  .discover-subview-group {
+    width: 100%;
+  }
+
+  .discover-session-list {
+    grid-template-columns: 1fr;
+  }
+
   .template-actions {
     flex-direction: column;
     align-items: stretch;
@@ -1928,4 +2056,454 @@ button:focus-visible,
   display: flex;
   gap: 12px;
   justify-content: center;
+}
+
+.danger-text {
+  color: var(--danger-strong);
+}
+
+.discover-panel {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.discover-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.discover-header-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.discover-header-copy p {
+  margin: 0;
+  color: var(--text-1);
+}
+
+.discover-panel h2,
+.discover-panel h3 {
+  color: var(--text-0);
+}
+
+.discover-panel button,
+.discover-panel input {
+  width: auto;
+}
+
+.discover-refresh-btn {
+  min-width: 136px;
+}
+
+.discover-refresh-btn:hover:not(:disabled) {
+  background: var(--primary-strong);
+}
+
+.discover-panel button:disabled {
+  opacity: 0.45;
+}
+
+.discover-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.discover-selection-mode-group,
+.discover-time-range-group,
+.discover-subview-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 3px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+}
+
+.discover-selection-mode-btn,
+.discover-time-range-btn,
+.discover-subview-btn {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 0.86rem;
+  font-weight: 500;
+  padding: 6px 14px;
+}
+
+.discover-selection-mode-btn.active,
+.discover-time-range-btn.active,
+.discover-subview-btn.active {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--text-0);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.discover-selection-mode-btn:hover:not(.active),
+.discover-time-range-btn:hover:not(.active),
+.discover-subview-btn:hover:not(.active) {
+  color: var(--text-0);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.discover-session-picker {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.discover-session-picker-header {
+  width: 100%;
+  min-height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  padding: 2px 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.discover-session-picker-header:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.discover-session-picker-caption {
+  margin: 0;
+  color: var(--text-0);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.discover-session-picker-caption-note {
+  margin-left: 8px;
+  color: var(--text-1);
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.discover-session-picker-meta {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 0.76rem;
+}
+
+.discover-session-picker-toggle {
+  margin-left: 8px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.discover-session-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-auto-rows: minmax(58px, auto);
+  gap: 8px;
+  max-height: calc(58px * 2 + 8px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.discover-session-btn {
+  width: 100%;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  text-align: left;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text-1);
+  padding: 8px;
+  min-height: 58px;
+}
+
+.discover-session-btn strong {
+  color: var(--text-0);
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.discover-session-btn span {
+  font-size: 0.75rem;
+}
+
+.discover-session-btn.active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.discover-session-btn:hover:not(.active):not(:disabled) {
+  border-color: #bfdbfe;
+}
+
+.discover-meta-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.discover-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 6px 11px;
+}
+
+.discover-meta-pill.running {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: #bfdbfe;
+}
+
+.discover-content {
+  display: grid;
+  gap: 12px;
+}
+
+.discover-people-view {
+  display: grid;
+  gap: 12px;
+}
+
+.discover-people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.discover-person-card,
+.discover-topic-card,
+.discover-action-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--panel);
+  display: grid;
+  gap: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.discover-person-card {
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.discover-person-card:hover {
+  border-color: #bfdbfe;
+  background: var(--primary-soft);
+}
+
+.discover-person-card.active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.discover-person-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.discover-topic-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.discover-topic-list,
+.discover-action-list,
+.discover-progress-list {
+  display: grid;
+  gap: 10px;
+}
+
+.discover-topic-related {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-1);
+}
+
+.discover-topic-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.discover-topic-status.status-active {
+  color: #1e40af;
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.discover-topic-status.status-completed {
+  color: #047857;
+  background: #d1fae5;
+  border-color: #86efac;
+}
+
+.discover-topic-status.status-blocked {
+  color: #b45309;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
+.discover-person-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.discover-count-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 5px 9px;
+}
+
+.discover-count-chip.warning {
+  color: #92400e;
+  border-color: #fcd34d;
+  background: #fef3c7;
+}
+
+.discover-person-card-footer {
+  margin: 0;
+  color: var(--primary);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.discover-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+  background: var(--panel);
+}
+
+.discover-item strong {
+  font-size: 0.84rem;
+  color: var(--text-0);
+}
+
+.discover-item span {
+  font-size: 0.78rem;
+  color: var(--text-1);
+}
+
+.discover-person-expanded {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.discover-person-expanded h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.discover-person-expanded-caption {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.discover-topic-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  padding: 10px;
+}
+
+.discover-topic-search-label {
+  margin-top: 0;
+}
+
+.discover-topic-search-row input {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.discover-topic-search-btn {
+  min-width: 92px;
+}
+
+.discover-action-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+
+.discover-action-meta-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.discover-action-meta-row span {
+  font-size: 0.78rem;
+  color: var(--text-1);
+}
+
+.discover-action-meta-row strong {
+  font-size: 0.82rem;
+  color: var(--text-0);
+  text-align: right;
+  word-break: break-word;
 }

@@ -7,7 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    merge_session_tags_into_catalog, normalize_tags, Job, Session, Settings,
+    merge_session_tags_into_catalog, normalize_tags, InsightCacheEntry, Job, Session, Settings,
     DEFAULT_RECORDING_SESSION_TAG,
 };
 
@@ -16,6 +16,7 @@ use crate::models::{
 pub struct PersistedState {
     pub sessions: HashMap<String, Session>,
     pub jobs: HashMap<String, Job>,
+    pub insight_cache: HashMap<String, InsightCacheEntry>,
     pub settings: Settings,
     pub session_tags_backfilled: bool,
 }
@@ -25,6 +26,7 @@ impl Default for PersistedState {
         Self {
             sessions: HashMap::new(),
             jobs: HashMap::new(),
+            insight_cache: HashMap::new(),
             settings: Settings::default(),
             session_tags_backfilled: false,
         }

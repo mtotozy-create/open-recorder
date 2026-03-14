@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  InsightQueryRequest,
+  InsightResult,
   JobInfo,
   LocalProviderStatus,
   RecorderInputDevice,
@@ -130,6 +132,20 @@ export async function setSessionTags(sessionId: string, tags: string[]): Promise
   await invoke("session_set_tags", { sessionId, tags });
 }
 
+export async function setSessionDiscoverable(
+  sessionId: string,
+  discoverable: boolean
+): Promise<void> {
+  await invoke("session_set_discoverable", { sessionId, discoverable });
+}
+
+export async function updateSessionSummaryRawMarkdown(
+  sessionId: string,
+  rawMarkdown: string
+): Promise<void> {
+  await invoke("session_update_summary_raw_markdown", { sessionId, rawMarkdown });
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
   await invoke("session_delete", { sessionId });
 }
@@ -153,6 +169,21 @@ export async function enqueueSummary(sessionId: string, templateId?: string): Pr
     templateId
   });
   return response.jobId;
+}
+
+export async function enqueueInsight(
+  request: InsightQueryRequest,
+  forceRefresh?: boolean
+): Promise<string> {
+  const response = await invoke<{ jobId: string }>("insight_enqueue", {
+    request,
+    forceRefresh
+  });
+  return response.jobId;
+}
+
+export async function getCachedInsight(request: InsightQueryRequest): Promise<InsightResult | null> {
+  return invoke("insight_get_cached", { request });
 }
 
 export async function getJob(jobId: string): Promise<JobInfo> {

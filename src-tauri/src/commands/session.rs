@@ -8,6 +8,7 @@ use crate::{
     models::{
         merge_session_tags_into_catalog, validate_session_tags, AudioSegmentMeta,
         RecordingQualityPreset, Session, SessionStatus, SessionSummary, StartSessionResponse,
+        SummaryResult,
         DEFAULT_IMPORTED_SESSION_TAG,
     },
     state::AppState,
@@ -134,6 +135,7 @@ pub fn session_create_from_audio(
         Session {
             id: session_id.clone(),
             name: None,
+            discoverable: true,
             status: SessionStatus::Stopped,
             created_at: now.clone(),
             updated_at: now.clone(),
@@ -264,6 +266,63 @@ pub fn session_set_tags(
         &normalized_tags,
     );
     storage.data.settings.normalize();
+    storage.save()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn session_set_discoverable(
+    session_id: String,
+    discoverable: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+
+    let session = storage
+        .data
+        .sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| "session not found".to_string())?;
+    session.discoverable = discoverable;
+    session.updated_at = now_iso();
+    storage.save()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn session_update_summary_raw_markdown(
+    session_id: String,
+    raw_markdown: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+
+    let session = storage
+        .data
+        .sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| "session not found".to_string())?;
+
+    if let Some(summary) = session.summary.as_mut() {
+        summary.raw_markdown = raw_markdown;
+    } else {
+        session.summary = Some(SummaryResult {
+            title: "Manual Summary".to_string(),
+            decisions: vec![],
+            action_items: vec![],
+            risks: vec![],
+            timeline: vec![],
+            raw_markdown,
+        });
+    }
+
+    session.updated_at = now_iso();
     storage.save()?;
     Ok(())
 }

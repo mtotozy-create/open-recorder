@@ -44,6 +44,11 @@ type SessionsTabProps = {
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => void;
   onSetSessionTags: (sessionId: string, tags: string[]) => void | Promise<void>;
+  onSetSessionDiscoverable: (sessionId: string, discoverable: boolean) => void | Promise<void>;
+  onUpdateSessionSummaryRawMarkdown: (
+    sessionId: string,
+    rawMarkdown: string
+  ) => void | Promise<void>;
   onDeleteSession: (sessionId: string) => void;
   onPreparePlaybackAudio: () => Promise<string>;
   onExportM4a: () => void;
@@ -271,6 +276,8 @@ function SessionsTab({
   onSelectSession,
   onRenameSession,
   onSetSessionTags,
+  onSetSessionDiscoverable,
+  onUpdateSessionSummaryRawMarkdown,
   onDeleteSession,
   onPreparePlaybackAudio,
   onExportM4a,
@@ -300,6 +307,10 @@ function SessionsTab({
   const [transcriptionStartMs, setTranscriptionStartMs] = useState<number>();
   const [summaryStartMs, setSummaryStartMs] = useState<number>();
   const [summaryCopyStatus, setSummaryCopyStatus] = useState<CopyStatus>("idle");
+  const [isSummaryEditing, setIsSummaryEditing] = useState(false);
+  const [summaryDraft, setSummaryDraft] = useState("");
+  const [summaryEditError, setSummaryEditError] = useState<string>();
+  const [isSavingSummary, setIsSavingSummary] = useState(false);
   const [isTagFilterExpanded, setIsTagFilterExpanded] = useState(false);
   const [selectedFilterTags, setSelectedFilterTags] = useState<string[]>([]);
   const [tagEditorSessionId, setTagEditorSessionId] = useState<string>();
@@ -307,6 +318,7 @@ function SessionsTab({
   const [tagDraftInput, setTagDraftInput] = useState("");
   const [tagDraftError, setTagDraftError] = useState<string>();
   const [isSavingTags, setIsSavingTags] = useState(false);
+  const [discoverableUpdatingId, setDiscoverableUpdatingId] = useState<string>();
   const skipListBlurRef = useRef(false);
   const audioFileInputRef = useRef<HTMLInputElement>(null);
   const playbackAudioRef = useRef<HTMLAudioElement>(null);
@@ -344,8 +356,14 @@ function SessionsTab({
   const summaryRunningLabel = runningSummaryJob?.progressMsg
     ? `${t("status.summaryRunning", { elapsed: summaryElapsedLabel })} (${runningSummaryJob.progressMsg})`
     : t("status.summaryRunning", { elapsed: summaryElapsedLabel });
+  const summaryTaskRunning = isSummarizing || Boolean(runningSummaryJob);
   const summaryCopyText = activeSession?.summary?.rawMarkdown?.trim() ?? "";
-  const canCopySummary = summaryViewMode === "readable" && summaryCopyText.length > 0;
+  const canCopySummary =
+    summaryViewMode === "readable" && !isSummaryEditing && summaryCopyText.length > 0;
+  const canEditSummary = summaryViewMode === "readable" && !summaryTaskRunning;
+  const summaryEditActionLabel = activeSession?.summary
+    ? t("sessionDetail.editSummary")
+    : t("sessionDetail.createSummary");
   const summaryCopyLabel = summaryCopyStatus === "success"
     ? t("sessionDetail.copySummarySuccess")
     : summaryCopyStatus === "error"
@@ -366,12 +384,36 @@ function SessionsTab({
   }, [activeSession?.id, activeSession?.name, !!activeSession?.summary]);
 
   useEffect(() => {
+    setIsSummaryEditing(false);
+    setSummaryDraft(activeSession?.summary?.rawMarkdown ?? "");
+    setSummaryEditError(undefined);
+    setIsSavingSummary(false);
+  }, [activeSession?.id, activeSession?.summary?.rawMarkdown]);
+
+  useEffect(() => {
     setSummaryCopyStatus("idle");
     if (summaryCopyResetTimerRef.current) {
       window.clearTimeout(summaryCopyResetTimerRef.current);
       summaryCopyResetTimerRef.current = undefined;
     }
   }, [activeSession?.id, activeSession?.summary?.rawMarkdown, summaryViewMode]);
+
+  useEffect(() => {
+    if (summaryViewMode === "readable") {
+      return;
+    }
+    setIsSummaryEditing(false);
+    setSummaryEditError(undefined);
+  }, [summaryViewMode]);
+
+  useEffect(() => {
+    if (!summaryTaskRunning) {
+      return;
+    }
+    setIsSummaryEditing(false);
+    setSummaryDraft(activeSession?.summary?.rawMarkdown ?? "");
+    setSummaryEditError(undefined);
+  }, [summaryTaskRunning, activeSession?.summary?.rawMarkdown]);
 
   useEffect(() => {
     return () => {
@@ -650,6 +692,24 @@ function SessionsTab({
     }
   }
 
+  async function toggleSessionDiscoverable(
+    session: SessionSummary,
+    event: MouseEvent<HTMLButtonElement>
+  ) {
+    event.stopPropagation();
+    if (discoverableUpdatingId === session.id) {
+      return;
+    }
+    setDiscoverableUpdatingId(session.id);
+    try {
+      await onSetSessionDiscoverable(session.id, !session.discoverable);
+    } catch (error) {
+      console.warn("[session-discoverable] failed to update", { error: String(error) });
+    } finally {
+      setDiscoverableUpdatingId((previous) => (previous === session.id ? undefined : previous));
+    }
+  }
+
   async function handlePreparePlaybackAudio() {
     if (isPreparingPlaybackAudio) {
       logPlaybackDebug("prepare-skipped-busy");
@@ -719,6 +779,37 @@ function SessionsTab({
       setSummaryCopyStatus("error");
     }
     queueSummaryCopyStatusReset();
+  }
+
+  function handleStartSummaryEdit() {
+    if (!activeSession || !canEditSummary) {
+      return;
+    }
+    setSummaryDraft(activeSession.summary?.rawMarkdown ?? "");
+    setSummaryEditError(undefined);
+    setIsSummaryEditing(true);
+  }
+
+  function handleCancelSummaryEdit() {
+    setSummaryDraft(activeSession?.summary?.rawMarkdown ?? "");
+    setSummaryEditError(undefined);
+    setIsSummaryEditing(false);
+  }
+
+  async function handleSaveSummaryEdit() {
+    if (!activeSession || !canEditSummary || isSavingSummary) {
+      return;
+    }
+    setIsSavingSummary(true);
+    setSummaryEditError(undefined);
+    try {
+      await onUpdateSessionSummaryRawMarkdown(activeSession.id, summaryDraft);
+      setIsSummaryEditing(false);
+    } catch (error) {
+      setSummaryEditError(String(error));
+    } finally {
+      setIsSavingSummary(false);
+    }
   }
 
   const canShowCurrentShortcut = Boolean(activeSessionId);
@@ -1056,6 +1147,40 @@ function SessionsTab({
 
                       <div className="session-item-row">
                         <div className="session-badges">
+                          <button
+                            type="button"
+                            className={`session-discoverable-btn${session.discoverable ? " enabled" : " disabled"}`}
+                            onClick={(event) => {
+                              void toggleSessionDiscoverable(session, event);
+                            }}
+                            title={
+                              session.discoverable
+                                ? t("sessions.discoverable.disable")
+                                : t("sessions.discoverable.enable")
+                            }
+                            aria-label={
+                              session.discoverable
+                                ? t("sessions.discoverable.disable")
+                                : t("sessions.discoverable.enable")
+                            }
+                            disabled={discoverableUpdatingId === session.id}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              {session.discoverable ? (
+                                <>
+                                  <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" />
+                                  <circle cx="12" cy="12" r="3" />
+                                </>
+                              ) : (
+                                <>
+                                  <path d="M3 3l18 18" />
+                                  <path d="M2 12s3.5-6.5 10-6.5c1.9 0 3.5.5 4.9 1.3" />
+                                  <path d="M22 12s-3.5 6.5-10 6.5c-1.9 0-3.5-.5-4.9-1.3" />
+                                  <path d="M12 9.2a2.8 2.8 0 012.8 2.8" />
+                                </>
+                              )}
+                            </svg>
+                          </button>
                           <span className="session-badge quality">
                             {getQualityLabel(session.qualityPreset, t)}
                           </span>
@@ -1403,7 +1528,7 @@ function SessionsTab({
                   <div className="session-result-header">
                     <h3>{t("sessionDetail.summary")}</h3>
                     <div className="session-result-actions">
-                      {summaryViewMode === "readable" && (
+                      {summaryViewMode === "readable" && !isSummaryEditing && (
                         <button
                           type="button"
                           className={`summary-copy-btn${summaryCopyStatus === "success" ? " success" : ""}${summaryCopyStatus === "error" ? " error" : ""}`}
@@ -1423,6 +1548,37 @@ function SessionsTab({
                           </svg>
                           <span>{summaryCopyLabel}</span>
                         </button>
+                      )}
+                      {summaryViewMode === "readable" && !isSummaryEditing && (
+                        <button
+                          type="button"
+                          className="summary-edit-btn"
+                          onClick={handleStartSummaryEdit}
+                          disabled={!canEditSummary}
+                          title={!canEditSummary ? t("sessionDetail.summaryEditingDisabled") : summaryEditActionLabel}
+                        >
+                          {summaryEditActionLabel}
+                        </button>
+                      )}
+                      {summaryViewMode === "readable" && isSummaryEditing && (
+                        <div className="summary-edit-actions">
+                          <button
+                            type="button"
+                            className="summary-edit-btn secondary"
+                            onClick={handleCancelSummaryEdit}
+                            disabled={isSavingSummary}
+                          >
+                            {t("action.cancel")}
+                          </button>
+                          <button
+                            type="button"
+                            className="summary-edit-btn"
+                            onClick={() => void handleSaveSummaryEdit()}
+                            disabled={!canEditSummary || isSavingSummary}
+                          >
+                            {isSavingSummary ? t("sessionDetail.savingSummary") : t("sessionDetail.saveSummary")}
+                          </button>
+                        </div>
                       )}
                       <div className="view-switch">
                         <button
@@ -1448,10 +1604,43 @@ function SessionsTab({
                   )}
 
                   {summaryViewMode === "readable" && !activeSession.summary && (
-                    <p className="empty-hint">{t("sessionDetail.summaryEmpty")}</p>
+                    <>
+                      {!isSummaryEditing && (
+                        <p className="empty-hint">{t("sessionDetail.summaryEmpty")}</p>
+                      )}
+                      {!isSummaryEditing && (
+                        <button
+                          type="button"
+                          className="summary-create-btn"
+                          onClick={handleStartSummaryEdit}
+                          disabled={!canEditSummary}
+                          title={!canEditSummary ? t("sessionDetail.summaryEditingDisabled") : t("sessionDetail.createSummary")}
+                        >
+                          {t("sessionDetail.createSummary")}
+                        </button>
+                      )}
+                    </>
                   )}
 
-                  {summaryViewMode === "readable" && activeSession.summary && (
+                  {summaryViewMode === "readable" && isSummaryEditing && (
+                    <div className="summary-editor">
+                      <textarea
+                        className="summary-editor-input"
+                        value={summaryDraft}
+                        onChange={(event) => {
+                          setSummaryDraft(event.target.value);
+                          setSummaryEditError(undefined);
+                        }}
+                        placeholder={t("sessionDetail.summaryEditorPlaceholder")}
+                        disabled={!canEditSummary || isSavingSummary}
+                      />
+                      {summaryEditError && (
+                        <p className="summary-edit-error">{summaryEditError}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {summaryViewMode === "readable" && !isSummaryEditing && activeSession.summary && (
                     <div className="summary-markdown-view">
                       {activeSession.summary.rawMarkdown.trim() ? (
                         <ReactMarkdown

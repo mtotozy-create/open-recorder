@@ -1825,6 +1825,7 @@ pub fn recorder_start(
             Session {
                 id: session_id.clone(),
                 name: None,
+                discoverable: true,
                 status: SessionStatus::Recording,
                 created_at: now.clone(),
                 updated_at: now,

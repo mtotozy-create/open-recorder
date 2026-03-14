@@ -5,6 +5,7 @@ mod state;
 mod storage;
 
 use commands::{
+    insight::{insight_enqueue, insight_get_cached},
     job::{job_get, session_jobs},
     local_provider::{local_provider_prepare, local_provider_status},
     recorder::{
@@ -16,7 +17,7 @@ use commands::{
     },
     session::{
         session_create_from_audio, session_delete, session_get, session_list, session_rename,
-        session_set_tags,
+        session_set_discoverable, session_set_tags, session_update_summary_raw_markdown,
     },
     settings::{settings_get, settings_update},
     summary::summary_enqueue,
@@ -48,9 +49,13 @@ pub fn run() {
             session_rename,
             session_delete,
             session_set_tags,
+            session_set_discoverable,
+            session_update_summary_raw_markdown,
             transcribe_enqueue,
             session_prepare_transcription_audio,
             summary_enqueue,
+            insight_enqueue,
+            insight_get_cached,
             job_get,
             session_jobs,
             local_provider_status,

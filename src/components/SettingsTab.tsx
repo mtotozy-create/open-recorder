@@ -918,6 +918,18 @@ function SettingsTab({
               }
             />
           </label>
+          <label>
+            {t("settings.openrouterDiscoverModel")}
+            <input
+              value={openrouter.discoverModel}
+              onChange={(event) =>
+                patchProvider(provider.id, (current) => ({
+                  ...current,
+                  openrouter: { ...openrouter, discoverModel: event.target.value }
+                }))
+              }
+            />
+          </label>
         </>
       );
     }
@@ -1176,6 +1188,9 @@ function SettingsTab({
   const summaryProviders = settings.providers.filter((provider) =>
     supportsCapability(provider, "summary")
   );
+  const discoverProviders = settings.providers.filter((provider) =>
+    supportsCapability(provider, "summary")
+  );
   const activeProvider = settings.providers.find((provider) => provider.id === activeProviderId);
   const activeOssConfig = settings.ossConfigs.find((config) => config.id === activeOssConfigId);
   const hasValidationErrors = Object.values(aliyunJsonFieldErrors).some(
@@ -1384,6 +1399,23 @@ function SettingsTab({
                 >
                   {summaryProviders.length === 0 && <option value="">{t("settings.noProvider")}</option>}
                   {summaryProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name} ({providerKindLabel(provider.kind, t)})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                {t("settings.discoverProvider")}
+                <select
+                  value={settings.selectedDiscoverProviderId}
+                  onChange={(event) =>
+                    onSettingsChange({ selectedDiscoverProviderId: event.target.value })
+                  }
+                >
+                  {discoverProviders.length === 0 && <option value="">{t("settings.noProvider")}</option>}
+                  {discoverProviders.map((provider) => (
                     <option key={provider.id} value={provider.id}>
                       {provider.name} ({providerKindLabel(provider.kind, t)})
                     </option>

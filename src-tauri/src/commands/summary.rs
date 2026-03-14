@@ -15,7 +15,7 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339()
 }
 
-fn provider_supports_summary(provider: &ProviderConfig) -> bool {
+pub(crate) fn provider_supports_summary(provider: &ProviderConfig) -> bool {
     provider.enabled
         && provider
             .capabilities
@@ -23,7 +23,7 @@ fn provider_supports_summary(provider: &ProviderConfig) -> bool {
             .any(|item| *item == ProviderCapability::Summary)
 }
 
-fn resolve_summary_config(
+pub(crate) fn resolve_summary_config(
     provider: &ProviderConfig,
 ) -> Result<ChatCompatibleSummaryConfig, String> {
     match provider.kind {
