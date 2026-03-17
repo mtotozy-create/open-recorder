@@ -106,6 +106,129 @@ function sanitizeFileNameSegment(input: string): string {
     .slice(0, 80);
 }
 
+function estimateTextDisplayUnits(input: string): number {
+  const normalized = input.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return 0;
+  }
+  let units = 0;
+  for (const char of normalized) {
+    if (char === " ") {
+      units += 0.5;
+      continue;
+    }
+    const code = char.charCodeAt(0);
+    const isWideGlyph =
+      (code >= 0x2e80 && code <= 0x9fff) ||
+      (code >= 0xac00 && code <= 0xd7af) ||
+      (code >= 0x3040 && code <= 0x30ff) ||
+      (code >= 0xff01 && code <= 0xff60);
+    units += isWideGlyph ? 2 : 1;
+  }
+  return units;
+}
+
+function normalizeColumnPercentages(
+  rawPercentages: number[],
+  minPercent: number,
+  maxPercent: number
+): number[] {
+  const adjusted = rawPercentages.map((value) =>
+    Math.min(maxPercent, Math.max(minPercent, value))
+  );
+  const tolerance = 0.01;
+  for (let round = 0; round < 24; round += 1) {
+    const sum = adjusted.reduce((acc, value) => acc + value, 0);
+    const diff = 100 - sum;
+    if (Math.abs(diff) <= tolerance) {
+      break;
+    }
+    if (diff > 0) {
+      const candidates = adjusted
+        .map((value, index) => ({ index, capacity: maxPercent - value }))
+        .filter((item) => item.capacity > tolerance);
+      const capacitySum = candidates.reduce((acc, item) => acc + item.capacity, 0);
+      if (capacitySum <= tolerance) {
+        break;
+      }
+      for (const item of candidates) {
+        adjusted[item.index] = Math.min(
+          maxPercent,
+          adjusted[item.index] + (diff * item.capacity) / capacitySum
+        );
+      }
+    } else {
+      const need = -diff;
+      const candidates = adjusted
+        .map((value, index) => ({ index, capacity: value - minPercent }))
+        .filter((item) => item.capacity > tolerance);
+      const capacitySum = candidates.reduce((acc, item) => acc + item.capacity, 0);
+      if (capacitySum <= tolerance) {
+        break;
+      }
+      for (const item of candidates) {
+        adjusted[item.index] = Math.max(
+          minPercent,
+          adjusted[item.index] - (need * item.capacity) / capacitySum
+        );
+      }
+    }
+  }
+  const finalSum = adjusted.reduce((acc, value) => acc + value, 0);
+  if (adjusted.length > 0 && Math.abs(100 - finalSum) > tolerance) {
+    adjusted[0] += 100 - finalSum;
+  }
+  return adjusted;
+}
+
+function applyAdaptiveTableColumnWidths(table: HTMLTableElement): void {
+  const rows = Array.from(table.querySelectorAll("tr"));
+  const columnCount = rows.reduce((max, row) => {
+    const cells = Array.from(row.children).filter((child) => {
+      const tag = child.tagName.toUpperCase();
+      return tag === "TH" || tag === "TD";
+    });
+    return Math.max(max, cells.length);
+  }, 0);
+  if (columnCount <= 0) {
+    return;
+  }
+
+  const columnScores = new Array<number>(columnCount).fill(4);
+  rows.forEach((row, rowIndex) => {
+    const cells = Array.from(row.children).filter((child) => {
+      const tag = child.tagName.toUpperCase();
+      return tag === "TH" || tag === "TD";
+    }) as HTMLElement[];
+    cells.forEach((cell, index) => {
+      const text = cell.innerText || cell.textContent || "";
+      const units = Math.max(1, Math.min(160, estimateTextDisplayUnits(text)));
+      const weighted = rowIndex === 0 ? units * 1.15 : units;
+      columnScores[index] = Math.max(columnScores[index], weighted);
+    });
+  });
+
+  const effectiveScores = columnScores.map((score) => Math.sqrt(score) + 2);
+  const totalEffective = effectiveScores.reduce((acc, value) => acc + value, 0);
+  const rawPercentages = effectiveScores.map((value) => (value / totalEffective) * 100);
+
+  const suggestedMin =
+    columnCount >= 6 ? 7 : columnCount === 5 ? 9 : columnCount === 4 ? 11 : columnCount === 3 ? 15 : 22;
+  const minPercent = Math.max(4, Math.min(suggestedMin, Math.floor(100 / columnCount) - 1));
+  const maxPercent = columnCount <= 2 ? 78 : columnCount === 3 ? 60 : columnCount === 4 ? 48 : 42;
+  const normalizedPercentages = normalizeColumnPercentages(rawPercentages, minPercent, maxPercent);
+
+  table.querySelectorAll("colgroup[data-or-pdf-colgroup='1']").forEach((node) => node.remove());
+  const colgroup = document.createElement("colgroup");
+  colgroup.setAttribute("data-or-pdf-colgroup", "1");
+  for (const percentage of normalizedPercentages) {
+    const col = document.createElement("col");
+    col.style.width = `${percentage.toFixed(2)}%`;
+    colgroup.appendChild(col);
+  }
+  table.insertBefore(colgroup, table.firstChild);
+}
+
 function createDefaultOssConfig(kind: OssProviderKind = "aliyun"): OssConfig {
   return {
     id: kind === "r2" ? "oss-r2-default" : DEFAULT_OSS_CONFIG_ID,
@@ -1178,6 +1301,7 @@ function App() {
         table.style.overflowY = "visible";
         table.style.whiteSpace = "normal";
         table.style.wordBreak = "break-word";
+        applyAdaptiveTableColumnWidths(table);
       }
       const tableParents = captureNode.querySelectorAll<HTMLElement>("table, thead, tbody, tr");
       for (const item of tableParents) {
@@ -1189,7 +1313,7 @@ function App() {
         cell.style.whiteSpace = "normal";
         cell.style.wordBreak = "break-word";
         cell.style.overflowWrap = "anywhere";
-        cell.style.maxWidth = "0";
+        cell.style.maxWidth = "none";
       }
       const textBlocks = captureNode.querySelectorAll<HTMLElement>("p, li, blockquote");
       for (const block of textBlocks) {
