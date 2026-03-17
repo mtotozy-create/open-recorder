@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.1.2...v0.2.0) (2026-03-17)
+
+### Features
+
+* add discover/insight flows and streamline release build ([6b71a5a](https://github-mtotozy/mtotozy-create/open-recorder/commit/6b71a5a51797ecd3513a37fd2c8c7cc76e9a7c78))
+
 ## [0.1.2](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.1.1...v0.1.2) (2026-03-12)
 
 ### Features

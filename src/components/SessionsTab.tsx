@@ -53,6 +53,7 @@ type SessionsTabProps = {
   onPreparePlaybackAudio: () => Promise<string>;
   onExportM4a: () => void;
   onExportMp3: () => void;
+  onExportSummaryPdf: () => void;
   onTranscribe: () => void;
   onSummarize: () => void;
   t: Translator;
@@ -282,6 +283,7 @@ function SessionsTab({
   onPreparePlaybackAudio,
   onExportM4a,
   onExportMp3,
+  onExportSummaryPdf,
   onTranscribe,
   onSummarize,
   t
@@ -359,6 +361,8 @@ function SessionsTab({
   const summaryTaskRunning = isSummarizing || Boolean(runningSummaryJob);
   const summaryCopyText = activeSession?.summary?.rawMarkdown?.trim() ?? "";
   const canCopySummary =
+    summaryViewMode === "readable" && !isSummaryEditing && summaryCopyText.length > 0;
+  const canExportSummaryPdf =
     summaryViewMode === "readable" && !isSummaryEditing && summaryCopyText.length > 0;
   const canEditSummary = summaryViewMode === "readable" && !summaryTaskRunning;
   const summaryEditActionLabel = activeSession?.summary
@@ -1553,6 +1557,17 @@ function SessionsTab({
                         <button
                           type="button"
                           className="summary-edit-btn"
+                          onClick={onExportSummaryPdf}
+                          disabled={!canExportSummaryPdf}
+                          title={t("sessionDetail.exportPdf")}
+                        >
+                          {t("sessionDetail.exportPdf")}
+                        </button>
+                      )}
+                      {summaryViewMode === "readable" && !isSummaryEditing && (
+                        <button
+                          type="button"
+                          className="summary-edit-btn"
                           onClick={handleStartSummaryEdit}
                           disabled={!canEditSummary}
                           title={!canEditSummary ? t("sessionDetail.summaryEditingDisabled") : summaryEditActionLabel}
@@ -1641,7 +1656,7 @@ function SessionsTab({
                   )}
 
                   {summaryViewMode === "readable" && !isSummaryEditing && activeSession.summary && (
-                    <div className="summary-markdown-view">
+                    <div className="summary-markdown-view summary-print-root">
                       {activeSession.summary.rawMarkdown.trim() ? (
                         <ReactMarkdown
                           skipHtml

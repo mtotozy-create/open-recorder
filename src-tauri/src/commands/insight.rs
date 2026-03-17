@@ -9,9 +9,9 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        InsightAction, InsightCacheEntry, InsightPerson, InsightResult, InsightTopic,
-        InsightTopicStatus, Job, JobEnqueueResponse, JobKind, JobStatus, ProviderConfig,
-        ProviderKind, Session,
+        InsightAction, InsightCacheEntry, InsightPerson, InsightResult, InsightSuggestion,
+        InsightSuggestionPriority, InsightTopic, InsightTopicStatus, Job, JobEnqueueResponse,
+        JobKind, JobStatus, ProviderConfig, ProviderKind, Session,
     },
     providers::bailian::ChatCompatibleSummaryConfig,
     state::AppState,
@@ -20,7 +20,7 @@ use crate::{
 use super::summary::{provider_supports_summary, resolve_summary_config};
 
 const DISCOVER_JOB_SESSION_ID: &str = "__discover__";
-const INSIGHT_PROMPT_VERSION: &str = "discover-v1";
+const INSIGHT_PROMPT_VERSION: &str = "discover-v2";
 const MAX_SELECTED_SESSION_IDS: usize = 20;
 
 fn now_iso() -> String {
@@ -74,6 +74,7 @@ pub struct InsightQueryRequest {
     pub time_range: Option<String>,
     pub session_ids: Option<Vec<String>>,
     pub keyword: Option<String>,
+    pub include_suggestions: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +89,7 @@ struct NormalizedInsightQuery {
     selection_key: String,
     result_scope: String,
     keyword: Option<String>,
+    include_suggestions: bool,
     empty_source_error: String,
 }
 
@@ -115,6 +117,7 @@ pub fn insight_get_cached(
     let cache_key = build_cache_key(
         normalized_query.selection_key.as_str(),
         normalized_query.keyword.as_deref(),
+        normalized_query.include_suggestions,
         provider.id.as_str(),
         summary_config.model.as_str(),
         build_session_fingerprint(&sessions).as_str(),
@@ -147,6 +150,7 @@ pub fn insight_enqueue(
         provider_model,
         result_scope,
         session_fingerprint,
+        include_suggestions,
         summary_config,
     ) = {
         let mut storage = state
@@ -171,6 +175,7 @@ pub fn insight_enqueue(
         let cache_key = build_cache_key(
             normalized_query.selection_key.as_str(),
             normalized_query.keyword.as_deref(),
+            normalized_query.include_suggestions,
             provider_id.as_str(),
             summary_config.model.as_str(),
             session_fingerprint.as_str(),
@@ -220,6 +225,7 @@ pub fn insight_enqueue(
             summary_config.model.clone(),
             normalized_query.result_scope,
             session_fingerprint,
+            normalized_query.include_suggestions,
             summary_config,
         )
     };
@@ -245,7 +251,12 @@ pub fn insight_enqueue(
                 sessions.len()
             ));
 
-            let payload = match analyze_single_session(session, keyword.as_deref(), &summary_config) {
+            let payload = match analyze_single_session(
+                session,
+                keyword.as_deref(),
+                include_suggestions,
+                &summary_config,
+            ) {
                 Ok(value) => value,
                 Err(error) => {
                     if let Ok(mut storage) = storage_arc.lock() {
@@ -385,6 +396,7 @@ fn normalize_insight_query(request: InsightQueryRequest) -> Result<NormalizedIns
     });
 
     let keyword = normalize_keyword(request.keyword);
+    let include_suggestions = request.include_suggestions.unwrap_or(false);
 
     match mode.as_str() {
         "timeRange" => {
@@ -402,6 +414,7 @@ fn normalize_insight_query(request: InsightQueryRequest) -> Result<NormalizedIns
                 selection_key: format!("timeRange:{time_range}"),
                 result_scope: time_range,
                 keyword,
+                include_suggestions,
                 empty_source_error: "no sessions with summary found in selected time range".to_string(),
             })
         }
@@ -422,6 +435,7 @@ fn normalize_insight_query(request: InsightQueryRequest) -> Result<NormalizedIns
                 selection_key: format!("sessions:{}", sorted_ids.join(",")),
                 result_scope: "sessions".to_string(),
                 keyword,
+                include_suggestions,
                 empty_source_error:
                     "no discoverable sessions with summary found in selected sessions".to_string(),
             })
@@ -568,13 +582,14 @@ fn build_session_fingerprint(sessions: &[InsightSourceSession]) -> String {
 fn build_cache_key(
     selection_key: &str,
     keyword: Option<&str>,
+    include_suggestions: bool,
     provider_id: &str,
     model: &str,
     session_fingerprint: &str,
 ) -> String {
     let keyword_part = keyword.unwrap_or("").to_lowercase();
     let raw = format!(
-        "{selection_key}|{keyword_part}|{provider_id}|{model}|{}|{session_fingerprint}",
+        "{selection_key}|{keyword_part}|{include_suggestions}|{provider_id}|{model}|{}|{session_fingerprint}",
         INSIGHT_PROMPT_VERSION
     );
     let mut hasher = Sha256::new();
@@ -588,10 +603,81 @@ fn parse_utc(input: &str) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
-fn build_session_prompt(session: &InsightSourceSession, keyword: Option<&str>) -> String {
+fn build_session_prompt(
+    session: &InsightSourceSession,
+    keyword: Option<&str>,
+    include_suggestions: bool,
+) -> String {
     let keyword_line = keyword
         .map(|value| format!("事项关键词: {value}"))
         .unwrap_or_else(|| "事项关键词: (无，提取全部)".to_string());
+
+    if include_suggestions {
+        return format!(
+            "请基于以下单个会议纪要提取结构化信息。\n\
+            你必须只输出 JSON，不要输出任何解释。\n\
+            你必须保留并回填 sourceSessionId 为输入的 sessionId。\n\
+            额外要求：请给人员和事项分别提供可执行、建设性、可落地的下一步行动建议。\n\
+            建议必须具体，避免空话；优先给出 1-2 周内可执行的动作。\n\
+            {keyword_line}\n\n\
+            输入:\n\
+            - sessionId: {session_id}\n\
+            - sessionName: {session_name}\n\
+            - sessionDate: {session_date}\n\n\
+            纪要原文:\n\
+            {raw_markdown}\n\n\
+            输出 JSON 结构:\n\
+            {{\n\
+              \"people\": [{{\n\
+                \"name\": \"\",\n\
+                \"tasks\": [{{\n\
+                  \"description\": \"\",\n\
+                  \"status\": \"pending|in_progress|completed\",\n\
+                  \"deadline\": \"\",\n\
+                  \"sourceSessionId\": \"{session_id}\",\n\
+                  \"sourceDate\": \"\"\n\
+                }}],\n\
+                \"decisions\": [\"\"],\n\
+                \"risks\": [\"\"],\n\
+                \"suggestions\": [{{\n\
+                  \"title\": \"\",\n\
+                  \"rationale\": \"\",\n\
+                  \"priority\": \"high|medium|low\",\n\
+                  \"ownerHint\": \"\",\n\
+                  \"sourceSessionIds\": [\"{session_id}\"]\n\
+                }}]\n\
+              }}],\n\
+              \"topics\": [{{\n\
+                \"name\": \"\",\n\
+                \"progress\": [{{\n\
+                  \"date\": \"\",\n\
+                  \"description\": \"\",\n\
+                  \"sourceSessionId\": \"{session_id}\"\n\
+                }}],\n\
+                \"status\": \"active|completed|blocked\",\n\
+                \"relatedPeople\": [\"\"],\n\
+                \"suggestions\": [{{\n\
+                  \"title\": \"\",\n\
+                  \"rationale\": \"\",\n\
+                  \"priority\": \"high|medium|low\",\n\
+                  \"ownerHint\": \"\",\n\
+                  \"sourceSessionIds\": [\"{session_id}\"]\n\
+                }}]\n\
+              }}],\n\
+              \"upcomingActions\": [{{\n\
+                \"description\": \"\",\n\
+                \"assignee\": \"\",\n\
+                \"deadline\": \"\",\n\
+                \"sourceSessionId\": \"{session_id}\",\n\
+                \"sourceDate\": \"\"\n\
+              }}]\n\
+            }}",
+            session_id = session.id,
+            session_name = session.name,
+            session_date = session.created_at,
+            raw_markdown = session.raw_markdown
+        );
+    }
 
     format!(
         "请基于以下单个会议纪要提取结构化信息。\n\
@@ -646,11 +732,12 @@ fn build_session_prompt(session: &InsightSourceSession, keyword: Option<&str>) -
 fn analyze_single_session(
     session: &InsightSourceSession,
     keyword: Option<&str>,
+    include_suggestions: bool,
     config: &ChatCompatibleSummaryConfig,
 ) -> Result<InsightExtractionPayload, String> {
     const SYSTEM_PROMPT: &str = "你是一个会议纪要分析助手。请严格输出 JSON。";
 
-    let base_prompt = build_session_prompt(session, keyword);
+    let base_prompt = build_session_prompt(session, keyword, include_suggestions);
     let retry_hint = "\n\n上一次输出不符合要求。请只输出 JSON 对象本体，不要使用 markdown 代码块，不要附加说明。";
     let mut last_error = String::new();
 
@@ -815,6 +902,7 @@ fn normalize_extraction_payload(
 
             person.decisions = dedup_strings(person.decisions);
             person.risks = dedup_strings(person.risks);
+            person.suggestions = normalize_suggestions(person.suggestions, session, valid_session_ids);
             Some(person)
         })
         .collect();
@@ -848,6 +936,7 @@ fn normalize_extraction_payload(
                 })
                 .collect();
             topic.related_people = dedup_strings(topic.related_people);
+            topic.suggestions = normalize_suggestions(topic.suggestions, session, valid_session_ids);
             Some(topic)
         })
         .collect();
@@ -900,6 +989,43 @@ fn dedup_strings(input: Vec<String>) -> Vec<String> {
     result
 }
 
+fn normalize_suggestions(
+    input: Vec<InsightSuggestion>,
+    session: &InsightSourceSession,
+    valid_session_ids: &HashSet<String>,
+) -> Vec<InsightSuggestion> {
+    input
+        .into_iter()
+        .filter_map(|mut suggestion| {
+            suggestion.title = suggestion.title.trim().to_string();
+            suggestion.rationale = suggestion.rationale.trim().to_string();
+            if suggestion.title.is_empty() || suggestion.rationale.is_empty() {
+                return None;
+            }
+            suggestion.owner_hint = suggestion
+                .owner_hint
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            suggestion.source_session_ids = suggestion
+                .source_session_ids
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .filter(|value| valid_session_ids.contains(value))
+                .collect();
+            if suggestion.source_session_ids.is_empty()
+                || suggestion
+                    .source_session_ids
+                    .iter()
+                    .any(|value| value != &session.id)
+            {
+                suggestion.source_session_ids = vec![session.id.clone()];
+            }
+            Some(suggestion)
+        })
+        .collect()
+}
+
 fn merge_extractions(
     payloads: Vec<InsightExtractionPayload>,
     keyword: Option<&str>,
@@ -916,6 +1042,7 @@ fn merge_extractions(
                 tasks: vec![],
                 decisions: vec![],
                 risks: vec![],
+                suggestions: vec![],
             });
 
             if entry.name.trim().is_empty() {
@@ -924,6 +1051,7 @@ fn merge_extractions(
             entry.tasks.extend(person.tasks);
             entry.decisions.extend(person.decisions);
             entry.risks.extend(person.risks);
+            entry.suggestions.extend(person.suggestions);
             dedup_person(entry);
         }
 
@@ -934,6 +1062,7 @@ fn merge_extractions(
                 progress: vec![],
                 status: topic.status.clone(),
                 related_people: vec![],
+                suggestions: vec![],
             });
 
             if entry.name.trim().is_empty() {
@@ -941,6 +1070,7 @@ fn merge_extractions(
             }
             entry.progress.extend(topic.progress);
             entry.related_people.extend(topic.related_people);
+            entry.suggestions.extend(topic.suggestions);
             entry.status = merge_topic_status(&entry.status, &topic.status);
             dedup_topic(entry);
         }
@@ -974,11 +1104,25 @@ fn merge_extractions(
                         .into_iter()
                         .filter(|item| item.to_lowercase().contains(&normalized))
                         .collect();
+                    person.suggestions = person
+                        .suggestions
+                        .into_iter()
+                        .filter(|item| {
+                            item.title.to_lowercase().contains(&normalized)
+                                || item.rationale.to_lowercase().contains(&normalized)
+                                || item
+                                    .owner_hint
+                                    .as_ref()
+                                    .map(|value| value.to_lowercase().contains(&normalized))
+                                    .unwrap_or(false)
+                        })
+                        .collect();
 
                     if person.name.to_lowercase().contains(&normalized)
                         || !person.tasks.is_empty()
                         || !person.decisions.is_empty()
                         || !person.risks.is_empty()
+                        || !person.suggestions.is_empty()
                     {
                         Some(person)
                     } else {
@@ -1000,10 +1144,24 @@ fn merge_extractions(
                         .into_iter()
                         .filter(|item| item.to_lowercase().contains(&normalized))
                         .collect();
+                    topic.suggestions = topic
+                        .suggestions
+                        .into_iter()
+                        .filter(|item| {
+                            item.title.to_lowercase().contains(&normalized)
+                                || item.rationale.to_lowercase().contains(&normalized)
+                                || item
+                                    .owner_hint
+                                    .as_ref()
+                                    .map(|value| value.to_lowercase().contains(&normalized))
+                                    .unwrap_or(false)
+                        })
+                        .collect();
 
                     if topic.name.to_lowercase().contains(&normalized)
                         || !topic.progress.is_empty()
                         || !topic.related_people.is_empty()
+                        || !topic.suggestions.is_empty()
                     {
                         Some(topic)
                     } else {
@@ -1073,6 +1231,7 @@ fn dedup_person(person: &mut InsightPerson) {
     });
     person.decisions = dedup_strings(std::mem::take(&mut person.decisions));
     person.risks = dedup_strings(std::mem::take(&mut person.risks));
+    dedup_suggestions(&mut person.suggestions);
 }
 
 fn dedup_topic(topic: &mut InsightTopic) {
@@ -1087,6 +1246,7 @@ fn dedup_topic(topic: &mut InsightTopic) {
         progress_seen.insert(key)
     });
     topic.related_people = dedup_strings(std::mem::take(&mut topic.related_people));
+    dedup_suggestions(&mut topic.suggestions);
 }
 
 fn dedup_actions(actions: &mut Vec<InsightAction>) {
@@ -1101,6 +1261,46 @@ fn dedup_actions(actions: &mut Vec<InsightAction>) {
         );
         seen.insert(key)
     });
+}
+
+fn suggestion_priority_key(priority: &InsightSuggestionPriority) -> &'static str {
+    match priority {
+        InsightSuggestionPriority::High => "high",
+        InsightSuggestionPriority::Medium => "medium",
+        InsightSuggestionPriority::Low => "low",
+    }
+}
+
+fn dedup_suggestions(suggestions: &mut Vec<InsightSuggestion>) {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::with_capacity(suggestions.len());
+
+    for mut suggestion in std::mem::take(suggestions) {
+        let mut source_ids = suggestion
+            .source_session_ids
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        source_ids.sort();
+        source_ids.dedup();
+        if source_ids.is_empty() {
+            continue;
+        }
+        suggestion.source_session_ids = source_ids;
+
+        let key = format!(
+            "{}|{}|{}",
+            suggestion.title.trim().to_lowercase(),
+            suggestion_priority_key(&suggestion.priority),
+            suggestion.source_session_ids.join(",")
+        );
+        if seen.insert(key) {
+            deduped.push(suggestion);
+        }
+    }
+
+    *suggestions = deduped;
 }
 
 fn merge_topic_status(current: &InsightTopicStatus, next: &InsightTopicStatus) -> InsightTopicStatus {

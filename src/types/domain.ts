@@ -180,6 +180,7 @@ export type InsightQueryRequest = {
   timeRange?: InsightTimeRange;
   sessionIds?: string[];
   keyword?: string;
+  includeSuggestions?: boolean;
 };
 
 export type DiscoverSubView = "people" | "topics" | "actions";
@@ -197,6 +198,7 @@ export type InsightPerson = {
   tasks: InsightTask[];
   decisions: string[];
   risks: string[];
+  suggestions: InsightSuggestion[];
 };
 
 export type InsightTopicProgress = {
@@ -210,6 +212,17 @@ export type InsightTopic = {
   progress: InsightTopicProgress[];
   status: "active" | "completed" | "blocked";
   relatedPeople: string[];
+  suggestions: InsightSuggestion[];
+};
+
+export type InsightSuggestionPriority = "high" | "medium" | "low";
+
+export type InsightSuggestion = {
+  title: string;
+  rationale: string;
+  priority: InsightSuggestionPriority;
+  ownerHint?: string;
+  sourceSessionIds: string[];
 };
 
 export type InsightAction = {

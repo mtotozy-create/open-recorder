@@ -2114,6 +2114,26 @@ button:focus-visible,
   flex-wrap: wrap;
 }
 
+.discover-option-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0 10px;
+}
+
+.discover-option-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
 .discover-selection-mode-group,
 .discover-time-range-group,
 .discover-subview-group {
@@ -2506,4 +2526,74 @@ button:focus-visible,
   color: var(--text-0);
   text-align: right;
   word-break: break-word;
+}
+
+@media print {
+  @page {
+    margin: 14mm 12mm;
+  }
+
+  body.print-summary-pdf {
+    margin: 0 !important;
+    background: #fff !important;
+  }
+
+  body.print-summary-pdf * {
+    visibility: hidden !important;
+  }
+
+  body.print-summary-pdf .summary-print-root,
+  body.print-summary-pdf .summary-print-root * {
+    visibility: visible !important;
+  }
+
+  body.print-summary-pdf .summary-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0;
+    padding: 0;
+    color: #000 !important;
+    background: #fff !important;
+    font-size: 12pt;
+    line-height: 1.6;
+  }
+
+  body.print-summary-pdf .summary-print-root h1,
+  body.print-summary-pdf .summary-print-root h2,
+  body.print-summary-pdf .summary-print-root h3,
+  body.print-summary-pdf .summary-print-root h4,
+  body.print-summary-pdf .summary-print-root h5,
+  body.print-summary-pdf .summary-print-root h6 {
+    color: #000 !important;
+    page-break-after: avoid;
+    break-after: avoid-page;
+  }
+
+  body.print-summary-pdf .summary-print-root p,
+  body.print-summary-pdf .summary-print-root li,
+  body.print-summary-pdf .summary-print-root blockquote,
+  body.print-summary-pdf .summary-print-root pre,
+  body.print-summary-pdf .summary-print-root table {
+    page-break-inside: avoid;
+    break-inside: avoid-page;
+  }
+
+  body.print-summary-pdf .summary-print-root a,
+  body.print-summary-pdf .summary-print-root .md-link-disabled {
+    color: #000 !important;
+    text-decoration: underline;
+  }
+
+  body.print-summary-pdf .summary-print-root code,
+  body.print-summary-pdf .summary-print-root pre {
+    border-color: #d1d5db !important;
+    background: #f8fafc !important;
+    color: #111827 !important;
+  }
 }

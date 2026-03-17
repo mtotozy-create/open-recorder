@@ -489,6 +489,42 @@ pub enum InsightTopicStatus {
     Blocked,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum InsightSuggestionPriority {
+    High,
+    Medium,
+    Low,
+}
+
+impl Default for InsightSuggestionPriority {
+    fn default() -> Self {
+        Self::Medium
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct InsightSuggestion {
+    pub title: String,
+    pub rationale: String,
+    pub priority: InsightSuggestionPriority,
+    pub owner_hint: Option<String>,
+    pub source_session_ids: Vec<String>,
+}
+
+impl Default for InsightSuggestion {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            rationale: String::new(),
+            priority: InsightSuggestionPriority::Medium,
+            owner_hint: None,
+            source_session_ids: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InsightTask {
@@ -506,6 +542,8 @@ pub struct InsightPerson {
     pub tasks: Vec<InsightTask>,
     pub decisions: Vec<String>,
     pub risks: Vec<String>,
+    #[serde(default)]
+    pub suggestions: Vec<InsightSuggestion>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -523,6 +561,8 @@ pub struct InsightTopic {
     pub progress: Vec<InsightTopicProgress>,
     pub status: InsightTopicStatus,
     pub related_people: Vec<String>,
+    #[serde(default)]
+    pub suggestions: Vec<InsightSuggestion>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

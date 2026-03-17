@@ -65,6 +65,8 @@ const DEFAULT_OSS_CONFIG_ID = "oss-aliyun-default";
 const DEFAULT_RECORDING_SEGMENT_SECONDS = 120;
 const MIN_RECORDING_SEGMENT_SECONDS = 10;
 const MAX_RECORDING_SEGMENT_SECONDS = 1800;
+const SUMMARY_PDF_PRINT_CLASS = "print-summary-pdf";
+const SUMMARY_PDF_CLEANUP_TIMEOUT_MS = 60_000;
 const DEFAULT_SESSION_TAG_CATALOG = [
   "#or",
   "#meeting",
@@ -731,6 +733,8 @@ function App() {
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const persistedSegmentCountRef = useRef(0);
+  const summaryPdfCleanupTimerRef = useRef<number | undefined>(undefined);
+  const summaryPdfAfterPrintHandlerRef = useRef<(() => void) | undefined>(undefined);
 
   const t = useMemo(() => createTranslator(locale), [locale]);
   const statusMessage = t(statusState.key, statusState.params);
@@ -746,6 +750,20 @@ function App() {
 
   function setStatus(key: TranslationKey, params?: TranslationParams) {
     setStatusState({ key, params });
+  }
+
+  function clearSummaryPdfPrintMode() {
+    if (typeof window !== "undefined" && summaryPdfAfterPrintHandlerRef.current) {
+      window.removeEventListener("afterprint", summaryPdfAfterPrintHandlerRef.current);
+      summaryPdfAfterPrintHandlerRef.current = undefined;
+    }
+    if (typeof window !== "undefined" && summaryPdfCleanupTimerRef.current !== undefined) {
+      window.clearTimeout(summaryPdfCleanupTimerRef.current);
+      summaryPdfCleanupTimerRef.current = undefined;
+    }
+    if (typeof document !== "undefined") {
+      document.body.classList.remove(SUMMARY_PDF_PRINT_CLASS);
+    }
   }
 
   function upsertJob(previous: JobInfo[], nextJob: JobInfo): JobInfo[] {
@@ -820,6 +838,12 @@ function App() {
   useEffect(() => {
     persistLocale(locale);
   }, [locale]);
+
+  useEffect(() => {
+    return () => {
+      clearSummaryPdfPrintMode();
+    };
+  }, []);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -1099,6 +1123,27 @@ function App() {
     } catch (error) {
       setStatus("status.exportFailed", { error: String(error) });
     }
+  }
+
+  function onExportSummaryPdf() {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+
+    clearSummaryPdfPrintMode();
+    document.body.classList.add(SUMMARY_PDF_PRINT_CLASS);
+
+    const afterPrintHandler = () => {
+      clearSummaryPdfPrintMode();
+    };
+    summaryPdfAfterPrintHandlerRef.current = afterPrintHandler;
+    window.addEventListener("afterprint", afterPrintHandler, { once: true });
+
+    summaryPdfCleanupTimerRef.current = window.setTimeout(() => {
+      clearSummaryPdfPrintMode();
+    }, SUMMARY_PDF_CLEANUP_TIMEOUT_MS);
+
+    window.print();
   }
 
   async function onPrepareSessionPlaybackAudio(): Promise<string> {
@@ -1517,6 +1562,7 @@ function App() {
           onPreparePlaybackAudio={() => onPrepareSessionPlaybackAudio()}
           onExportM4a={() => void onExport("m4a")}
           onExportMp3={() => void onExport("mp3")}
+          onExportSummaryPdf={onExportSummaryPdf}
           onTranscribe={() => void onTranscribe()}
           onSummarize={() => void onSummarize()}
           t={t}

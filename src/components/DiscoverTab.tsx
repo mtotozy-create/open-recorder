@@ -63,6 +63,7 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
   const [subView, setSubView] = useState<DiscoverSubView>("people");
   const [topicKeywordInput, setTopicKeywordInput] = useState("");
   const [topicKeyword, setTopicKeyword] = useState("");
+  const [includeSuggestions, setIncludeSuggestions] = useState(false);
   const [result, setResult] = useState<InsightResult | null>(null);
   const [error, setError] = useState<string>();
   const [loadingCached, setLoadingCached] = useState(false);
@@ -119,7 +120,8 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
       return {
         selectionMode,
         timeRange,
-        keyword
+        keyword,
+        includeSuggestions
       };
     }
 
@@ -130,7 +132,8 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
     return {
       selectionMode,
       sessionIds,
-      keyword
+      keyword,
+      includeSuggestions
     };
   }
 
@@ -151,7 +154,7 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
 
   const cachedRequest = useMemo(
     () => buildInsightRequest(effectiveKeyword),
-    [selectionMode, timeRange, selectedSessionIds, effectiveKeyword]
+    [selectionMode, timeRange, selectedSessionIds, effectiveKeyword, includeSuggestions]
   );
 
   useEffect(() => {
@@ -256,6 +259,11 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
     ? t("status.discoverRunning", { elapsed: formatDuration(runningElapsedMs) })
     : undefined;
   const selectedPerson = result?.people.find((person) => person.name === selectedPersonName);
+  const formatSuggestionSources = (sourceSessionIds: string[]) =>
+    sourceSessionIds
+      .map((sessionId) => sessionNameById.get(sessionId) ?? sessionId)
+      .filter((value, index, values) => values.indexOf(value) === index)
+      .join(", ");
 
   return (
     <section className="panel discover-panel">
@@ -308,6 +316,16 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
             ))}
           </div>
         )}
+
+        <label className="discover-option-toggle">
+          <input
+            type="checkbox"
+            checked={includeSuggestions}
+            onChange={(event) => setIncludeSuggestions(event.target.checked)}
+            disabled={isRunning}
+          />
+          <span>{t("discover.suggestions.toggle")}</span>
+        </label>
       </div>
 
       {selectionMode === "sessions" && (
@@ -460,6 +478,11 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
                       <span className="discover-count-chip warning">
                         {t("discover.people.risks", { count: String(person.risks.length) })}
                       </span>
+                      {includeSuggestions && (
+                        <span className="discover-count-chip">
+                          {t("discover.people.suggestions", { count: String(person.suggestions.length) })}
+                        </span>
+                      )}
                     </div>
                     <p className="discover-person-card-footer">
                       {isExpanded ? t("discover.people.collapse") : t("discover.people.expand")}
@@ -502,6 +525,31 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
                     <strong>{risk}</strong>
                   </div>
                 ))}
+                {includeSuggestions && (
+                  <>
+                    <p className="discover-person-expanded-caption">
+                      {t("discover.people.suggestions", { count: String(selectedPerson.suggestions.length) })}
+                    </p>
+                    {selectedPerson.suggestions.length === 0 && (
+                      <p className="empty-hint">{t("discover.suggestions.empty")}</p>
+                    )}
+                    {selectedPerson.suggestions.map((suggestion, index) => (
+                      <div key={`${selectedPerson.name}-suggestion-${index}`} className="discover-item">
+                        <strong>{suggestion.title}</strong>
+                        <span>{suggestion.rationale}</span>
+                        <span>
+                          {t(`discover.suggestions.priority.${suggestion.priority}`)}
+                          {suggestion.ownerHint
+                            ? ` · ${t("discover.actions.assignee")}: ${suggestion.ownerHint}`
+                            : ""}
+                        </span>
+                        <span>
+                          {t("discover.actions.source")}: {formatSuggestionSources(suggestion.sourceSessionIds)}
+                        </span>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -531,6 +579,31 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
                     </div>
                   ))}
                 </div>
+                {includeSuggestions && (
+                  <>
+                    <p className="discover-person-expanded-caption">
+                      {t("discover.topics.suggestions", { count: String(topic.suggestions.length) })}
+                    </p>
+                    {topic.suggestions.length === 0 && (
+                      <p className="empty-hint">{t("discover.suggestions.empty")}</p>
+                    )}
+                    {topic.suggestions.map((suggestion, suggestionIndex) => (
+                      <div key={`${topic.name}-suggestion-${suggestionIndex}`} className="discover-item">
+                        <strong>{suggestion.title}</strong>
+                        <span>{suggestion.rationale}</span>
+                        <span>
+                          {t(`discover.suggestions.priority.${suggestion.priority}`)}
+                          {suggestion.ownerHint
+                            ? ` · ${t("discover.actions.assignee")}: ${suggestion.ownerHint}`
+                            : ""}
+                        </span>
+                        <span>
+                          {t("discover.actions.source")}: {formatSuggestionSources(suggestion.sourceSessionIds)}
+                        </span>
+                      </div>
+                    ))}
+                  </>
+                )}
               </article>
             ))}
           </div>
