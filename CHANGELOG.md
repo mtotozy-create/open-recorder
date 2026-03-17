@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.2.0...v0.3.0) (2026-03-17)
+
+### Features
+
+* **summary:** export summary to PDF ([3b9aa93](https://github-mtotozy/mtotozy-create/open-recorder/commit/3b9aa931a303fe52c7a798bd5567212f027104f0))
+
 ## [0.2.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.1.2...v0.2.0) (2026-03-17)
 
 ### Features
