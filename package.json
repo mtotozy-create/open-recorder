@@ -20,6 +20,10 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "canvg": "^4.0.3",
+    "dompurify": "^3.3.3",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",

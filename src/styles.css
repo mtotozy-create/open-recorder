@@ -1668,6 +1668,9 @@ p {
 
 .summary-markdown-view p {
   margin: 0.5rem 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .summary-markdown-view ul,
@@ -1680,12 +1683,21 @@ p {
   margin-top: 0.25rem;
 }
 
+.summary-markdown-view li {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .summary-markdown-view blockquote {
   margin: 0.75rem 0;
   padding: 0.5rem 0.75rem;
   border-left: 3px solid var(--line);
   background: var(--bg-1);
   color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .summary-markdown-view pre {

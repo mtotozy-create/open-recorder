@@ -65,8 +65,6 @@ const DEFAULT_OSS_CONFIG_ID = "oss-aliyun-default";
 const DEFAULT_RECORDING_SEGMENT_SECONDS = 120;
 const MIN_RECORDING_SEGMENT_SECONDS = 10;
 const MAX_RECORDING_SEGMENT_SECONDS = 1800;
-const SUMMARY_PDF_PRINT_CLASS = "print-summary-pdf";
-const SUMMARY_PDF_CLEANUP_TIMEOUT_MS = 60_000;
 const DEFAULT_SESSION_TAG_CATALOG = [
   "#or",
   "#meeting",
@@ -98,6 +96,14 @@ function normalizeSessionTagCatalog(input: string[]): string[] {
     result.push(normalized);
   }
   return result;
+}
+
+function sanitizeFileNameSegment(input: string): string {
+  return input
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
 }
 
 function createDefaultOssConfig(kind: OssProviderKind = "aliyun"): OssConfig {
@@ -733,8 +739,6 @@ function App() {
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const persistedSegmentCountRef = useRef(0);
-  const summaryPdfCleanupTimerRef = useRef<number | undefined>(undefined);
-  const summaryPdfAfterPrintHandlerRef = useRef<(() => void) | undefined>(undefined);
 
   const t = useMemo(() => createTranslator(locale), [locale]);
   const statusMessage = t(statusState.key, statusState.params);
@@ -750,20 +754,6 @@ function App() {
 
   function setStatus(key: TranslationKey, params?: TranslationParams) {
     setStatusState({ key, params });
-  }
-
-  function clearSummaryPdfPrintMode() {
-    if (typeof window !== "undefined" && summaryPdfAfterPrintHandlerRef.current) {
-      window.removeEventListener("afterprint", summaryPdfAfterPrintHandlerRef.current);
-      summaryPdfAfterPrintHandlerRef.current = undefined;
-    }
-    if (typeof window !== "undefined" && summaryPdfCleanupTimerRef.current !== undefined) {
-      window.clearTimeout(summaryPdfCleanupTimerRef.current);
-      summaryPdfCleanupTimerRef.current = undefined;
-    }
-    if (typeof document !== "undefined") {
-      document.body.classList.remove(SUMMARY_PDF_PRINT_CLASS);
-    }
   }
 
   function upsertJob(previous: JobInfo[], nextJob: JobInfo): JobInfo[] {
@@ -838,12 +828,6 @@ function App() {
   useEffect(() => {
     persistLocale(locale);
   }, [locale]);
-
-  useEffect(() => {
-    return () => {
-      clearSummaryPdfPrintMode();
-    };
-  }, []);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -1125,25 +1109,178 @@ function App() {
     }
   }
 
-  function onExportSummaryPdf() {
+  async function onExportSummaryPdf() {
     if (typeof window === "undefined" || typeof document === "undefined") {
       return;
     }
+    const summaryRoot = document.querySelector<HTMLElement>(".summary-print-root");
+    if (!summaryRoot) {
+      setStatus("status.exportPdfFailed", { error: "summary view not found" });
+      return;
+    }
 
-    clearSummaryPdfPrintMode();
-    document.body.classList.add(SUMMARY_PDF_PRINT_CLASS);
+    let captureNode: HTMLElement | undefined;
+    let exportRootNode: HTMLDivElement | undefined;
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf")
+      ]);
 
-    const afterPrintHandler = () => {
-      clearSummaryPdfPrintMode();
-    };
-    summaryPdfAfterPrintHandlerRef.current = afterPrintHandler;
-    window.addEventListener("afterprint", afterPrintHandler, { once: true });
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "pt",
+        format: "a4"
+      });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 28;
+      const contentWidth = pageWidth - margin * 2;
+      const contentHeight = pageHeight - margin * 2;
+      const captureWidthPx = Math.max(640, Math.round((contentWidth * 96) / 72));
 
-    summaryPdfCleanupTimerRef.current = window.setTimeout(() => {
-      clearSummaryPdfPrintMode();
-    }, SUMMARY_PDF_CLEANUP_TIMEOUT_MS);
+      exportRootNode = document.createElement("div");
+      exportRootNode.style.position = "fixed";
+      exportRootNode.style.left = "-100000px";
+      exportRootNode.style.top = "0";
+      exportRootNode.style.width = `${captureWidthPx}px`;
+      exportRootNode.style.maxWidth = `${captureWidthPx}px`;
+      exportRootNode.style.height = "auto";
+      exportRootNode.style.maxHeight = "none";
+      exportRootNode.style.overflow = "visible";
+      exportRootNode.style.background = "#ffffff";
+      exportRootNode.style.boxSizing = "border-box";
+      exportRootNode.style.padding = "0";
+      exportRootNode.style.margin = "0";
 
-    window.print();
+      captureNode = summaryRoot.cloneNode(true) as HTMLElement;
+      captureNode.style.position = "static";
+      captureNode.style.width = "100%";
+      captureNode.style.maxWidth = "100%";
+      captureNode.style.maxHeight = "none";
+      captureNode.style.height = "auto";
+      captureNode.style.overflow = "visible";
+      captureNode.style.background = "#ffffff";
+      captureNode.style.padding = "0";
+      captureNode.style.margin = "0";
+      captureNode.style.color = "#111827";
+      captureNode.style.fontSize = "14px";
+      captureNode.style.lineHeight = "1.6";
+
+      const markdownTables = captureNode.querySelectorAll<HTMLTableElement>("table");
+      for (const table of markdownTables) {
+        table.style.display = "table";
+        table.style.width = "100%";
+        table.style.maxWidth = "100%";
+        table.style.tableLayout = "fixed";
+        table.style.overflow = "visible";
+        table.style.overflowX = "visible";
+        table.style.overflowY = "visible";
+        table.style.whiteSpace = "normal";
+        table.style.wordBreak = "break-word";
+      }
+      const tableParents = captureNode.querySelectorAll<HTMLElement>("table, thead, tbody, tr");
+      for (const item of tableParents) {
+        item.style.maxWidth = "100%";
+        item.style.overflow = "visible";
+      }
+      const tableCells = captureNode.querySelectorAll<HTMLElement>("th, td");
+      for (const cell of tableCells) {
+        cell.style.whiteSpace = "normal";
+        cell.style.wordBreak = "break-word";
+        cell.style.overflowWrap = "anywhere";
+        cell.style.maxWidth = "0";
+      }
+      const textBlocks = captureNode.querySelectorAll<HTMLElement>("p, li, blockquote");
+      for (const block of textBlocks) {
+        block.style.whiteSpace = "pre-wrap";
+        block.style.wordBreak = "break-word";
+        block.style.overflowWrap = "anywhere";
+      }
+      const preBlocks = captureNode.querySelectorAll<HTMLElement>("pre");
+      for (const pre of preBlocks) {
+        pre.style.whiteSpace = "pre-wrap";
+        pre.style.wordBreak = "break-word";
+        pre.style.overflowWrap = "anywhere";
+      }
+      exportRootNode.appendChild(captureNode);
+      document.body.appendChild(exportRootNode);
+
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
+
+      const canvas = await html2canvas(exportRootNode, {
+        backgroundColor: "#ffffff",
+        scale: Math.min(window.devicePixelRatio || 2, 2),
+        useCORS: true,
+        logging: false,
+        width: exportRootNode.scrollWidth,
+        windowWidth: exportRootNode.scrollWidth
+      });
+
+      const pageHeightPx = Math.max(1, Math.floor((contentHeight * canvas.width) / contentWidth));
+      let renderedHeightPx = 0;
+      let pageIndex = 0;
+      while (renderedHeightPx < canvas.height) {
+        const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedHeightPx);
+        const pageCanvas = document.createElement("canvas");
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = sliceHeightPx;
+        const pageCtx = pageCanvas.getContext("2d");
+        if (!pageCtx) {
+          throw new Error("failed to render PDF page");
+        }
+        pageCtx.fillStyle = "#ffffff";
+        pageCtx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+        pageCtx.drawImage(
+          canvas,
+          0,
+          renderedHeightPx,
+          canvas.width,
+          sliceHeightPx,
+          0,
+          0,
+          pageCanvas.width,
+          pageCanvas.height
+        );
+
+        const pageImageData = pageCanvas.toDataURL("image/png");
+        const renderedPageHeight = (sliceHeightPx * contentWidth) / canvas.width;
+        if (pageIndex > 0) {
+          pdf.addPage();
+        }
+        pdf.addImage(
+          pageImageData,
+          "PNG",
+          margin,
+          margin,
+          contentWidth,
+          renderedPageHeight,
+          undefined,
+          "FAST"
+        );
+
+        renderedHeightPx += sliceHeightPx;
+        pageIndex += 1;
+      }
+
+      const sessionLabel = sanitizeFileNameSegment(
+        (activeSession?.name ?? "").trim() || `session-${activeSession?.id.slice(0, 8) ?? "summary"}`
+      );
+      const fileName = `${sessionLabel || "summary"}-summary.pdf`;
+      pdf.save(fileName);
+      setStatus("status.exportPdfFinished", { fileName });
+    } catch (error) {
+      setStatus("status.exportPdfFailed", { error: String(error) });
+      console.error("[summary-pdf] failed to export summary pdf", { error: String(error) });
+    } finally {
+      if (exportRootNode?.parentElement) {
+        exportRootNode.parentElement.removeChild(exportRootNode);
+      } else if (captureNode?.parentElement) {
+        captureNode.parentElement.removeChild(captureNode);
+      }
+    }
   }
 
   async function onPrepareSessionPlaybackAudio(): Promise<string> {
