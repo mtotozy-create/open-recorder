@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.3.0...v0.3.1) (2026-03-23)
+
+### Bug Fixes
+
+* **session:** support per-session providers ([1edda4e](https://github-mtotozy/mtotozy-create/open-recorder/commit/1edda4ebc01bdab8f6058d4db37a98c45cbbd73e))
+* **summary:** improve PDF table layout and sync Cargo lock ([2b1b65c](https://github-mtotozy/mtotozy-create/open-recorder/commit/2b1b65cb759ceba1ca4879eba176a88c9dc02ab7))
+
 ## [0.3.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.2.0...v0.3.0) (2026-03-17)
 
 ### Features
