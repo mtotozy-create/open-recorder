@@ -144,6 +144,7 @@ pub(crate) fn resolve_summary_config(
 pub fn summary_enqueue(
     session_id: String,
     template_id: Option<String>,
+    provider_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<JobEnqueueResponse, String> {
     let job_id = Uuid::new_v4().to_string();
@@ -206,14 +207,20 @@ pub fn summary_enqueue(
             return Err("transcript is empty; run transcription first".to_string());
         }
 
+        let selected_provider_id = provider_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(settings.selected_summary_provider_id.as_str());
+
         let provider = settings
             .providers
             .iter()
-            .find(|provider| provider.id == settings.selected_summary_provider_id)
+            .find(|provider| provider.id == selected_provider_id)
             .ok_or_else(|| {
                 format!(
                     "selected summary provider '{}' not found",
-                    settings.selected_summary_provider_id
+                    selected_provider_id
                 )
             })?;
 

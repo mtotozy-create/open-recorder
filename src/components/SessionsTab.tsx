@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -15,6 +16,9 @@ import type { Translator } from "../i18n";
 import type {
   JobInfo,
   PromptTemplate,
+  ProviderCapability,
+  ProviderConfig,
+  ProviderKind,
   RecordingQualityPreset,
   SessionDetail,
   SessionSummary
@@ -26,14 +30,25 @@ type CopyStatus = "idle" | "success" | "error";
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 const COPY_STATUS_RESET_MS = 1800;
 const MAX_SESSION_TAGS = 3;
+const COMPACT_PROVIDER_SELECT_FONT =
+  '400 11.52px "Noto Sans SC", "PingFang SC", "Helvetica Neue", sans-serif';
+const COMPACT_PROVIDER_SELECT_CHROME_WIDTH = 30;
+const MIN_PROVIDER_SELECT_WIDTH = 56;
+
+let textMeasureCanvas: HTMLCanvasElement | undefined;
 
 type SessionsTabProps = {
   sessions: SessionSummary[];
+  providers: ProviderConfig[];
   templates: PromptTemplate[];
   activeSessionId?: string;
   activeSession?: SessionDetail;
+  transcriptionProviderId: string;
+  summaryProviderId: string;
   summaryTemplateId: string;
   tagCatalog: string[];
+  onTranscriptionProviderChange: (value: string) => void;
+  onSummaryProviderChange: (value: string) => void;
   onSummaryTemplateChange: (value: string) => void;
   sessionJobs?: JobInfo[];
   isTranscribing?: boolean;
@@ -58,6 +73,71 @@ type SessionsTabProps = {
   onSummarize: () => void;
   t: Translator;
 };
+
+function supportsCapability(provider: ProviderConfig, capability: ProviderCapability): boolean {
+  return provider.enabled && provider.capabilities.includes(capability);
+}
+
+function providerKindLabel(kind: ProviderKind, t: Translator): string {
+  if (kind === "bailian") {
+    return t("settings.transcriptionProvider.bailian");
+  }
+  if (kind === "aliyun_tingwu") {
+    return t("settings.transcriptionProvider.aliyunTingwu");
+  }
+  if (kind === "openrouter") {
+    return "OpenRouter";
+  }
+  if (kind === "ollama") {
+    return "Ollama";
+  }
+  return t("settings.localStt");
+}
+
+function formatProviderOptionLabel(provider: ProviderConfig, t: Translator): string {
+  return `${provider.name} (${providerKindLabel(provider.kind, t)})`;
+}
+
+function estimateTextWidthFallback(text: string): number {
+  let units = 0;
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    const isWideGlyph =
+      (code >= 0x2e80 && code <= 0x9fff) ||
+      (code >= 0xac00 && code <= 0xd7af) ||
+      (code >= 0x3040 && code <= 0x30ff) ||
+      (code >= 0xff01 && code <= 0xff60);
+    units += isWideGlyph ? 11.5 : 6.3;
+  }
+  return units;
+}
+
+function measureCompactProviderSelectWidth(optionLabels: string[]): number {
+  const labels = optionLabels.filter((label) => label.trim().length > 0);
+  if (labels.length === 0) {
+    return MIN_PROVIDER_SELECT_WIDTH;
+  }
+
+  const shortestLabelWidth = labels.reduce((smallest, label) => {
+    if (typeof document === "undefined") {
+      return Math.min(smallest, estimateTextWidthFallback(label));
+    }
+
+    textMeasureCanvas ??= document.createElement("canvas");
+    const context = textMeasureCanvas.getContext("2d");
+    if (!context) {
+      return Math.min(smallest, estimateTextWidthFallback(label));
+    }
+
+    context.font = COMPACT_PROVIDER_SELECT_FONT;
+    return Math.min(smallest, context.measureText(label).width);
+  }, Number.POSITIVE_INFINITY);
+
+  return Math.max(
+    MIN_PROVIDER_SELECT_WIDTH,
+    Math.ceil(shortestLabelWidth + COMPACT_PROVIDER_SELECT_CHROME_WIDTH)
+  );
+}
 
 function formatDateTime(input: string): string {
   const date = new Date(input);
@@ -116,6 +196,12 @@ function resolveRunningElapsedMs(
 
 function normalizeSessionName(name?: string): string {
   return (name ?? "").trim();
+}
+
+function normalizeSummaryMarkdown(raw: string): string {
+  return raw
+    .replace(/^[ \t]*\*[ \t]*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n");
 }
 
 function normalizeTag(rawTag: string): string | undefined {
@@ -262,11 +348,16 @@ async function copyTextToClipboard(text: string): Promise<void> {
 
 function SessionsTab({
   sessions,
+  providers,
   templates,
   activeSessionId,
   activeSession,
+  transcriptionProviderId,
+  summaryProviderId,
   summaryTemplateId,
   tagCatalog,
+  onTranscriptionProviderChange,
+  onSummaryProviderChange,
   onSummaryTemplateChange,
   sessionJobs = [],
   isTranscribing = false,
@@ -330,6 +421,38 @@ function SessionsTab({
     ...tagCatalog,
     ...sessions.flatMap((session) => session.tags ?? [])
   ]);
+  const transcriptionProviders = providers.filter((provider) =>
+    supportsCapability(provider, "transcription")
+  );
+  const summaryProviders = providers.filter((provider) => supportsCapability(provider, "summary"));
+  const transcriptionProviderOptions = useMemo(
+    () =>
+      transcriptionProviders.length > 0
+        ? transcriptionProviders.map((provider) => ({
+            value: provider.id,
+            label: formatProviderOptionLabel(provider, t)
+          }))
+        : [{ value: "", label: t("settings.noProvider") }],
+    [t, transcriptionProviders]
+  );
+  const summaryProviderOptions = useMemo(
+    () =>
+      summaryProviders.length > 0
+        ? summaryProviders.map((provider) => ({
+            value: provider.id,
+            label: formatProviderOptionLabel(provider, t)
+          }))
+        : [{ value: "", label: t("settings.noProvider") }],
+    [t, summaryProviders]
+  );
+  const transcriptionProviderSelectWidth = useMemo(
+    () => measureCompactProviderSelectWidth(transcriptionProviderOptions.map((item) => item.label)),
+    [transcriptionProviderOptions]
+  );
+  const summaryProviderSelectWidth = useMemo(
+    () => measureCompactProviderSelectWidth(summaryProviderOptions.map((item) => item.label)),
+    [summaryProviderOptions]
+  );
   const tagSessionCounts = new Map<string, number>();
   for (const tag of availableTags) {
     tagSessionCounts.set(tag, 0);
@@ -564,6 +687,14 @@ function SessionsTab({
 
   function handleTemplateChange(event: ChangeEvent<HTMLSelectElement>) {
     onSummaryTemplateChange(event.target.value);
+  }
+
+  function handleTranscriptionProviderChange(event: ChangeEvent<HTMLSelectElement>) {
+    onTranscriptionProviderChange(event.target.value);
+  }
+
+  function handleSummaryProviderChange(event: ChangeEvent<HTMLSelectElement>) {
+    onSummaryProviderChange(event.target.value);
   }
 
   function submitDetailRename() {
@@ -1236,7 +1367,7 @@ function SessionsTab({
               </div>
 
               {activeDetailTab === "transcription" && (
-                <div className="session-actions-row">
+                <div className="session-actions-row session-actions-row-compact">
                   <button
                     type="button"
                     className={`action-btn${isTranscribing ? " loading" : ""}`}
@@ -1255,15 +1386,65 @@ function SessionsTab({
                     {isSummarizing && <span className="spinner" />}
                     {isSummarizing ? summaryRunningLabel : t("sessionDetail.generateSummary")}
                   </button>
-                  <div className="summary-template-inline">
-                    <span>{t("sessionDetail.summaryTemplate")}</span>
-                    <select value={summaryTemplateId} onChange={handleTemplateChange}>
-                      {templates.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.name}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="session-action-selects">
+                    <label
+                      className="summary-template-inline summary-template-inline-compact"
+                      style={{ width: `${transcriptionProviderSelectWidth}px` }}
+                    >
+                      <span className="summary-template-inline-label">
+                        {t("settings.transcriptionProvider")}
+                      </span>
+                      <select
+                        className="summary-template-inline-select"
+                        style={{ width: `${transcriptionProviderSelectWidth}px` }}
+                        value={transcriptionProviderId}
+                        onChange={handleTranscriptionProviderChange}
+                        disabled={isTranscribing}
+                      >
+                        {transcriptionProviderOptions.map((provider) => (
+                          <option key={provider.value} value={provider.value}>
+                            {provider.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label
+                      className="summary-template-inline summary-template-inline-compact"
+                      style={{ width: `${summaryProviderSelectWidth}px` }}
+                    >
+                      <span className="summary-template-inline-label">
+                        {t("settings.summaryProvider")}
+                      </span>
+                      <select
+                        className="summary-template-inline-select"
+                        style={{ width: `${summaryProviderSelectWidth}px` }}
+                        value={summaryProviderId}
+                        onChange={handleSummaryProviderChange}
+                        disabled={isSummarizing}
+                      >
+                        {summaryProviderOptions.map((provider) => (
+                          <option key={provider.value} value={provider.value}>
+                            {provider.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="summary-template-inline summary-template-inline-compact summary-template-inline-template">
+                      <span className="summary-template-inline-label">
+                        {t("sessionDetail.summaryTemplate")}
+                      </span>
+                      <select
+                        className="summary-template-inline-select"
+                        value={summaryTemplateId}
+                        onChange={handleTemplateChange}
+                      >
+                        {templates.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                 </div>
               )}
@@ -1657,7 +1838,7 @@ function SessionsTab({
 
                   {summaryViewMode === "readable" && !isSummaryEditing && activeSession.summary && (
                     <div className="summary-markdown-view summary-print-root">
-                      {activeSession.summary.rawMarkdown.trim() ? (
+                      {normalizeSummaryMarkdown(activeSession.summary.rawMarkdown).trim() ? (
                         <ReactMarkdown
                           skipHtml
                           remarkPlugins={[remarkGfm]}
@@ -1681,7 +1862,7 @@ function SessionsTab({
                             }
                           }}
                         >
-                          {activeSession.summary.rawMarkdown}
+                          {normalizeSummaryMarkdown(activeSession.summary.rawMarkdown)}
                         </ReactMarkdown>
                       ) : (
                         <p className="empty-hint">-</p>

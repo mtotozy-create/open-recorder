@@ -408,6 +408,8 @@ type PollJobOptions = {
   runningStatusKey: "status.transcriptionRunning" | "status.summaryRunning";
 };
 
+type SessionProviderSelections = Record<string, string>;
+
 function createDefaultTemplate(): PromptTemplate {
   return {
     id: "meeting-default",
@@ -423,6 +425,22 @@ function supportsCapability(
   capability: ProviderCapability
 ): boolean {
   return provider.enabled && provider.capabilities.includes(capability);
+}
+
+function resolveProviderId(
+  providers: ProviderConfig[],
+  capability: ProviderCapability,
+  preferredId?: string
+): string {
+  const normalizedPreferredId =
+    typeof preferredId === "string" ? normalizeAliasProviderId(preferredId) : "";
+  const preferred = providers.find(
+    (provider) => provider.id === normalizedPreferredId && supportsCapability(provider, capability)
+  );
+  if (preferred) {
+    return preferred.id;
+  }
+  return providers.find((provider) => supportsCapability(provider, capability))?.id ?? "";
 }
 
 function normalizeAliasProviderId(providerId: string): string {
@@ -851,6 +869,10 @@ function App() {
   const [realtimeLastError, setRealtimeLastError] = useState<string>();
   const [inputDevices, setInputDevices] = useState<RecorderInputDevice[]>([]);
   const [settings, setSettings] = useState<Settings>(initialSettings);
+  const [sessionTranscriptionProviderSelections, setSessionTranscriptionProviderSelections] =
+    useState<SessionProviderSelections>({});
+  const [sessionSummaryProviderSelections, setSessionSummaryProviderSelections] =
+    useState<SessionProviderSelections>({});
   const [runtimeRecordingInputDeviceId, setRuntimeRecordingInputDeviceId] = useState<string>(
     typeof initialSettings.recordingInputDeviceId === "string"
       ? initialSettings.recordingInputDeviceId
@@ -873,6 +895,39 @@ function App() {
   const canToggleRealtime = useMemo(
     () => !currentRecording || recorderPhase === "recording" || recorderPhase === "paused",
     [currentRecording, recorderPhase]
+  );
+  const activeSessionTranscriptionProviderId = useMemo(
+    () =>
+      resolveProviderId(
+        settings.providers,
+        "transcription",
+        activeSessionId
+          ? sessionTranscriptionProviderSelections[activeSessionId] ??
+              settings.selectedTranscriptionProviderId
+          : settings.selectedTranscriptionProviderId
+      ),
+    [
+      activeSessionId,
+      sessionTranscriptionProviderSelections,
+      settings.providers,
+      settings.selectedTranscriptionProviderId
+    ]
+  );
+  const activeSessionSummaryProviderId = useMemo(
+    () =>
+      resolveProviderId(
+        settings.providers,
+        "summary",
+        activeSessionId
+          ? sessionSummaryProviderSelections[activeSessionId] ?? settings.selectedSummaryProviderId
+          : settings.selectedSummaryProviderId
+      ),
+    [
+      activeSessionId,
+      sessionSummaryProviderSelections,
+      settings.providers,
+      settings.selectedSummaryProviderId
+    ]
   );
 
   function setStatus(key: TranslationKey, params?: TranslationParams) {
@@ -968,6 +1023,32 @@ function App() {
       setSummaryTemplateId(settings.defaultTemplateId);
     }
   }, [settings.defaultTemplateId, settings.templates, summaryTemplateId]);
+
+  useEffect(() => {
+    const sessionIds = new Set(sessions.map((session) => session.id));
+    setSessionTranscriptionProviderSelections((previous) => {
+      const nextEntries = Object.entries(previous).filter(([sessionId, providerId]) => {
+        if (!sessionIds.has(sessionId)) {
+          return false;
+        }
+        return resolveProviderId(settings.providers, "transcription", providerId) === providerId;
+      });
+      return nextEntries.length === Object.keys(previous).length
+        ? previous
+        : Object.fromEntries(nextEntries);
+    });
+    setSessionSummaryProviderSelections((previous) => {
+      const nextEntries = Object.entries(previous).filter(([sessionId, providerId]) => {
+        if (!sessionIds.has(sessionId)) {
+          return false;
+        }
+        return resolveProviderId(settings.providers, "summary", providerId) === providerId;
+      });
+      return nextEntries.length === Object.keys(previous).length
+        ? previous
+        : Object.fromEntries(nextEntries);
+    });
+  }, [sessions, settings.providers]);
 
   useEffect(() => {
     if (activeTab !== "settings" && activeTab !== "recorder") {
@@ -1317,7 +1398,7 @@ function App() {
       }
       const textBlocks = captureNode.querySelectorAll<HTMLElement>("p, li, blockquote");
       for (const block of textBlocks) {
-        block.style.whiteSpace = "pre-wrap";
+        block.style.whiteSpace = block.tagName === "P" ? "pre-line" : "normal";
         block.style.wordBreak = "break-word";
         block.style.overflowWrap = "anywhere";
       }
@@ -1448,7 +1529,10 @@ function App() {
 
     try {
       // 后端立即返回 jobId，实际转写在后台线程执行
-      const jobId = await enqueueTranscription(activeSessionId);
+      const jobId = await enqueueTranscription(
+        activeSessionId,
+        activeSessionTranscriptionProviderId || undefined
+      );
 
       // 立即刷新详情，让任务出现在列表中
       if (activeSessionId) {
@@ -1524,7 +1608,8 @@ function App() {
     try {
       const jobId = await enqueueSummary(
         activeSessionId,
-        summaryTemplateId || settings.defaultTemplateId
+        summaryTemplateId || settings.defaultTemplateId,
+        activeSessionSummaryProviderId || undefined
       );
 
       // 立即刷新详情，让任务出现在列表中
@@ -1705,6 +1790,22 @@ function App() {
   async function handleDeleteSession(sessionId: string) {
     try {
       await deleteSession(sessionId);
+      setSessionTranscriptionProviderSelections((previous) => {
+        if (!(sessionId in previous)) {
+          return previous;
+        }
+        const next = { ...previous };
+        delete next[sessionId];
+        return next;
+      });
+      setSessionSummaryProviderSelections((previous) => {
+        if (!(sessionId in previous)) {
+          return previous;
+        }
+        const next = { ...previous };
+        delete next[sessionId];
+        return next;
+      });
       if (activeSessionId === sessionId) {
         setActiveSessionId(undefined);
         setActiveSession(undefined);
@@ -1794,15 +1895,36 @@ function App() {
       {activeTab === "sessions" && (
         <SessionsTab
           sessions={sessions}
+          providers={settings.providers}
           templates={settings.templates}
           activeSessionId={activeSessionId}
           activeSession={activeSession}
           sessionJobs={sessionJobs}
+          transcriptionProviderId={activeSessionTranscriptionProviderId}
+          summaryProviderId={activeSessionSummaryProviderId}
           summaryTemplateId={summaryTemplateId}
           tagCatalog={settings.sessionTagCatalog}
           isTranscribing={isTranscribing}
           isSummarizing={isSummarizing}
           isCreatingSession={isCreatingSession}
+          onTranscriptionProviderChange={(value) => {
+            if (!activeSessionId) {
+              return;
+            }
+            setSessionTranscriptionProviderSelections((previous) => ({
+              ...previous,
+              [activeSessionId]: value
+            }));
+          }}
+          onSummaryProviderChange={(value) => {
+            if (!activeSessionId) {
+              return;
+            }
+            setSessionSummaryProviderSelections((previous) => ({
+              ...previous,
+              [activeSessionId]: value
+            }));
+          }}
           onSummaryTemplateChange={setSummaryTemplateId}
           onCreateSessionFromFile={(file) => void onCreateSessionFromFile(file)}
           onRefresh={() =>

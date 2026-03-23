@@ -150,9 +150,13 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await invoke("session_delete", { sessionId });
 }
 
-export async function enqueueTranscription(sessionId: string): Promise<string> {
+export async function enqueueTranscription(
+  sessionId: string,
+  providerId?: string
+): Promise<string> {
   const response = await invoke<{ jobId: string }>("transcribe_enqueue", {
-    sessionId
+    sessionId,
+    providerId
   });
   return response.jobId;
 }
@@ -163,10 +167,15 @@ export async function prepareTranscriptionAudio(
   return invoke("session_prepare_transcription_audio", { sessionId });
 }
 
-export async function enqueueSummary(sessionId: string, templateId?: string): Promise<string> {
+export async function enqueueSummary(
+  sessionId: string,
+  templateId?: string,
+  providerId?: string
+): Promise<string> {
   const response = await invoke<{ jobId: string }>("summary_enqueue", {
     sessionId,
-    templateId
+    templateId,
+    providerId
   });
   return response.jobId;
 }

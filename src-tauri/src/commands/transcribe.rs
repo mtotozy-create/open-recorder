@@ -442,6 +442,7 @@ pub fn session_prepare_transcription_audio(
 #[tauri::command]
 pub fn transcribe_enqueue(
     session_id: String,
+    provider_id: Option<String>,
     language_hint: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<JobEnqueueResponse, String> {
@@ -555,14 +556,20 @@ pub fn transcribe_enqueue(
 
         let export_dir = storage.session_export_dir(&session_id)?;
 
+        let selected_provider_id = provider_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(settings.selected_transcription_provider_id.as_str());
+
         let provider = settings
             .providers
             .iter()
-            .find(|provider| provider.id == settings.selected_transcription_provider_id)
+            .find(|provider| provider.id == selected_provider_id)
             .ok_or_else(|| {
                 format!(
                     "selected transcription provider '{}' not found",
-                    settings.selected_transcription_provider_id
+                    selected_provider_id
                 )
             })?;
 

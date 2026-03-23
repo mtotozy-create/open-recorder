@@ -983,6 +983,31 @@ p {
   flex-wrap: wrap;
 }
 
+.session-actions-row-compact {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.session-actions-row-compact > * {
+  flex-shrink: 0;
+}
+
+.session-action-selects {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.session-actions-row-compact .session-action-selects {
+  flex-wrap: nowrap;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
 .action-btn {
   width: auto;
   min-height: 32px;
@@ -1022,7 +1047,15 @@ p {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
+}
+
+.summary-template-inline-compact {
+  display: grid;
+  grid-template-rows: minmax(0, 9px) minmax(0, 19px);
+  gap: 2px;
+  margin-top: 0;
+  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .summary-template-inline span {
@@ -1031,12 +1064,42 @@ p {
   white-space: nowrap;
 }
 
+.summary-template-inline-label {
+  display: block;
+  font-size: 0.58rem;
+  line-height: 1;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .summary-template-inline select {
   width: auto;
   min-height: 32px;
   padding: 4px 28px 4px 8px;
   margin-top: 0;
   font-size: 0.82rem;
+}
+
+.summary-template-inline-select {
+  min-height: 19px;
+  height: 19px;
+  padding: 0 20px 0 6px;
+  border-width: 1px;
+  font-size: 0.72rem;
+  line-height: 1.1;
+  margin-top: 0;
+  width: 148px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.summary-template-inline-template .summary-template-inline-select {
+  width: 132px;
 }
 
 .session-results-grid {
@@ -1668,7 +1731,7 @@ p {
 
 .summary-markdown-view p {
   margin: 0.5rem 0;
-  white-space: pre-wrap;
+  white-space: pre-line;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
@@ -1684,7 +1747,6 @@ p {
 }
 
 .summary-markdown-view li {
-  white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
@@ -1695,7 +1757,6 @@ p {
   border-left: 3px solid var(--line);
   background: var(--bg-1);
   color: var(--text-muted);
-  white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
