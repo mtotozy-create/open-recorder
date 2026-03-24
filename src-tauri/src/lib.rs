@@ -12,14 +12,14 @@ use commands::{
         recorder_export, recorder_list_input_devices, recorder_pause, recorder_processing_status,
         recorder_resume, recorder_set_realtime_source_language,
         recorder_set_realtime_translation_target, recorder_start, recorder_status, recorder_stop,
-        recorder_toggle_realtime,
-        recorder_toggle_realtime_translation,
+        recorder_toggle_realtime, recorder_toggle_realtime_translation,
     },
     session::{
-        session_create_from_audio, session_delete, session_get, session_list, session_rename,
-        session_set_discoverable, session_set_tags, session_update_summary_raw_markdown,
+        session_create_from_audio, session_delete, session_delete_segment, session_delete_segments,
+        session_get, session_list, session_rename, session_set_discoverable, session_set_tags,
+        session_update_summary_raw_markdown,
     },
-    settings::{settings_get, settings_update},
+    settings::{settings_get, settings_get_storage_usage, settings_update},
     summary::summary_enqueue,
     transcribe::{session_prepare_transcription_audio, transcribe_enqueue},
 };
@@ -48,6 +48,8 @@ pub fn run() {
             session_create_from_audio,
             session_rename,
             session_delete,
+            session_delete_segment,
+            session_delete_segments,
             session_set_tags,
             session_set_discoverable,
             session_update_summary_raw_markdown,
@@ -61,6 +63,7 @@ pub fn run() {
             local_provider_status,
             local_provider_prepare,
             settings_get,
+            settings_get_storage_usage,
             settings_update,
         ])
         .run(tauri::generate_context!())

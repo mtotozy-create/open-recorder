@@ -813,6 +813,64 @@ p {
   color: var(--text-0);
 }
 
+.settings-storage-usage {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+
+.settings-storage-usage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-storage-usage-header h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-0);
+}
+
+.settings-storage-usage-header p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.settings-storage-usage-grid {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.settings-storage-usage-grid div {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-storage-usage-grid dt {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.settings-storage-usage-grid dd {
+  margin: 0;
+  color: var(--text-0);
+  font-size: 0.9rem;
+  word-break: break-all;
+}
+
+.settings-storage-usage-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
 /* Sessions */
 .sessions-layout {
   display: grid;
@@ -1051,8 +1109,8 @@ p {
 
 .summary-template-inline-compact {
   display: grid;
-  grid-template-rows: minmax(0, 9px) minmax(0, 19px);
-  gap: 2px;
+  grid-template-rows: minmax(0, 12px) minmax(0, 19px);
+  gap: 4px;
   margin-top: 0;
   min-width: 0;
   flex: 0 0 auto;
@@ -1064,11 +1122,11 @@ p {
   white-space: nowrap;
 }
 
-.summary-template-inline-label {
+.summary-template-inline .summary-template-inline-label {
   display: block;
-  font-size: 0.58rem;
+  font-size: 0.75rem;
   line-height: 1;
-  color: var(--text-muted);
+  color: var(--text-0);
   letter-spacing: 0.01em;
   white-space: nowrap;
   overflow: hidden;

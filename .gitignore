@@ -6,3 +6,4 @@ src-tauri/python/__pycache__/
 *.pyc
 .DS_Store
 docs/
+AGENTS.md

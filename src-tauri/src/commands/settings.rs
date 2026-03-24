@@ -3,6 +3,7 @@ use tauri::State;
 use crate::{
     models::{Settings, SettingsPatch},
     state::AppState,
+    storage::StorageUsageSummary,
 };
 
 #[tauri::command]
@@ -77,4 +78,16 @@ pub fn settings_update(
     storage.data.settings.normalize();
     storage.save()?;
     Ok(storage.data.settings.clone())
+}
+
+#[tauri::command]
+pub fn settings_get_storage_usage(
+    state: State<'_, AppState>,
+) -> Result<StorageUsageSummary, String> {
+    let storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+
+    storage.get_storage_usage()
 }

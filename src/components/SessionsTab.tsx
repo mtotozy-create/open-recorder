@@ -13,6 +13,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 
 import type { Translator } from "../i18n";
+import { formatFileSize } from "../lib/formatFileSize";
 import type {
   JobInfo,
   PromptTemplate,
@@ -27,6 +28,14 @@ import type {
 type DetailTab = "transcription" | "meta" | "tasks";
 type ViewMode = "readable" | "raw";
 type CopyStatus = "idle" | "success" | "error";
+type DeleteDialogState =
+  | { kind: "session" }
+  | { kind: "segment"; path: string }
+  | { kind: "allSegments" };
+type SessionSegmentListItem = {
+  path: string;
+  meta?: SessionDetail["audioSegmentMeta"][number];
+};
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 const COPY_STATUS_RESET_MS = 1800;
 const MAX_SESSION_TAGS = 3;
@@ -65,6 +74,8 @@ type SessionsTabProps = {
     rawMarkdown: string
   ) => void | Promise<void>;
   onDeleteSession: (sessionId: string) => void;
+  onDeleteSessionSegment: (sessionId: string, segmentPath: string) => void | Promise<void>;
+  onDeleteSessionSegments: (sessionId: string) => void | Promise<void>;
   onPreparePlaybackAudio: () => Promise<string>;
   onExportM4a: () => void;
   onExportMp3: () => void;
@@ -161,14 +172,6 @@ function formatDuration(ms: number): string {
     : `${pad(minutes)}:${pad(seconds)}`;
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${Number.parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
-}
-
 function formatSegmentTime(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -263,6 +266,44 @@ function resolvePreferredPlaybackPath(session?: SessionDetail): string | undefin
     return singlePath;
   }
   return session.exportedM4aPath || session.exportedMp3Path || session.exportedWavPath;
+}
+
+function hasMergedAudio(session?: SessionDetail): boolean {
+  if (!session) {
+    return false;
+  }
+  return [session.exportedM4aPath, session.exportedMp3Path, session.exportedWavPath].some(
+    (path) => (path ?? "").trim().length > 0
+  );
+}
+
+function buildSessionSegmentItems(session?: SessionDetail): SessionSegmentListItem[] {
+  if (!session) {
+    return [];
+  }
+
+  const items: SessionSegmentListItem[] = [];
+  const seen = new Set<string>();
+
+  for (const meta of session.audioSegmentMeta) {
+    const path = meta.path.trim();
+    if (!path || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    items.push({ path, meta });
+  }
+
+  for (const rawPath of session.audioSegments) {
+    const path = rawPath.trim();
+    if (!path || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    items.push({ path });
+  }
+
+  return items;
 }
 
 function getDisplayName(
@@ -371,6 +412,8 @@ function SessionsTab({
   onSetSessionDiscoverable,
   onUpdateSessionSummaryRawMarkdown,
   onDeleteSession,
+  onDeleteSessionSegment,
+  onDeleteSessionSegments,
   onPreparePlaybackAudio,
   onExportM4a,
   onExportMp3,
@@ -392,8 +435,10 @@ function SessionsTab({
   const [isTranscriptCollapsed, setIsTranscriptCollapsed] = useState<boolean>(false);
   const [summaryViewMode, setSummaryViewMode] = useState<ViewMode>("readable");
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>("transcription");
-  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>();
   const [isPreparingPlaybackAudio, setIsPreparingPlaybackAudio] = useState(false);
+  const [isDeletingSegments, setIsDeletingSegments] = useState(false);
+  const [deletingSegmentPath, setDeletingSegmentPath] = useState<string>();
   const [playbackAudioPath, setPlaybackAudioPath] = useState<string>();
   const [playbackAudioSrc, setPlaybackAudioSrc] = useState<string>();
   const [runningNowMs, setRunningNowMs] = useState<number>(() => Date.now());
@@ -482,6 +527,16 @@ function SessionsTab({
     ? `${t("status.summaryRunning", { elapsed: summaryElapsedLabel })} (${runningSummaryJob.progressMsg})`
     : t("status.summaryRunning", { elapsed: summaryElapsedLabel });
   const summaryTaskRunning = isSummarizing || Boolean(runningSummaryJob);
+  const hasMergedAudioFile = hasMergedAudio(activeSession);
+  const segmentItems = useMemo(() => buildSessionSegmentItems(activeSession), [activeSession]);
+  const segmentDeletionBlockedReason = !hasMergedAudioFile
+    ? t("sessionDetail.deleteSegmentsRequiresMergedFile")
+    : activeSession?.status === "processing"
+      ? t("sessionDetail.deleteSegmentsProcessingDisabled")
+      : undefined;
+  const canDeleteSegments = Boolean(
+    activeSession && segmentItems.length > 0 && !segmentDeletionBlockedReason
+  );
   const summaryCopyText = activeSession?.summary?.rawMarkdown?.trim() ?? "";
   const canCopySummary =
     summaryViewMode === "readable" && !isSummaryEditing && summaryCopyText.length > 0;
@@ -508,6 +563,9 @@ function SessionsTab({
     setDetailDraftName(activeSession?.name ?? "");
     setActiveDetailTab("transcription");
     setIsTranscriptCollapsed(!!activeSession?.summary);
+    setDeleteDialog(undefined);
+    setIsDeletingSegments(false);
+    setDeletingSegmentPath(undefined);
   }, [activeSession?.id, activeSession?.name, !!activeSession?.summary]);
 
   useEffect(() => {
@@ -947,6 +1005,87 @@ function SessionsTab({
     }
   }
 
+  async function handleDeleteSingleSegment(segmentPath: string) {
+    if (!activeSession || isDeletingSegments || segmentDeletionBlockedReason) {
+      return;
+    }
+
+    setIsDeletingSegments(true);
+    setDeletingSegmentPath(segmentPath);
+    try {
+      await onDeleteSessionSegment(activeSession.id, segmentPath);
+      setDeleteDialog(undefined);
+    } catch (error) {
+      console.warn("[session-segment] failed to delete segment", { error: String(error) });
+    } finally {
+      setIsDeletingSegments(false);
+      setDeletingSegmentPath(undefined);
+    }
+  }
+
+  async function handleDeleteAllSegments() {
+    if (!activeSession || isDeletingSegments || segmentDeletionBlockedReason) {
+      return;
+    }
+
+    setIsDeletingSegments(true);
+    try {
+      await onDeleteSessionSegments(activeSession.id);
+      setDeleteDialog(undefined);
+    } catch (error) {
+      console.warn("[session-segments] failed to delete segments", { error: String(error) });
+    } finally {
+      setIsDeletingSegments(false);
+    }
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteDialog || isDeletingSegments) {
+      return;
+    }
+
+    if (deleteDialog.kind === "session") {
+      setDeleteDialog(undefined);
+      if (activeSessionId) {
+        onDeleteSession(activeSessionId);
+      }
+      return;
+    }
+
+    if (deleteDialog.kind === "segment") {
+      await handleDeleteSingleSegment(deleteDialog.path);
+      return;
+    }
+
+    await handleDeleteAllSegments();
+  }
+
+  const deleteDialogTitle =
+    deleteDialog?.kind === "session"
+      ? t("sessions.delete")
+      : deleteDialog?.kind === "segment"
+        ? t("sessionDetail.deleteSegment")
+        : deleteDialog?.kind === "allSegments"
+          ? t("sessionDetail.deleteAllSegments")
+          : "";
+  let deleteDialogMessage = "";
+  if (deleteDialog?.kind === "session") {
+    deleteDialogMessage = t("sessions.deleteConfirm");
+  } else if (deleteDialog?.kind === "segment") {
+    deleteDialogMessage = t("sessionDetail.deleteSegmentConfirm", {
+      path: deleteDialog.path
+    });
+  } else if (deleteDialog?.kind === "allSegments") {
+    deleteDialogMessage = t("sessionDetail.deleteAllSegmentsConfirm");
+  }
+  const deleteDialogConfirmLabel =
+    deleteDialog?.kind === "session"
+      ? t("action.confirm")
+      : isDeletingSegments
+        ? deleteDialog?.kind === "segment"
+          ? t("sessionDetail.deletingSegment")
+          : t("sessionDetail.deletingSegments")
+        : t("action.confirm");
   const canShowCurrentShortcut = Boolean(activeSessionId);
 
   return (
@@ -999,7 +1138,7 @@ function SessionsTab({
               <button
                 type="button"
                 className="btn-secondary sessions-toolbar-btn"
-                onClick={() => setShowConfirmDelete(true)}
+                onClick={() => setDeleteDialog({ kind: "session" })}
                 disabled={!activeSessionId}
                 aria-label={t("sessions.delete")}
                 title={t("sessions.delete")}
@@ -1544,21 +1683,53 @@ function SessionsTab({
                       <p className="empty-hint" style={{ marginTop: 0 }}>{t("sessionDetail.playbackEmpty")}</p>
                     )}
                   </div>
-                  {activeSession.audioSegmentMeta && activeSession.audioSegmentMeta.length > 0 ? (
+                  {segmentItems.length > 0 ? (
                     <div className="session-meta-full-width" style={{ gridColumn: "1 / -1", marginTop: "16px" }}>
-                      <h4 style={{ marginBottom: "12px", color: "var(--text-primary)" }}>{t("sessionDetail.audioSegmentsDetail")}</h4>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginBottom: "12px", flexWrap: "wrap" }}>
+                        <h4 style={{ margin: 0, color: "var(--text-primary)" }}>{t("sessionDetail.audioSegmentsDetail")}</h4>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => setDeleteDialog({ kind: "allSegments" })}
+                          disabled={!canDeleteSegments || isDeletingSegments}
+                          title={segmentDeletionBlockedReason}
+                        >
+                          {isDeletingSegments && !deletingSegmentPath
+                            ? t("sessionDetail.deletingSegments")
+                            : t("sessionDetail.deleteAllSegments")}
+                        </button>
+                      </div>
+                      {segmentDeletionBlockedReason && (
+                        <p className="empty-hint" style={{ marginTop: 0, marginBottom: "12px" }}>
+                          {segmentDeletionBlockedReason}
+                        </p>
+                      )}
                       <ul className="segment-meta-list" style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" }}>
-                        {activeSession.audioSegmentMeta.map((meta, index) => (
-                          <li key={`${meta.sequence}-${index}`} style={{ background: "var(--bg-secondary)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color, #e5e7eb)" }}>
+                        {segmentItems.map((item, index) => (
+                          <li key={`${item.path}-${index}`} style={{ background: "var(--bg-secondary)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color, #e5e7eb)" }}>
                             <p style={{ margin: "0 0 8px 0", wordBreak: "break-all", fontSize: "0.9em", color: "var(--text-primary)" }}>
-                              <strong>{t("sessionDetail.audioSegmentPath")}:</strong> {meta.path}
+                              <strong>{t("sessionDetail.audioSegmentPath")}:</strong> {item.path}
                             </p>
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", fontSize: "0.85em", color: "var(--text-secondary)" }}>
-                              <span><strong>{t("sessionDetail.audioSegmentSequence")}:</strong> {meta.sequence}</span>
-                              <span><strong>{t("sessionDetail.audioSegmentDuration")}:</strong> {formatDuration(meta.durationMs)}</span>
-                              <span><strong>{t("sessionDetail.audioSegmentSampleRate")}:</strong> {meta.sampleRate}Hz</span>
-                              <span><strong>{t("sessionDetail.audioSegmentChannels")}:</strong> {meta.channels}</span>
-                              {meta.fileSizeBytes !== undefined && <span><strong>{t("sessionDetail.audioSegmentFileSize")}:</strong> {formatFileSize(meta.fileSizeBytes)}</span>}
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px", flexWrap: "wrap" }}>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", fontSize: "0.85em", color: "var(--text-secondary)", flex: "1 1 360px" }}>
+                                {item.meta && <span><strong>{t("sessionDetail.audioSegmentSequence")}:</strong> {item.meta.sequence}</span>}
+                                {item.meta && <span><strong>{t("sessionDetail.audioSegmentDuration")}:</strong> {formatDuration(item.meta.durationMs)}</span>}
+                                {item.meta && <span><strong>{t("sessionDetail.audioSegmentSampleRate")}:</strong> {item.meta.sampleRate}Hz</span>}
+                                {item.meta && <span><strong>{t("sessionDetail.audioSegmentChannels")}:</strong> {item.meta.channels}</span>}
+                                {item.meta?.fileSizeBytes !== undefined && <span><strong>{t("sessionDetail.audioSegmentFileSize")}:</strong> {formatFileSize(item.meta.fileSizeBytes)}</span>}
+                              </div>
+                              <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => setDeleteDialog({ kind: "segment", path: item.path })}
+                                disabled={!canDeleteSegments || isDeletingSegments}
+                                title={segmentDeletionBlockedReason}
+                                style={{ whiteSpace: "nowrap" }}
+                              >
+                                {isDeletingSegments && deletingSegmentPath === item.path
+                                  ? t("sessionDetail.deletingSegment")
+                                  : t("sessionDetail.deleteSegment")}
+                              </button>
                             </div>
                           </li>
                         ))}
@@ -1876,16 +2047,17 @@ function SessionsTab({
         )}
       </section>
 
-      {showConfirmDelete && (
+      {deleteDialog && (
         <div className="modal-overlay">
           <div className="modal-content panel">
-            <h3>{t("sessions.delete")}</h3>
-            <p>{t("sessions.deleteConfirm")}</p>
+            <h3>{deleteDialogTitle}</h3>
+            <p>{deleteDialogMessage}</p>
             <div className="modal-actions">
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => setShowConfirmDelete(false)}
+                onClick={() => setDeleteDialog(undefined)}
+                disabled={isDeletingSegments}
               >
                 {t("action.cancel")}
               </button>
@@ -1893,12 +2065,10 @@ function SessionsTab({
                 type="button"
                 className="btn-primary"
                 style={{ background: "var(--danger)", color: "#fff" }}
-                onClick={() => {
-                  setShowConfirmDelete(false);
-                  if (activeSessionId) onDeleteSession(activeSessionId);
-                }}
+                onClick={() => void handleConfirmDelete()}
+                disabled={isDeletingSegments && deleteDialog.kind !== "session"}
               >
-                {t("action.confirm")}
+                {deleteDialogConfirmLabel}
               </button>
             </div>
           </div>

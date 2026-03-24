@@ -11,7 +11,8 @@ import type {
   SessionDetail,
   SessionSummary,
   StartRecordingResponse,
-  Settings
+  Settings,
+  StorageUsageSummary
 } from "../types/domain";
 
 export async function startRecording(
@@ -150,6 +151,17 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await invoke("session_delete", { sessionId });
 }
 
+export async function deleteSessionSegment(
+  sessionId: string,
+  segmentPath: string
+): Promise<void> {
+  await invoke("session_delete_segment", { sessionId, segmentPath });
+}
+
+export async function deleteSessionSegments(sessionId: string): Promise<void> {
+  await invoke("session_delete_segments", { sessionId });
+}
+
 export async function enqueueTranscription(
   sessionId: string,
   providerId?: string
@@ -209,6 +221,10 @@ export async function getSettings(): Promise<Settings> {
 
 export async function updateSettings(settings: Partial<Settings>): Promise<Settings> {
   return invoke("settings_update", { request: settings });
+}
+
+export async function getStorageUsage(): Promise<StorageUsageSummary> {
+  return invoke("settings_get_storage_usage");
 }
 
 export async function getLocalProviderStatus(): Promise<LocalProviderStatus> {

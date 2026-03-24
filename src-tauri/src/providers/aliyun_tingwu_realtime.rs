@@ -103,7 +103,9 @@ pub struct RealtimeWorkerHandle {
 
 impl RealtimeWorkerHandle {
     pub fn push_audio_frame(&self, frame: Vec<i16>) {
-        let _ = self.command_tx.try_send(RealtimeWorkerCommand::AudioFrame(frame));
+        let _ = self
+            .command_tx
+            .try_send(RealtimeWorkerCommand::AudioFrame(frame));
     }
 
     pub fn pause(&self) -> Result<(), String> {
@@ -287,8 +289,7 @@ async fn close_realtime_connection(
     let stop_config = config.clone();
     let stop_task_id = task_id.to_string();
     let stop_result =
-        tokio::task::spawn_blocking(move || stop_realtime_task(&stop_config, &stop_task_id))
-            .await;
+        tokio::task::spawn_blocking(move || stop_realtime_task(&stop_config, &stop_task_id)).await;
 
     if !emit_stop_error {
         return;
@@ -797,14 +798,8 @@ fn create_realtime_task(config: &AliyunTingwuRealtimeConfig) -> Result<(String, 
         "Parameters": parameters
     });
 
-    let payload = send_signed_json_request(
-        &client,
-        Method::PUT,
-        &url,
-        &resource,
-        Some(&body),
-        config,
-    )?;
+    let payload =
+        send_signed_json_request(&client, Method::PUT, &url, &resource, Some(&body), config)?;
     let task_id = extract_string(
         &payload,
         &[
@@ -849,14 +844,7 @@ fn stop_realtime_task(config: &AliyunTingwuRealtimeConfig, task_id: &str) -> Res
         }
     });
 
-    let _ = send_signed_json_request(
-        &client,
-        Method::PUT,
-        &url,
-        &resource,
-        Some(&body),
-        config,
-    )?;
+    let _ = send_signed_json_request(&client, Method::PUT, &url, &resource, Some(&body), config)?;
     Ok(())
 }
 
@@ -914,7 +902,11 @@ where
         .map_err(|error| format!("failed to send start command: {error}"))
 }
 
-async fn send_stop_transcription<S>(writer: &mut S, task_id: &str, appkey: &str) -> Result<(), String>
+async fn send_stop_transcription<S>(
+    writer: &mut S,
+    task_id: &str,
+    appkey: &str,
+) -> Result<(), String>
 where
     S: Sink<Message> + Unpin,
     <S as Sink<Message>>::Error: std::fmt::Display,
@@ -1112,11 +1104,12 @@ fn pick_translation_entry<'a>(payload: &'a Value) -> Option<&'a Value> {
     if entries.is_empty() {
         return None;
     }
-    if let Some(item) = entries
-        .iter()
-        .rev()
-        .find(|item| !item.pointer("/partial").and_then(Value::as_bool).unwrap_or(false))
-    {
+    if let Some(item) = entries.iter().rev().find(|item| {
+        !item
+            .pointer("/partial")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
         return Some(item);
     }
     entries.last().copied()
@@ -1124,7 +1117,8 @@ fn pick_translation_entry<'a>(payload: &'a Value) -> Option<&'a Value> {
 
 fn extract_translation_text(payload: &Value) -> Option<String> {
     if let Some(entry) = pick_translation_entry(payload) {
-        if let Some(text) = extract_string(entry, &["/text", "/translation_text", "/translationText"])
+        if let Some(text) =
+            extract_string(entry, &["/text", "/translation_text", "/translationText"])
         {
             return Some(text);
         }
@@ -1166,12 +1160,7 @@ fn extract_ws_event_name(raw_text: &str) -> Option<String> {
 fn extract_ws_event_name_from_payload(payload: &Value) -> Option<String> {
     extract_string(
         payload,
-        &[
-            "/header/name",
-            "/header/event",
-            "/header/action",
-            "/event",
-        ],
+        &["/header/name", "/header/event", "/header/action", "/event"],
     )
     .map(|value| value.to_ascii_lowercase())
 }

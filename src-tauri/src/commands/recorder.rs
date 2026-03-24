@@ -21,12 +21,10 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        merge_session_tags_into_catalog, AudioSegmentMeta, RecorderExportResponse,
+        merge_session_tags_into_catalog, AudioSegmentMeta, ProviderKind, RecorderExportResponse,
         RecorderInputDevice, RecorderPhase, RecorderProcessingStatus, RecorderRealtimeState,
         RecorderRealtimeStatus, RecorderStatus, RecordingQualityPreset, Session, SessionStatus,
-        StartSessionResponse,
-        ProviderKind,
-        DEFAULT_RECORDING_SESSION_TAG,
+        StartSessionResponse, DEFAULT_RECORDING_SESSION_TAG,
     },
     providers::aliyun_tingwu_realtime::{
         start_realtime_worker, AliyunTingwuRealtimeConfig, RealtimeWorkerEvent,
@@ -389,7 +387,10 @@ fn apply_realtime_event(shared: &mut RecorderShared, event: RealtimeWorkerEvent)
                 shared.realtime.last_error = Some(reason);
                 shared.realtime.state = RecorderRealtimeState::Error;
             }
-            if matches!(state, RealtimeWorkerState::Idle | RealtimeWorkerState::Error) {
+            if matches!(
+                state,
+                RealtimeWorkerState::Idle | RealtimeWorkerState::Error
+            ) {
                 shared.realtime.worker = None;
                 shared.realtime.event_rx = None;
                 shared.realtime.enabled = false;
@@ -416,16 +417,19 @@ fn apply_realtime_event(shared: &mut RecorderShared, event: RealtimeWorkerEvent)
             if end_ms <= start_ms {
                 end_ms = start_ms.saturating_add(1000);
             }
-            shared.realtime.segments.push(crate::models::TranscriptSegment {
-                start_ms,
-                end_ms,
-                text: sentence.to_string(),
-                translation_text: None,
-                translation_target_language: None,
-                confidence: None,
-                speaker_id: None,
-                speaker_label: None,
-            });
+            shared
+                .realtime
+                .segments
+                .push(crate::models::TranscriptSegment {
+                    start_ms,
+                    end_ms,
+                    text: sentence.to_string(),
+                    translation_text: None,
+                    translation_target_language: None,
+                    confidence: None,
+                    speaker_id: None,
+                    speaker_label: None,
+                });
             shared.realtime.segment_meta.push(RealtimeSegmentMeta {
                 sentence_id,
                 sentence_index,
@@ -545,20 +549,25 @@ fn resolve_realtime_provider_config(
         || access_key_secret.trim().is_empty()
         || app_key.trim().is_empty()
     {
-        return Err("aliyun realtime requires access key id, access key secret and app key".to_string());
+        return Err(
+            "aliyun realtime requires access key id, access key secret and app key".to_string(),
+        );
     }
 
-    let provider_source_language = normalize_realtime_source_language(&aliyun.realtime_source_language)
-        .unwrap_or_else(|| DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string());
-    let source_language = normalize_realtime_source_language(&source_language)
-        .unwrap_or(provider_source_language);
+    let provider_source_language =
+        normalize_realtime_source_language(&aliyun.realtime_source_language)
+            .unwrap_or_else(|| DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string());
+    let source_language =
+        normalize_realtime_source_language(&source_language).unwrap_or(provider_source_language);
 
     let mut translation_target_languages = if let Some(runtime_target) =
         normalize_realtime_translation_target_language(&translation_target_language)
     {
         vec![runtime_target]
     } else {
-        parse_realtime_translation_target_languages(aliyun.realtime_translation_target_languages.as_deref())
+        parse_realtime_translation_target_languages(
+            aliyun.realtime_translation_target_languages.as_deref(),
+        )
     };
     if translation_target_languages.is_empty() {
         translation_target_languages.push(DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string());
@@ -569,7 +578,9 @@ fn resolve_realtime_provider_config(
             .any(|item| item.as_str() != source_language.as_str());
 
     let realtime_format = match aliyun.realtime_format.trim().to_ascii_lowercase().as_str() {
-        "pcm" | "opus" | "aac" | "speex" | "mp3" => aliyun.realtime_format.trim().to_ascii_lowercase(),
+        "pcm" | "opus" | "aac" | "speex" | "mp3" => {
+            aliyun.realtime_format.trim().to_ascii_lowercase()
+        }
         _ => "pcm".to_string(),
     };
     if realtime_format != "pcm" {
@@ -585,13 +596,17 @@ fn resolve_realtime_provider_config(
     } else {
         Vec::new()
     };
-    let task_key = aliyun.realtime_task_key.as_deref().map(str::trim).and_then(|value| {
-        if value.is_empty() {
-            None
-        } else {
-            Some(value.to_string())
-        }
-    });
+    let task_key = aliyun
+        .realtime_task_key
+        .as_deref()
+        .map(str::trim)
+        .and_then(|value| {
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        });
     let transcription_phrase_id = aliyun
         .realtime_transcription_phrase_id
         .as_deref()
@@ -1785,7 +1800,13 @@ pub fn recorder_start(
             .filter(|value| value == "pcm")
             .unwrap_or_else(|| "pcm".to_string());
         let realtime_sample_rate_default = realtime_provider
-            .map(|config| if config.realtime_sample_rate == 8000 { 8000 } else { 16000 })
+            .map(|config| {
+                if config.realtime_sample_rate == 8000 {
+                    8000
+                } else {
+                    16000
+                }
+            })
             .unwrap_or(16000);
         (
             storage.session_audio_dir(&session_id)?,
@@ -2207,7 +2228,9 @@ pub fn recorder_set_realtime_translation_target(
             .lock()
             .map_err(|_| "failed to acquire recorder state lock".to_string())?;
         shared.realtime.translation_target_language = normalized_target;
-        shared.realtime.enabled && shared.realtime.translation_enabled && shared.realtime.worker.is_some()
+        shared.realtime.enabled
+            && shared.realtime.translation_enabled
+            && shared.realtime.worker.is_some()
     };
 
     if !should_restart {
@@ -2226,12 +2249,8 @@ pub fn recorder_set_realtime_source_language(
     source_language: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let normalized_source = normalize_realtime_source_language(&source_language).ok_or_else(|| {
-        format!(
-            "unsupported realtime source language: {}",
-            source_language
-        )
-    })?;
+    let normalized_source = normalize_realtime_source_language(&source_language)
+        .ok_or_else(|| format!("unsupported realtime source language: {}", source_language))?;
     let shared_ref = {
         let runtime = recorder_runtime()
             .lock()
@@ -2274,15 +2293,7 @@ pub fn recorder_status(
         .lock()
         .map_err(|_| "failed to acquire recorder runtime lock".to_string())?;
 
-    let (
-        elapsed_ms_runtime,
-        rms,
-        peak,
-        pending_segment,
-        runtime_phase,
-        runtime_error,
-        realtime,
-    ) =
+    let (elapsed_ms_runtime, rms, peak, pending_segment, runtime_phase, runtime_error, realtime) =
         match &*runtime {
             RecorderRuntime::Active(active) if active.session_id == session_id => {
                 let mut shared = active
@@ -2315,8 +2326,8 @@ pub fn recorder_status(
                     enabled: false,
                     source_language: DEFAULT_REALTIME_SOURCE_LANGUAGE.to_string(),
                     translation_enabled: false,
-                    translation_target_language:
-                        DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE.to_string(),
+                    translation_target_language: DEFAULT_REALTIME_TRANSLATION_TARGET_LANGUAGE
+                        .to_string(),
                     state: RecorderRealtimeState::Idle,
                     preview_text: String::new(),
                     segment_count: 0,
@@ -2382,6 +2393,33 @@ pub fn recorder_processing_status(
     })
 }
 
+fn resolve_existing_exported_audio_path(session: &Session, format: &str) -> Option<String> {
+    let candidate = match format {
+        "wav" => session.exported_wav_path.as_deref(),
+        "mp3" => session.exported_mp3_path.as_deref(),
+        "m4a" => session.exported_m4a_path.as_deref(),
+        _ => None,
+    }?;
+    let normalized = candidate.trim();
+    if normalized.is_empty() || !Path::new(normalized).exists() {
+        return None;
+    }
+    Some(normalized.to_string())
+}
+
+fn resolve_fallback_export_source(session: &Session) -> Option<String> {
+    [
+        session.exported_m4a_path.as_deref(),
+        session.exported_mp3_path.as_deref(),
+        session.exported_wav_path.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|path| !path.is_empty() && Path::new(path).exists())
+    .map(str::to_string)
+}
+
 #[tauri::command]
 pub fn recorder_export(
     session_id: String,
@@ -2393,7 +2431,7 @@ pub fn recorder_export(
         return Err("unsupported export format; expected wav|mp3|m4a".to_string());
     }
 
-    let (segments, export_dir) = {
+    let (segments, exact_existing_export, fallback_export_source, export_dir) = {
         let storage = state
             .storage
             .lock()
@@ -2409,30 +2447,31 @@ pub fn recorder_export(
                     .to_string(),
             );
         }
-        if session.audio_segments.is_empty() {
-            return Err("no audio segments available to export".to_string());
-        }
         (
             session.audio_segments.clone(),
+            resolve_existing_exported_audio_path(session, &format),
+            resolve_fallback_export_source(session),
             storage.session_export_dir(&session_id)?,
         )
     };
 
-    let base_name = format!("recording-{session_id}");
+    if segments.is_empty() && exact_existing_export.is_none() && fallback_export_source.is_none() {
+        return Err("no audio segments or merged audio available to export".to_string());
+    }
 
-    let output_path = if format == "wav" {
-        let wav_path = export_dir.join(format!("{base_name}.wav"));
-        merge_segments_with_ffmpeg(&segments, &wav_path, "wav")?;
-        wav_path
-    } else if format == "m4a" {
-        let m4a_path = export_dir.join(format!("{base_name}.m4a"));
-        merge_segments_with_ffmpeg(&segments, &m4a_path, "m4a")?;
-        m4a_path
+    let base_name = format!("recording-{session_id}");
+    let output_path = export_dir.join(format!("{base_name}.{format}"));
+
+    let output_path = if let Some(existing_path) = exact_existing_export {
+        PathBuf::from(existing_path)
+    } else if !segments.is_empty() {
+        merge_segments_with_ffmpeg(&segments, &output_path, &format)?;
+        output_path
     } else {
-        // mp3
-        let mp3_path = export_dir.join(format!("{base_name}.mp3"));
-        merge_segments_with_ffmpeg(&segments, &mp3_path, "mp3")?;
-        mp3_path
+        let source_path = fallback_export_source
+            .ok_or_else(|| "no audio segments or merged audio available to export".to_string())?;
+        convert_single_file(&source_path, &output_path, &format)?;
+        output_path
     };
 
     {
@@ -2679,7 +2718,14 @@ pub(crate) fn convert_single_file(
 
 #[cfg(test)]
 mod tests {
-    use super::{make_input_device_id, parse_input_device_id};
+    use std::{env, fs};
+
+    use super::{
+        make_input_device_id, parse_input_device_id, resolve_existing_exported_audio_path,
+        resolve_fallback_export_source,
+    };
+    use crate::models::Session;
+    use uuid::Uuid;
 
     #[test]
     fn parse_input_device_id_accepts_valid_values() {
@@ -2694,5 +2740,29 @@ mod tests {
         assert!(parse_input_device_id("abc").is_none());
         assert!(parse_input_device_id("0:Built-in").is_none());
         assert!(parse_input_device_id("1:   ").is_none());
+    }
+
+    #[test]
+    fn exported_audio_lookup_ignores_missing_files_and_picks_existing_fallback() {
+        let temp_path =
+            env::temp_dir().join(format!("open-recorder-export-test-{}.m4a", Uuid::new_v4()));
+        fs::write(&temp_path, b"test").expect("expected temp export file");
+
+        let session = Session {
+            exported_m4a_path: Some(temp_path.to_string_lossy().to_string()),
+            exported_mp3_path: Some("/tmp/does-not-exist.mp3".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_existing_exported_audio_path(&session, "m4a"),
+            Some(temp_path.to_string_lossy().to_string())
+        );
+        assert_eq!(
+            resolve_fallback_export_source(&session),
+            Some(temp_path.to_string_lossy().to_string())
+        );
+
+        let _ = fs::remove_file(&temp_path);
     }
 }

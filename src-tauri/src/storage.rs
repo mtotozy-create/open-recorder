@@ -38,6 +38,13 @@ pub struct Storage {
     pub data: PersistedState,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageUsageSummary {
+    pub data_dir_path: String,
+    pub total_bytes: u64,
+}
+
 impl Storage {
     pub fn load() -> Result<Self, String> {
         let mut errors: Vec<String> = vec![];
@@ -125,6 +132,15 @@ impl Storage {
             .map(|path| path.to_path_buf())
             .ok_or_else(|| "failed to resolve data directory".to_string())
     }
+
+    pub fn get_storage_usage(&self) -> Result<StorageUsageSummary, String> {
+        let data_dir = self.data_root_dir()?;
+        let total_bytes = calculate_dir_size(&data_dir)?;
+        Ok(StorageUsageSummary {
+            data_dir_path: data_dir.display().to_string(),
+            total_bytes,
+        })
+    }
 }
 
 fn backfill_session_tags_if_needed(data: &mut PersistedState) -> bool {
@@ -197,4 +213,111 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     fs::rename(&tmp_path, path)
         .map_err(|error| format!("failed to replace {}: {error}", path.display()))?;
     Ok(())
+}
+
+fn calculate_dir_size(path: &Path) -> Result<u64, String> {
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+
+    let mut total_bytes = 0_u64;
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("failed to read directory {}: {error}", path.display()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
+        total_bytes += calculate_dir_size(&entry.path())?;
+    }
+
+    Ok(total_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::calculate_dir_size;
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Result<Self, String> {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| format!("failed to build temp dir name: {error}"))?
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "open-recorder-{prefix}-{}-{unique}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).map_err(|error| {
+                format!("failed to create temp dir {}: {error}", path.display())
+            })?;
+            Ok(Self { path })
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn calculate_dir_size_returns_zero_for_empty_dir() {
+        let temp_dir = TempDirGuard::new("empty").expect("temp dir should be created");
+
+        let size = calculate_dir_size(temp_dir.path()).expect("size should be calculated");
+
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn calculate_dir_size_sums_nested_files() {
+        let temp_dir = TempDirGuard::new("nested").expect("temp dir should be created");
+        let nested_dir = temp_dir.path().join("audio/session-1");
+        fs::create_dir_all(&nested_dir).expect("nested dir should be created");
+        fs::write(temp_dir.path().join("state.json"), b"12345")
+            .expect("state file should be written");
+        fs::write(nested_dir.join("segment-1.m4a"), b"1234567890")
+            .expect("segment file should be written");
+        fs::write(nested_dir.join("segment-2.m4a"), b"1234")
+            .expect("segment file should be written");
+
+        let size = calculate_dir_size(temp_dir.path()).expect("size should be calculated");
+
+        assert_eq!(size, 19);
+    }
+
+    #[test]
+    fn calculate_dir_size_returns_zero_for_missing_dir() {
+        let missing_dir =
+            std::env::temp_dir().join(format!("open-recorder-missing-{}", std::process::id()));
+
+        let size =
+            calculate_dir_size(&missing_dir).expect("missing dir should be treated as empty");
+
+        assert_eq!(size, 0);
+    }
 }

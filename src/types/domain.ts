@@ -172,6 +172,11 @@ export type Settings = {
   templates: PromptTemplate[];
 };
 
+export type StorageUsageSummary = {
+  dataDirPath: string;
+  totalBytes: number;
+};
+
 export type InsightTimeRange = "1d" | "2d" | "3d" | "1w" | "1m";
 export type InsightSelectionMode = "timeRange" | "sessions";
 

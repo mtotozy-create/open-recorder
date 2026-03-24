@@ -16,12 +16,7 @@ const MAX_RECORDING_SEGMENT_SECONDS: u64 = 1800;
 pub const MAX_SESSION_TAGS: usize = 3;
 pub const DEFAULT_RECORDING_SESSION_TAG: &str = "#or";
 pub const DEFAULT_IMPORTED_SESSION_TAG: &str = "#imported";
-pub const BUILTIN_SESSION_TAGS: [&str; 4] = [
-    "#or",
-    "#meeting",
-    "#call",
-    "#imported",
-];
+pub const BUILTIN_SESSION_TAGS: [&str; 4] = ["#or", "#meeting", "#call", "#imported"];
 
 fn default_recording_segment_seconds() -> u64 {
     DEFAULT_RECORDING_SEGMENT_SECONDS
@@ -1245,13 +1240,13 @@ fn normalize_provider(provider: &mut ProviderConfig) {
             } else {
                 16000
             };
-            config.realtime_format = match config.realtime_format.trim().to_ascii_lowercase().as_str()
-            {
-                "pcm" | "opus" | "aac" | "speex" | "mp3" => {
-                    config.realtime_format.trim().to_ascii_lowercase()
-                }
-                _ => "pcm".to_string(),
-            };
+            config.realtime_format =
+                match config.realtime_format.trim().to_ascii_lowercase().as_str() {
+                    "pcm" | "opus" | "aac" | "speex" | "mp3" => {
+                        config.realtime_format.trim().to_ascii_lowercase()
+                    }
+                    _ => "pcm".to_string(),
+                };
             config.realtime_source_language = match config
                 .realtime_source_language
                 .trim()
@@ -1404,8 +1399,10 @@ fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderC
                     }
                 }
                 ProviderKind::Ollama => {
-                    if let Some(config) =
-                        candidates.iter().find_map(|item| item.ollama.as_ref()).cloned()
+                    if let Some(config) = candidates
+                        .iter()
+                        .find_map(|item| item.ollama.as_ref())
+                        .cloned()
                     {
                         provider.ollama = Some(config);
                     }

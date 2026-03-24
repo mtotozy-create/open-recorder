@@ -166,7 +166,8 @@ pub fn insight_enqueue(
         let provider_id = provider.id.clone();
         let summary_config = resolve_discover_config(provider)?;
 
-        let sessions = collect_source_sessions(&storage.data.sessions, &normalized_query.selection)?;
+        let sessions =
+            collect_source_sessions(&storage.data.sessions, &normalized_query.selection)?;
         if sessions.is_empty() {
             return Err(normalized_query.empty_source_error);
         }
@@ -242,7 +243,8 @@ pub fn insight_enqueue(
         };
 
         let mut extracted = Vec::with_capacity(sessions.len());
-        let valid_session_ids: HashSet<String> = sessions.iter().map(|session| session.id.clone()).collect();
+        let valid_session_ids: HashSet<String> =
+            sessions.iter().map(|session| session.id.clone()).collect();
 
         for (index, session) in sessions.iter().enumerate() {
             update_progress(format!(
@@ -271,7 +273,11 @@ pub fn insight_enqueue(
                 }
             };
 
-            extracted.push(normalize_extraction_payload(payload, session, &valid_session_ids));
+            extracted.push(normalize_extraction_payload(
+                payload,
+                session,
+                &valid_session_ids,
+            ));
         }
 
         update_progress("merging insights".to_string());
@@ -319,7 +325,9 @@ pub fn insight_enqueue(
     Ok(JobEnqueueResponse { job_id })
 }
 
-fn resolve_discover_provider<'a>(storage: &'a crate::storage::Storage) -> Result<&'a crate::models::ProviderConfig, String> {
+fn resolve_discover_provider<'a>(
+    storage: &'a crate::storage::Storage,
+) -> Result<&'a crate::models::ProviderConfig, String> {
     let settings = &storage.data.settings;
     let provider = settings
         .providers
@@ -342,7 +350,9 @@ fn resolve_discover_provider<'a>(storage: &'a crate::storage::Storage) -> Result
     Ok(provider)
 }
 
-fn resolve_discover_config(provider: &ProviderConfig) -> Result<ChatCompatibleSummaryConfig, String> {
+fn resolve_discover_config(
+    provider: &ProviderConfig,
+) -> Result<ChatCompatibleSummaryConfig, String> {
     let mut config = resolve_summary_config(provider)?;
     if provider.kind == ProviderKind::Openrouter {
         if let Some(openrouter) = provider.openrouter.as_ref() {
@@ -403,9 +413,9 @@ fn normalize_insight_query(request: InsightQueryRequest) -> Result<NormalizedIns
             if has_session_ids {
                 return Err("sessionIds must be empty when selectionMode is timeRange".to_string());
             }
-            let raw_time_range = request
-                .time_range
-                .ok_or_else(|| "timeRange is required when selectionMode is timeRange".to_string())?;
+            let raw_time_range = request.time_range.ok_or_else(|| {
+                "timeRange is required when selectionMode is timeRange".to_string()
+            })?;
             let time_range = normalize_time_range(raw_time_range.as_str())?;
             Ok(NormalizedInsightQuery {
                 selection: InsightSelection::TimeRange {
@@ -415,7 +425,8 @@ fn normalize_insight_query(request: InsightQueryRequest) -> Result<NormalizedIns
                 result_scope: time_range,
                 keyword,
                 include_suggestions,
-                empty_source_error: "no sessions with summary found in selected time range".to_string(),
+                empty_source_error: "no sessions with summary found in selected time range"
+                    .to_string(),
             })
         }
         "sessions" => {
@@ -424,7 +435,10 @@ fn normalize_insight_query(request: InsightQueryRequest) -> Result<NormalizedIns
             }
             let session_ids = normalize_session_ids(request.session_ids)?;
             if session_ids.is_empty() {
-                return Err("at least one session id is required when selectionMode is sessions".to_string());
+                return Err(
+                    "at least one session id is required when selectionMode is sessions"
+                        .to_string(),
+                );
             }
             let mut sorted_ids = session_ids.clone();
             sorted_ids.sort();
@@ -558,10 +572,9 @@ fn build_source_session(session: &Session) -> Option<InsightSourceSession> {
 
     Some(InsightSourceSession {
         id: session.id.clone(),
-        name: session
-            .name
-            .clone()
-            .unwrap_or_else(|| format!("Session {}", session.id.chars().take(8).collect::<String>())),
+        name: session.name.clone().unwrap_or_else(|| {
+            format!("Session {}", session.id.chars().take(8).collect::<String>())
+        }),
         created_at: session.created_at.clone(),
         updated_at: session.updated_at.clone(),
         raw_markdown: summary.raw_markdown.clone(),
@@ -841,7 +854,8 @@ fn invoke_chat_completion(
 
 fn parse_json_payload<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, String> {
     let text = extract_json(raw);
-    serde_json::from_str::<T>(text).map_err(|error| format!("invalid JSON payload: {error}; raw={raw}"))
+    serde_json::from_str::<T>(text)
+        .map_err(|error| format!("invalid JSON payload: {error}; raw={raw}"))
 }
 
 fn extract_json(raw: &str) -> &str {
@@ -902,7 +916,8 @@ fn normalize_extraction_payload(
 
             person.decisions = dedup_strings(person.decisions);
             person.risks = dedup_strings(person.risks);
-            person.suggestions = normalize_suggestions(person.suggestions, session, valid_session_ids);
+            person.suggestions =
+                normalize_suggestions(person.suggestions, session, valid_session_ids);
             Some(person)
         })
         .collect();
@@ -936,7 +951,8 @@ fn normalize_extraction_payload(
                 })
                 .collect();
             topic.related_people = dedup_strings(topic.related_people);
-            topic.suggestions = normalize_suggestions(topic.suggestions, session, valid_session_ids);
+            topic.suggestions =
+                normalize_suggestions(topic.suggestions, session, valid_session_ids);
             Some(topic)
         })
         .collect();
@@ -1194,8 +1210,9 @@ fn merge_extractions(
     topics.sort_by(|a, b| a.name.cmp(&b.name));
 
     actions.sort_by(|a, b| {
-        compare_optional_date(a.deadline.as_deref(), b.deadline.as_deref())
-            .then_with(|| compare_optional_date(Some(a.source_date.as_str()), Some(b.source_date.as_str())))
+        compare_optional_date(a.deadline.as_deref(), b.deadline.as_deref()).then_with(|| {
+            compare_optional_date(Some(a.source_date.as_str()), Some(b.source_date.as_str()))
+        })
     });
 
     InsightExtractionPayload {
@@ -1303,7 +1320,10 @@ fn dedup_suggestions(suggestions: &mut Vec<InsightSuggestion>) {
     *suggestions = deduped;
 }
 
-fn merge_topic_status(current: &InsightTopicStatus, next: &InsightTopicStatus) -> InsightTopicStatus {
+fn merge_topic_status(
+    current: &InsightTopicStatus,
+    next: &InsightTopicStatus,
+) -> InsightTopicStatus {
     fn score(status: &InsightTopicStatus) -> u8 {
         match status {
             InsightTopicStatus::Blocked => 3,

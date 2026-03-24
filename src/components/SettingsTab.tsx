@@ -2,6 +2,7 @@ import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from "react
 
 import type { Translator } from "../i18n";
 import type { Locale, TranslationKey } from "../i18n/messages";
+import { formatFileSize } from "../lib/formatFileSize";
 import { WHISPER_MODEL_PROFILES } from "../lib/localSttWhisperModels";
 import type {
   OssConfig,
@@ -11,14 +12,21 @@ import type {
   ProviderConfig,
   ProviderKind,
   RecorderInputDevice,
-  Settings
+  Settings,
+  StorageUsageSummary
 } from "../types/domain";
 
 type SettingsTabProps = {
   locale: Locale;
   settings: Settings;
   inputDevices: RecorderInputDevice[];
+  storageUsageState:
+    | { status: "idle" }
+    | { status: "loading"; summary?: StorageUsageSummary }
+    | { status: "success"; summary: StorageUsageSummary }
+    | { status: "error"; error: string; summary?: StorageUsageSummary };
   onLocaleChange: (locale: Locale) => void;
+  onRefreshStorageUsage: () => void;
   onSettingsChange: (patch: Partial<Settings>) => void;
   onSave: () => void;
   t: Translator;
@@ -108,7 +116,9 @@ function SettingsTab({
   locale,
   settings,
   inputDevices,
+  storageUsageState,
   onLocaleChange,
+  onRefreshStorageUsage,
   onSettingsChange,
   onSave,
   t
@@ -1196,6 +1206,25 @@ function SettingsTab({
   const hasValidationErrors = Object.values(aliyunJsonFieldErrors).some(
     (value) => Boolean(value.serviceInspection || value.customPrompt)
   );
+  const storageUsageSummary =
+    storageUsageState.status === "loading" ||
+    storageUsageState.status === "success" ||
+    storageUsageState.status === "error"
+      ? storageUsageState.summary
+      : undefined;
+  const storageUsageValue =
+    storageUsageState.status === "success"
+      ? formatFileSize(storageUsageState.summary.totalBytes)
+      : storageUsageState.status === "loading"
+        ? t("settings.storageUsageRefreshing")
+        : storageUsageState.status === "error"
+          ? t("settings.storageUsageError")
+          : t("settings.storageUsageIdle");
+  const storageUsageError =
+    storageUsageState.status === "error"
+      ? t("settings.storageUsageErrorDetail", { error: storageUsageState.error })
+      : undefined;
+  const isRefreshingStorageUsage = storageUsageState.status === "loading";
 
   return (
     <section className="panel settings-panel">
@@ -1285,6 +1314,40 @@ function SettingsTab({
                 )}
               </select>
             </label>
+
+            <section className="settings-storage-usage" aria-live="polite">
+              <div className="settings-storage-usage-header">
+                <div>
+                  <h4>{t("settings.storageUsageTitle")}</h4>
+                  <p>{t("settings.storageUsageHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary settings-inline-btn"
+                  onClick={onRefreshStorageUsage}
+                  disabled={isRefreshingStorageUsage}
+                >
+                  {isRefreshingStorageUsage
+                    ? t("settings.storageUsageRefreshing")
+                    : t("settings.storageUsageRefresh")}
+                </button>
+              </div>
+
+              <dl className="settings-storage-usage-grid">
+                <div>
+                  <dt>{t("settings.storageUsagePath")}</dt>
+                  <dd>{storageUsageSummary?.dataDirPath ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt>{t("settings.storageUsageSize")}</dt>
+                  <dd>{storageUsageValue}</dd>
+                </div>
+              </dl>
+
+              {storageUsageError ? (
+                <p className="settings-storage-usage-error">{storageUsageError}</p>
+              ) : null}
+            </section>
           </div>
         )}
 

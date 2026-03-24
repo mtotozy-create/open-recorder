@@ -7,9 +7,12 @@ import SessionsTab from "./components/SessionsTab";
 import TabNav, { type AppTab } from "./components/TabNav";
 import {
   createSessionFromAudio,
+  deleteSessionSegment,
+  deleteSessionSegments,
   enqueueSummary,
   enqueueTranscription,
   exportRecording,
+  getStorageUsage,
   listInputDevices,
   getRecorderStatus,
   getSession,
@@ -53,7 +56,8 @@ import type {
   SessionDetail,
   SessionSummary,
   TranscriptSegment,
-  Settings
+  Settings,
+  StorageUsageSummary
 } from "./types/domain";
 
 const DEFAULT_BAILIAN_PROVIDER_ID = "bailian-default";
@@ -403,6 +407,24 @@ type StatusState = {
   key: TranslationKey;
   params?: TranslationParams;
 };
+
+type StorageUsageState =
+  | {
+      status: "idle";
+    }
+  | {
+      status: "loading";
+      summary?: StorageUsageSummary;
+    }
+  | {
+      status: "success";
+      summary: StorageUsageSummary;
+    }
+  | {
+      status: "error";
+      error: string;
+      summary?: StorageUsageSummary;
+    };
 
 type PollJobOptions = {
   runningStatusKey: "status.transcriptionRunning" | "status.summaryRunning";
@@ -880,6 +902,7 @@ function App() {
   );
   const [summaryTemplateId, setSummaryTemplateId] = useState<string>(initialSettings.defaultTemplateId);
   const [statusState, setStatusState] = useState<StatusState>({ key: "status.ready" });
+  const [storageUsageState, setStorageUsageState] = useState<StorageUsageState>({ status: "idle" });
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
@@ -1818,6 +1841,34 @@ function App() {
     }
   }
 
+  async function handleDeleteSessionSegment(sessionId: string, segmentPath: string) {
+    try {
+      await deleteSessionSegment(sessionId, segmentPath);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionSegmentDeleteFinished");
+    } catch (error) {
+      setStatus("status.sessionSegmentDeleteFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
+  async function handleDeleteSessionSegments(sessionId: string) {
+    try {
+      await deleteSessionSegments(sessionId);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionSegmentsDeleteFinished");
+    } catch (error) {
+      setStatus("status.sessionSegmentsDeleteFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
   async function onSaveSettings() {
     try {
       const updated = await updateSettings(settings);
@@ -1838,6 +1889,26 @@ function App() {
       setStatus("status.settingsSaved");
     } catch (error) {
       setStatus("status.settingsSaveFailed", { error: String(error) });
+    }
+  }
+
+  async function onRefreshStorageUsage() {
+    setStorageUsageState((previous) => ({
+      status: "loading",
+      summary: previous.status === "success" || previous.status === "error" ? previous.summary : undefined
+    }));
+
+    try {
+      const summary = await getStorageUsage();
+      setStorageUsageState({ status: "success", summary });
+    } catch (error) {
+      const errorMessage = String(error);
+      setStorageUsageState((previous) => ({
+        status: "error",
+        error: errorMessage,
+        summary: previous.status === "loading" ? previous.summary : undefined
+      }));
+      setStatus("status.storageUsageRefreshFailed", { error: errorMessage });
     }
   }
 
@@ -1942,6 +2013,10 @@ function App() {
             void onUpdateSessionSummaryRawMarkdown(sessionId, rawMarkdown)
           }
           onDeleteSession={(sessionId) => void handleDeleteSession(sessionId)}
+          onDeleteSessionSegment={(sessionId, segmentPath) =>
+            void handleDeleteSessionSegment(sessionId, segmentPath)
+          }
+          onDeleteSessionSegments={(sessionId) => void handleDeleteSessionSegments(sessionId)}
           onPreparePlaybackAudio={() => onPrepareSessionPlaybackAudio()}
           onExportM4a={() => void onExport("m4a")}
           onExportMp3={() => void onExport("mp3")}
@@ -1967,7 +2042,9 @@ function App() {
           locale={locale}
           settings={settings}
           inputDevices={inputDevices}
+          storageUsageState={storageUsageState}
           onLocaleChange={setLocale}
+          onRefreshStorageUsage={() => void onRefreshStorageUsage()}
           onSettingsChange={(patch) => {
             setSettings((previous) => normalizeSettings({ ...previous, ...patch }));
           }}
