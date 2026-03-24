@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.3.1...v0.4.0) (2026-03-24)
+
+### Features
+
+* improve recorder and session workflows ([3b04a18](https://github-mtotozy/mtotozy-create/open-recorder/commit/3b04a181cf6674198667f92437012c1431cf0cbb))
+
 ## [0.3.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.3.0...v0.3.1) (2026-03-23)
 
 ### Bug Fixes

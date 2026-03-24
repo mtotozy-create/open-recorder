@@ -1,6 +1,6 @@
 [package]
 name = "open_recorder"
-version = "0.3.1"
+version = "0.4.0"
 description = "Local-first recorder with transcription and meeting summary"
 authors = ["Open Recorder Team"]
 edition = "2021"
