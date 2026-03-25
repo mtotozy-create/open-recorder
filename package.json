@@ -15,9 +15,9 @@
     "release": "node scripts/release-auto.mjs",
     "release:auto": "node scripts/release-auto.mjs",
     "release:dry": "npm run version:check && node scripts/release-dry-run.mjs",
-    "release:patch": "release-it patch",
-    "release:minor": "release-it minor",
-    "release:major": "release-it major"
+    "release:patch": "node scripts/release-auto.mjs patch",
+    "release:minor": "node scripts/release-auto.mjs minor",
+    "release:major": "node scripts/release-auto.mjs major"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

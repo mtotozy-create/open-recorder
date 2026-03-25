@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import DiscoverPdfReport from "./DiscoverPdfReport";
 import type { Translator } from "../i18n";
 import { enqueueInsight, getCachedInsight, getJob } from "../lib/api";
+import { sanitizeFileNameSegment } from "../lib/pdfExport";
 import type {
   DiscoverSubView,
   InsightQueryRequest,
@@ -13,6 +15,7 @@ import type {
 
 type DiscoverTabProps = {
   sessions: SessionSummary[];
+  onExportPdf: (fileName: string) => void;
   t: Translator;
 };
 
@@ -56,7 +59,16 @@ function formatDuration(ms: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function DiscoverTab({ sessions, t }: DiscoverTabProps) {
+function formatDateStamp(input: string): string {
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) {
+    return "report";
+  }
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function DiscoverTab({ sessions, onExportPdf, t }: DiscoverTabProps) {
   const [selectionMode, setSelectionMode] = useState<InsightSelectionMode>("timeRange");
   const [timeRange, setTimeRange] = useState<InsightTimeRange>();
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
@@ -259,6 +271,14 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
     ? t("status.discoverRunning", { elapsed: formatDuration(runningElapsedMs) })
     : undefined;
   const selectedPerson = result?.people.find((person) => person.name === selectedPersonName);
+  const discoverPdfFileName = useMemo(() => {
+    const selectionLabel =
+      selectionMode === "timeRange" && timeRange ? timeRange : "selected-sessions";
+    const generatedDate = result ? formatDateStamp(result.generatedAt) : "report";
+    return (
+      sanitizeFileNameSegment(`discover-${selectionLabel}-${generatedDate}`) || "discover-report"
+    );
+  }, [result, selectionMode, timeRange]);
   const formatSuggestionSources = (sourceSessionIds: string[]) =>
     sourceSessionIds
       .map((sessionId) => sessionNameById.get(sessionId) ?? sessionId)
@@ -272,14 +292,24 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
           <h2>{t("discover.title")}</h2>
           <p>{t("discover.subtitle")}</p>
         </div>
-        <button
-          type="button"
-          className="discover-refresh-btn"
-          onClick={() => void runInsight(true)}
-          disabled={isRunning || !hasValidSelection}
-        >
-          {isRunning ? t("discover.refreshing") : t("discover.refresh")}
-        </button>
+        <div className="discover-header-actions">
+          <button
+            type="button"
+            className="btn-secondary discover-export-btn"
+            onClick={() => onExportPdf(discoverPdfFileName)}
+            disabled={isRunning || !result}
+          >
+            {t("discover.exportPdf")}
+          </button>
+          <button
+            type="button"
+            className="discover-refresh-btn"
+            onClick={() => void runInsight(true)}
+            disabled={isRunning || !hasValidSelection}
+          >
+            {isRunning ? t("discover.refreshing") : t("discover.refresh")}
+          </button>
+        </div>
       </header>
 
       <div className="discover-toolbar">
@@ -632,6 +662,20 @@ function DiscoverTab({ sessions, t }: DiscoverTabProps) {
           </div>
         )}
       </div>
+
+      {result && (
+        <div className="discover-print-host" aria-hidden="true">
+          <DiscoverPdfReport
+            result={result}
+            selectionMode={selectionMode}
+            timeRange={timeRange}
+            keyword={effectiveKeyword}
+            includeSuggestions={includeSuggestions}
+            sessionNameById={sessionNameById}
+            t={t}
+          />
+        </div>
+      )}
     </section>
   );
 }
