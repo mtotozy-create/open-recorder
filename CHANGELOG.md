@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.0...v0.4.1) (2026-03-25)
+
+### Features
+
+* add discover PDF export and release notes ([d5525f4](https://github-mtotozy/mtotozy-create/open-recorder/commit/d5525f477be25a85ced53abb05fb9700f66b03e2))
+
 ## [0.4.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.3.1...v0.4.0) (2026-03-24)
 
 ### Features
