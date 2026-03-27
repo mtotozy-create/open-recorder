@@ -12,33 +12,43 @@ import {
 } from "./release-recommendation.mjs";
 import { writeReleaseNotesFile } from "./release-notes.mjs";
 
-const dmgOutputDir = path.join(
-  rootDir,
-  "src-tauri",
-  "target",
-  "release",
-  "bundle",
-  "dmg"
-);
+const tauriTargetDir = path.join(rootDir, "src-tauri", "target");
 
 function findReleaseAssets(version) {
-  if (!fs.existsSync(dmgOutputDir)) {
+  if (!fs.existsSync(tauriTargetDir)) {
     return [];
   }
 
   const versionMarker = `_${version}_`;
+  const candidateDirectories = fs
+    .readdirSync(tauriTargetDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(tauriTargetDir, entry.name, "release", "bundle", "dmg"));
 
-  return fs
-    .readdirSync(dmgOutputDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => entry.name)
-    .filter(
-      (fileName) =>
-        fileName.endsWith(".dmg") &&
-        (fileName.includes(versionMarker) || fileName.includes(`_${version}.dmg`))
-    )
-    .sort()
-    .map((fileName) => path.join(dmgOutputDir, fileName));
+  candidateDirectories.push(path.join(tauriTargetDir, "release", "bundle", "dmg"));
+
+  const uniqueDirectories = [...new Set(candidateDirectories)].filter((directoryPath) =>
+    fs.existsSync(directoryPath)
+  );
+  const assetPaths = [];
+
+  for (const directoryPath of uniqueDirectories) {
+    const matches = fs
+      .readdirSync(directoryPath, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .filter(
+        (fileName) =>
+          fileName.endsWith(".dmg") &&
+          (fileName.includes(versionMarker) || fileName.includes(`_${version}.dmg`))
+      )
+      .sort()
+      .map((fileName) => path.join(directoryPath, fileName));
+
+    assetPaths.push(...matches);
+  }
+
+  return assetPaths;
 }
 
 const passthroughArgs = process.argv.slice(2);
@@ -116,7 +126,7 @@ try {
   const releaseAssets = findReleaseAssets(releasedVersion);
   if (releaseAssets.length === 0) {
     throw new Error(
-      `Failed to find DMG asset for version ${releasedVersion} in ${dmgOutputDir}`
+      `Failed to find DMG assets for version ${releasedVersion} in ${tauriTargetDir}`
     );
   }
 
