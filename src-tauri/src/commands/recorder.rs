@@ -530,9 +530,8 @@ fn resolve_realtime_provider_config(
     translation_enabled: bool,
     translation_target_language: String,
 ) -> Result<AliyunTingwuRealtimeConfig, String> {
-    let provider = storage
-        .data
-        .settings
+    let settings = storage.get_settings()?;
+    let provider = settings
         .providers
         .iter()
         .find(|item| item.kind == ProviderKind::AliyunTingwu)
@@ -762,9 +761,8 @@ fn pause_realtime_if_session_paused(
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
         storage
-            .data
-            .sessions
-            .get(session_id)
+            .get_session(session_id)?
+            .as_ref()
             .map(|session| matches!(session.status, SessionStatus::Paused))
             .unwrap_or(false)
     };
@@ -797,13 +795,11 @@ fn persist_realtime_segments(
         return Ok(());
     }
 
-    let mut storage_lock = storage
+    let storage_lock = storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-    let session = storage_lock
-        .data
-        .sessions
-        .get_mut(session_id)
+    let mut session = storage_lock
+        .get_session(session_id)?
         .ok_or_else(|| "session not found".to_string())?;
     session.transcript = segments
         .into_iter()
@@ -814,7 +810,7 @@ fn persist_realtime_segments(
         })
         .collect();
     session.updated_at = now_iso();
-    storage_lock.save()?;
+    storage_lock.upsert_session(&session)?;
     Ok(())
 }
 
@@ -1223,13 +1219,11 @@ fn persist_segment_meta(
         file_size_bytes,
     };
 
-    let mut state = storage
+    let state = storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-    let session = state
-        .data
-        .sessions
-        .get_mut(&task.session_id)
+    let mut session = state
+        .get_session(&task.session_id)?
         .ok_or_else(|| "session not found".to_string())?;
     session.audio_segments.push(meta.path.clone());
     session.audio_segment_meta.push(meta);
@@ -1237,7 +1231,7 @@ fn persist_segment_meta(
     session.sample_rate = final_sample_rate;
     session.channels = final_channels;
     session.updated_at = now_iso();
-    state.save()?;
+    state.upsert_session(&session)?;
     Ok(())
 }
 
@@ -1247,13 +1241,11 @@ fn update_finalizing_session_status(
     error: Option<String>,
     storage: &Arc<Mutex<Storage>>,
 ) -> Result<(), String> {
-    let mut state = storage
+    let state = storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-    let session = state
-        .data
-        .sessions
-        .get_mut(session_id)
+    let mut session = state
+        .get_session(session_id)?
         .ok_or_else(|| "session not found".to_string())?;
     session.status = status;
     session.updated_at = now_iso();
@@ -1263,7 +1255,7 @@ fn update_finalizing_session_status(
             session_id, reason
         );
     }
-    state.save()?;
+    state.upsert_session(&session)?;
     Ok(())
 }
 
@@ -1416,10 +1408,10 @@ fn rotate_segment_if_needed(
         return;
     }
 
-    if let Ok(mut storage_lock) = storage.lock() {
-        if let Some(session) = storage_lock.data.sessions.get_mut(&shared.session_id) {
+    if let Ok(storage_lock) = storage.lock() {
+        if let Ok(Some(mut session)) = storage_lock.get_session(&shared.session_id) {
             session.updated_at = now_iso();
-            let _ = storage_lock.save();
+            let _ = storage_lock.upsert_session(&session);
         }
     }
 }
@@ -1549,18 +1541,16 @@ fn update_session_status(
     status: SessionStatus,
     elapsed_ms: u64,
 ) -> Result<(), String> {
-    let mut state = storage
+    let state = storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-    let session = state
-        .data
-        .sessions
-        .get_mut(session_id)
+    let mut session = state
+        .get_session(session_id)?
         .ok_or_else(|| "session not found".to_string())?;
     session.status = status;
     session.elapsed_ms = elapsed_ms;
     session.updated_at = now_iso();
-    state.save()?;
+    state.upsert_session(&session)?;
     Ok(())
 }
 
@@ -1766,14 +1756,12 @@ pub fn recorder_start(
         realtime_translation_enabled_by_default,
         realtime_translation_target_language_by_default,
     ) = {
-        let mut storage = state
+        let storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
-        storage.data.settings.normalize();
-        let realtime_provider = storage
-            .data
-            .settings
+        let settings = storage.get_settings()?;
+        let realtime_provider = settings
             .providers
             .iter()
             .find(|provider| provider.kind == ProviderKind::AliyunTingwu)
@@ -1810,9 +1798,9 @@ pub fn recorder_start(
             .unwrap_or(16000);
         (
             storage.session_audio_dir(&session_id)?,
-            storage.data.settings.recording_segment_seconds,
+            settings.recording_segment_seconds,
             normalize_requested_input_device_id(
-                storage.data.settings.recording_input_device_id.clone(),
+                settings.recording_input_device_id.clone(),
             ),
             realtime_default,
             realtime_format_default,
@@ -1840,43 +1828,40 @@ pub fn recorder_start(
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-        storage.data.sessions.insert(
-            session_id.clone(),
-            Session {
-                id: session_id.clone(),
-                name: None,
-                discoverable: true,
-                status: SessionStatus::Recording,
-                created_at: now.clone(),
-                updated_at: now,
-                input_device_id: Some(resolved_device.id.clone()),
-                audio_segments: vec![],
-                audio_segment_meta: vec![],
-                quality_preset: target_quality.clone(),
-                sample_rate: actual_sample_rate,
-                channels: actual_channels,
-                elapsed_ms: 0,
-                tags: vec![DEFAULT_RECORDING_SESSION_TAG.to_string()],
-                exported_wav_path: None,
-                exported_wav_size: None,
-                exported_wav_created_at: None,
-                exported_mp3_path: None,
-                exported_mp3_size: None,
-                exported_mp3_created_at: None,
-                exported_m4a_path: None,
-                exported_m4a_size: None,
-                exported_m4a_created_at: None,
-                transcript: vec![],
-                summary: None,
-            },
-        );
+        let mut settings = storage.get_settings()?;
+        let session = Session {
+            id: session_id.clone(),
+            name: None,
+            discoverable: true,
+            status: SessionStatus::Recording,
+            created_at: now.clone(),
+            updated_at: now,
+            input_device_id: Some(resolved_device.id.clone()),
+            audio_segments: vec![],
+            audio_segment_meta: vec![],
+            quality_preset: target_quality.clone(),
+            sample_rate: actual_sample_rate,
+            channels: actual_channels,
+            elapsed_ms: 0,
+            tags: vec![DEFAULT_RECORDING_SESSION_TAG.to_string()],
+            exported_wav_path: None,
+            exported_wav_size: None,
+            exported_wav_created_at: None,
+            exported_mp3_path: None,
+            exported_mp3_size: None,
+            exported_mp3_created_at: None,
+            exported_m4a_path: None,
+            exported_m4a_size: None,
+            exported_m4a_created_at: None,
+            transcript: vec![],
+            summary: None,
+        };
         merge_session_tags_into_catalog(
-            &mut storage.data.settings.session_tag_catalog,
+            &mut settings.session_tag_catalog,
             &[DEFAULT_RECORDING_SESSION_TAG.to_string()],
         );
-        storage.data.settings.normalize();
-        storage.save()?;
+        settings.normalize();
+        storage.save_settings_and_session(&settings, &session)?;
     }
     clear_processing_state(&session_id);
 
@@ -2342,9 +2327,7 @@ pub fn recorder_status(
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
     let session = storage
-        .data
-        .sessions
-        .get(&session_id)
+        .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
     let (pending_jobs, finalizing, last_processing_error) = processing_snapshot(&session_id);
     let phase = if matches!(runtime_phase, RecorderPhase::Error) {
@@ -2437,9 +2420,7 @@ pub fn recorder_export(
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
         let session = storage
-            .data
-            .sessions
-            .get(&session_id)
+            .get_session(&session_id)?
             .ok_or_else(|| "session not found".to_string())?;
         if matches!(session.status, SessionStatus::Processing) {
             return Err(
@@ -2449,8 +2430,8 @@ pub fn recorder_export(
         }
         (
             session.audio_segments.clone(),
-            resolve_existing_exported_audio_path(session, &format),
-            resolve_fallback_export_source(session),
+            resolve_existing_exported_audio_path(&session, &format),
+            resolve_fallback_export_source(&session),
             storage.session_export_dir(&session_id)?,
         )
     };
@@ -2475,14 +2456,12 @@ pub fn recorder_export(
     };
 
     {
-        let mut storage = state
+        let storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
-        let session = storage
-            .data
-            .sessions
-            .get_mut(&session_id)
+        let mut session = storage
+            .get_session(&session_id)?
             .ok_or_else(|| "session not found".to_string())?;
         let file_size_bytes = std::fs::metadata(&output_path)
             .map(|m| m.len())
@@ -2505,7 +2484,7 @@ pub fn recorder_export(
             }
         }
         session.updated_at = now_iso();
-        storage.save()?;
+        storage.upsert_session(&session)?;
     }
 
     Ok(RecorderExportResponse {

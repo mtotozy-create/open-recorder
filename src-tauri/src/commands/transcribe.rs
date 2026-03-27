@@ -348,9 +348,7 @@ pub fn session_prepare_transcription_audio(
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
         let session = storage
-            .data
-            .sessions
-            .get(&session_id)
+            .get_session(&session_id)?
             .ok_or_else(|| "session not found".to_string())?;
         if matches!(session.status, SessionStatus::Processing) {
             return Err(
@@ -419,17 +417,17 @@ pub fn session_prepare_transcription_audio(
     );
 
     if prepared.merged {
-        let mut storage = state
+        let storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
-        if let Some(session) = storage.data.sessions.get_mut(&session_id) {
+        if let Some(mut session) = storage.get_session(&session_id)? {
             session.exported_m4a_path = Some(prepared.selected_path.clone());
             session.exported_m4a_size = Some(prepared.merged_file_size_bytes.unwrap_or(0));
             session.exported_m4a_created_at = Some(now_iso());
             session.updated_at = now_iso();
+            storage.upsert_session(&session)?;
         }
-        storage.save()?;
     }
 
     Ok(SessionPreparedAudioResponse {
@@ -465,23 +463,17 @@ pub fn transcribe_enqueue(
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-        storage.data.jobs.insert(
-            job_id.clone(),
-            Job {
-                id: job_id.clone(),
-                session_id: session_id.clone(),
-                kind: JobKind::Transcription,
-                status: JobStatus::Running,
-                created_at: now.clone(),
-                updated_at: now.clone(),
-                error: None,
-                progress_msg: None,
-            },
-        );
-
-        storage.data.settings.normalize();
-        let settings = storage.data.settings.clone();
+        let settings = storage.get_settings()?;
+        let mut job = Job {
+            id: job_id.clone(),
+            session_id: session_id.clone(),
+            kind: JobKind::Transcription,
+            status: JobStatus::Running,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            error: None,
+            progress_msg: None,
+        };
         let (
             raw_segment_paths,
             raw_segment_meta,
@@ -491,35 +483,26 @@ pub fn transcribe_enqueue(
             session_sample_rate,
             session_channels,
         ) = {
-            if storage
-                .data
-                .sessions
-                .get(&session_id)
-                .map(|session| matches!(session.status, SessionStatus::Processing))
-                .unwrap_or(false)
-            {
-                if let Some(job) = storage.data.jobs.get_mut(&job_id) {
-                    job.status = JobStatus::Failed;
-                    job.error = Some(
-                        "session is still processing segments; transcription is temporarily unavailable"
-                            .to_string(),
-                    );
-                    job.updated_at = now_iso();
-                }
-                storage.save()?;
+            let mut session = storage
+                .get_session(&session_id)?
+                .ok_or_else(|| "session not found".to_string())?;
+
+            if matches!(session.status, SessionStatus::Processing) {
+                job.status = JobStatus::Failed;
+                job.error = Some(
+                    "session is still processing segments; transcription is temporarily unavailable"
+                        .to_string(),
+                );
+                job.updated_at = now_iso();
+                storage.upsert_job(&job)?;
                 return Err(
                     "session is still processing segments; transcription is temporarily unavailable"
                         .to_string(),
                 );
             }
-
-            let session = storage
-                .data
-                .sessions
-                .get_mut(&session_id)
-                .ok_or_else(|| "session not found".to_string())?;
             session.status = SessionStatus::Transcribing;
             session.updated_at = now_iso();
+            storage.save_session_and_job(&session, &job)?;
             (
                 session.audio_segments.clone(),
                 session.audio_segment_meta.clone(),
@@ -535,19 +518,18 @@ pub fn transcribe_enqueue(
             && exported_m4a_path.is_none()
             && exported_mp3_path.is_none()
         {
-            if let Some(session) = storage.data.sessions.get_mut(&session_id) {
-                session.status = SessionStatus::Failed;
-                session.updated_at = now_iso();
-            }
-            if let Some(job) = storage.data.jobs.get_mut(&job_id) {
-                job.status = JobStatus::Failed;
-                job.error = Some(
-                    "audio segments and exported files are empty; record or export audio first"
-                        .to_string(),
-                );
-                job.updated_at = now_iso();
-            }
-            storage.save()?;
+            let mut session = storage
+                .get_session(&session_id)?
+                .ok_or_else(|| "session not found".to_string())?;
+            session.status = SessionStatus::Failed;
+            session.updated_at = now_iso();
+            job.status = JobStatus::Failed;
+            job.error = Some(
+                "audio segments and exported files are empty; record or export audio first"
+                    .to_string(),
+            );
+            job.updated_at = now_iso();
+            storage.save_session_and_job(&session, &job)?;
             return Err(
                 "audio segments and exported files are empty; record or export audio first"
                     .to_string(),
@@ -712,12 +694,12 @@ pub fn transcribe_enqueue(
 
     std::thread::spawn(move || {
         let update_progress = |msg: &str| {
-            if let Ok(mut storage) = storage_arc.lock() {
-                if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+            if let Ok(storage) = storage_arc.lock() {
+                if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                     job.progress_msg = Some(msg.to_string());
                     job.updated_at = now_iso();
+                    let _ = storage.upsert_job(&job);
                 }
-                let _ = storage.save();
             }
         };
 
@@ -736,33 +718,34 @@ pub fn transcribe_enqueue(
         ) {
             Ok(value) => value,
             Err(error) => {
-                if let Ok(mut storage) = storage_arc.lock() {
-                    if let Some(session) = storage.data.sessions.get_mut(&session_id_clone) {
+                if let Ok(storage) = storage_arc.lock() {
+                    if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
                         session.status = SessionStatus::Failed;
                         session.updated_at = now_iso();
+                        let _ = storage.upsert_session(&session);
                     }
-                    if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+                    if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                         job.status = JobStatus::Failed;
                         job.progress_msg = None;
                         job.error = Some(error);
                         job.updated_at = now_iso();
+                        let _ = storage.upsert_job(&job);
                     }
-                    let _ = storage.save();
                 }
                 return;
             }
         };
 
         if prepared_audio.merged {
-            if let Ok(mut storage) = storage_arc.lock() {
-                if let Some(session) = storage.data.sessions.get_mut(&session_id_clone) {
+            if let Ok(storage) = storage_arc.lock() {
+                if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
                     session.exported_m4a_path = Some(prepared_audio.selected_path.clone());
                     session.exported_m4a_size =
                         Some(prepared_audio.merged_file_size_bytes.unwrap_or(0));
                     session.exported_m4a_created_at = Some(now_iso());
                     session.updated_at = now_iso();
+                    let _ = storage.upsert_session(&session);
                 }
-                let _ = storage.save();
             }
         }
 
@@ -795,15 +778,16 @@ pub fn transcribe_enqueue(
         };
 
         // 回写结果到 storage
-        if let Ok(mut storage) = storage_arc.lock() {
+        if let Ok(storage) = storage_arc.lock() {
             match transcript_result {
                 Ok(transcript) => {
-                    if let Some(session) = storage.data.sessions.get_mut(&session_id_clone) {
+                    if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
                         session.transcript = transcript;
                         session.status = SessionStatus::Stopped;
                         session.updated_at = now_iso();
+                        let _ = storage.upsert_session(&session);
                     }
-                    if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+                    if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                         job.status = JobStatus::Completed;
                         job.error = None;
                         let keep_warning = job
@@ -815,22 +799,24 @@ pub fn transcribe_enqueue(
                             job.progress_msg = None;
                         }
                         job.updated_at = now_iso();
+                        let _ = storage.upsert_job(&job);
                     }
                 }
                 Err(error) => {
-                    if let Some(session) = storage.data.sessions.get_mut(&session_id_clone) {
+                    if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
                         session.status = SessionStatus::Failed;
                         session.updated_at = now_iso();
+                        let _ = storage.upsert_session(&session);
                     }
-                    if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+                    if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                         job.status = JobStatus::Failed;
                         job.progress_msg = None;
                         job.error = Some(error);
                         job.updated_at = now_iso();
+                        let _ = storage.upsert_job(&job);
                     }
                 }
             }
-            let _ = storage.save();
         }
     });
 

@@ -122,14 +122,7 @@ pub fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionSummary>, S
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-    let mut list: Vec<SessionSummary> = storage
-        .data
-        .sessions
-        .values()
-        .map(SessionSummary::from)
-        .collect();
-    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    Ok(list)
+    storage.list_sessions()
 }
 
 #[tauri::command]
@@ -139,10 +132,7 @@ pub fn session_get(session_id: String, state: State<'_, AppState>) -> Result<Ses
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
     storage
-        .data
-        .sessions
-        .get(&session_id)
-        .cloned()
+        .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())
 }
 
@@ -189,55 +179,51 @@ pub fn session_create_from_audio(
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let mut settings = storage.get_settings()?;
     let default_tags = vec![DEFAULT_IMPORTED_SESSION_TAG.to_string()];
-
-    storage.data.sessions.insert(
-        session_id.clone(),
-        Session {
-            id: session_id.clone(),
-            name: None,
-            discoverable: true,
-            status: SessionStatus::Stopped,
-            created_at: now.clone(),
-            updated_at: now.clone(),
-            input_device_id: None,
-            audio_segments: vec![saved_path.clone()],
-            audio_segment_meta: vec![AudioSegmentMeta {
-                path: saved_path,
-                sequence: 0,
-                started_at: now.clone(),
-                ended_at: now,
-                duration_ms: duration_ms.unwrap_or(0),
-                sample_rate: 0,
-                channels: 0,
-                format,
-                file_size_bytes: file_size,
-            }],
-            quality_preset: RecordingQualityPreset::Standard,
+    let session = Session {
+        id: session_id.clone(),
+        name: None,
+        discoverable: true,
+        status: SessionStatus::Stopped,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+        input_device_id: None,
+        audio_segments: vec![saved_path.clone()],
+        audio_segment_meta: vec![AudioSegmentMeta {
+            path: saved_path,
+            sequence: 0,
+            started_at: now.clone(),
+            ended_at: now,
+            duration_ms: duration_ms.unwrap_or(0),
             sample_rate: 0,
             channels: 0,
-            elapsed_ms: duration_ms.unwrap_or(0),
-            tags: default_tags.clone(),
-            exported_wav_path: None,
-            exported_wav_size: None,
-            exported_wav_created_at: None,
-            exported_mp3_path: None,
-            exported_mp3_size: None,
-            exported_mp3_created_at: None,
-            exported_m4a_path: None,
-            exported_m4a_size: None,
-            exported_m4a_created_at: None,
-            transcript: vec![],
-            summary: None,
-        },
-    );
+            format,
+            file_size_bytes: file_size,
+        }],
+        quality_preset: RecordingQualityPreset::Standard,
+        sample_rate: 0,
+        channels: 0,
+        elapsed_ms: duration_ms.unwrap_or(0),
+        tags: default_tags.clone(),
+        exported_wav_path: None,
+        exported_wav_size: None,
+        exported_wav_created_at: None,
+        exported_mp3_path: None,
+        exported_mp3_size: None,
+        exported_mp3_created_at: None,
+        exported_m4a_path: None,
+        exported_m4a_size: None,
+        exported_m4a_created_at: None,
+        transcript: vec![],
+        summary: None,
+    };
     merge_session_tags_into_catalog(
-        &mut storage.data.settings.session_tag_catalog,
+        &mut settings.session_tag_catalog,
         &default_tags,
     );
-    storage.data.settings.normalize();
-
-    storage.save()?;
+    settings.normalize();
+    storage.save_settings_and_session(&settings, &session)?;
     Ok(StartSessionResponse {
         session_id,
         input_device_id: None,
@@ -252,24 +238,21 @@ pub fn session_rename(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut storage = state
+    let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-    let normalized = name.trim();
-    let session = storage
-        .data
-        .sessions
-        .get_mut(&session_id)
+    let mut session = storage
+        .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
+    let normalized = name.trim();
     session.name = if normalized.is_empty() {
         None
     } else {
         Some(normalized.to_string())
     };
     session.updated_at = now_iso();
-    storage.save()?;
+    storage.upsert_session(&session)?;
     Ok(())
 }
 
@@ -279,24 +262,13 @@ pub fn session_delete(session_id: String, state: State<'_, AppState>) -> Result<
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-
     let session = storage
-        .data
-        .sessions
-        .remove(&session_id)
+        .delete_session_and_jobs(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
 
     for path in session.audio_segments {
         let _ = std::fs::remove_file(&path);
     }
-
-    // also remove jobs matching this session_id
-    storage
-        .data
-        .jobs
-        .retain(|_, job| job.session_id != session_id);
-
-    storage.save()?;
     Ok(())
 }
 
@@ -311,24 +283,22 @@ pub fn session_delete_segment(
         return Err("segment path is required".to_string());
     }
 
-    let mut storage = state
+    let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-    let session = storage
-        .data
-        .sessions
-        .get_mut(&session_id)
+    let mut session = storage
+        .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
 
-    ensure_segment_deletion_allowed(session)?;
-    if !remove_segment_references(session, target_path) {
+    ensure_segment_deletion_allowed(&session)?;
+    if !remove_segment_references(&mut session, target_path) {
         return Err("audio segment not found".to_string());
     }
 
     remove_audio_file_if_present(target_path)?;
-    storage.save()?;
+    session.updated_at = now_iso();
+    storage.upsert_session(&session)?;
     Ok(())
 }
 
@@ -337,20 +307,17 @@ pub fn session_delete_segments(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut storage = state
+    let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-    let session = storage
-        .data
-        .sessions
-        .get_mut(&session_id)
+    let mut session = storage
+        .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
 
-    ensure_segment_deletion_allowed(session)?;
+    ensure_segment_deletion_allowed(&session)?;
 
-    let segment_paths = collect_session_audio_paths(session);
+    let segment_paths = collect_session_audio_paths(&session);
     if segment_paths.is_empty() {
         return Ok(());
     }
@@ -361,7 +328,8 @@ pub fn session_delete_segments(
 
     session.audio_segments.clear();
     session.audio_segment_meta.clear();
-    storage.save()?;
+    session.updated_at = now_iso();
+    storage.upsert_session(&session)?;
     Ok(())
 }
 
@@ -376,23 +344,19 @@ pub fn session_set_tags(
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-    {
-        let session = storage
-            .data
-            .sessions
-            .get_mut(&session_id)
-            .ok_or_else(|| "session not found".to_string())?;
-        session.tags = normalized_tags.clone();
-        session.updated_at = now_iso();
-    }
+    let mut session = storage
+        .get_session(&session_id)?
+        .ok_or_else(|| "session not found".to_string())?;
+    let mut settings = storage.get_settings()?;
+    session.tags = normalized_tags.clone();
+    session.updated_at = now_iso();
 
     merge_session_tags_into_catalog(
-        &mut storage.data.settings.session_tag_catalog,
+        &mut settings.session_tag_catalog,
         &normalized_tags,
     );
-    storage.data.settings.normalize();
-    storage.save()?;
+    settings.normalize();
+    storage.save_settings_and_session(&settings, &session)?;
     Ok(())
 }
 
@@ -402,19 +366,16 @@ pub fn session_set_discoverable(
     discoverable: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut storage = state
+    let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-    let session = storage
-        .data
-        .sessions
-        .get_mut(&session_id)
+    let mut session = storage
+        .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
     session.discoverable = discoverable;
     session.updated_at = now_iso();
-    storage.save()?;
+    storage.upsert_session(&session)?;
     Ok(())
 }
 
@@ -424,15 +385,12 @@ pub fn session_update_summary_raw_markdown(
     raw_markdown: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut storage = state
+    let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-    let session = storage
-        .data
-        .sessions
-        .get_mut(&session_id)
+    let mut session = storage
+        .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
 
     if let Some(summary) = session.summary.as_mut() {
@@ -449,7 +407,7 @@ pub fn session_update_summary_raw_markdown(
     }
 
     session.updated_at = now_iso();
-    storage.save()?;
+    storage.upsert_session(&session)?;
     Ok(())
 }
 

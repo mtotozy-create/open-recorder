@@ -155,23 +155,22 @@ pub fn summary_enqueue(
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
+        let mut settings = storage.get_settings()?;
+        let mut job = Job {
+            id: job_id.clone(),
+            session_id: session_id.clone(),
+            kind: JobKind::Summary,
+            status: JobStatus::Running,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            error: None,
+            progress_msg: None,
+        };
+        let mut session = storage
+            .get_session(&session_id)?
+            .ok_or_else(|| "session not found".to_string())?;
 
-        storage.data.jobs.insert(
-            job_id.clone(),
-            Job {
-                id: job_id.clone(),
-                session_id: session_id.clone(),
-                kind: JobKind::Summary,
-                status: JobStatus::Running,
-                created_at: now.clone(),
-                updated_at: now.clone(),
-                error: None,
-                progress_msg: None,
-            },
-        );
-
-        storage.data.settings.normalize();
-        let settings = storage.data.settings.clone();
+        settings.normalize();
 
         let template = resolve_template(
             &settings.templates,
@@ -182,28 +181,17 @@ pub fn summary_enqueue(
         .cloned()
         .ok_or_else(|| "template not found".to_string())?;
 
-        let transcript = {
-            let session = storage
-                .data
-                .sessions
-                .get_mut(&session_id)
-                .ok_or_else(|| "session not found".to_string())?;
-            session.status = SessionStatus::Summarizing;
-            session.updated_at = now_iso();
-            session.transcript.clone()
-        };
+        session.status = SessionStatus::Summarizing;
+        session.updated_at = now_iso();
+        let transcript = session.transcript.clone();
 
         if transcript.is_empty() {
-            if let Some(session) = storage.data.sessions.get_mut(&session_id) {
-                session.status = SessionStatus::Failed;
-                session.updated_at = now_iso();
-            }
-            if let Some(job) = storage.data.jobs.get_mut(&job_id) {
-                job.status = JobStatus::Failed;
-                job.error = Some("transcript is empty; run transcription first".to_string());
-                job.updated_at = now_iso();
-            }
-            storage.save()?;
+            session.status = SessionStatus::Failed;
+            session.updated_at = now_iso();
+            job.status = JobStatus::Failed;
+            job.error = Some("transcript is empty; run transcription first".to_string());
+            job.updated_at = now_iso();
+            storage.save_session_and_job(&session, &job)?;
             return Err("transcript is empty; run transcription first".to_string());
         }
 
@@ -229,37 +217,29 @@ pub fn summary_enqueue(
                 "selected summary provider '{}' is disabled or not summary-capable",
                 provider.name
             );
-            if let Some(session) = storage.data.sessions.get_mut(&session_id) {
-                session.status = SessionStatus::Failed;
-                session.updated_at = now_iso();
-            }
-            if let Some(job) = storage.data.jobs.get_mut(&job_id) {
-                job.status = JobStatus::Failed;
-                job.error = Some(error.clone());
-                job.updated_at = now_iso();
-            }
-            storage.save()?;
+            session.status = SessionStatus::Failed;
+            session.updated_at = now_iso();
+            job.status = JobStatus::Failed;
+            job.error = Some(error.clone());
+            job.updated_at = now_iso();
+            storage.save_session_and_job(&session, &job)?;
             return Err(error);
         }
 
         let summary_config = match resolve_summary_config(provider) {
             Ok(config) => config,
             Err(error) => {
-                if let Some(session) = storage.data.sessions.get_mut(&session_id) {
-                    session.status = SessionStatus::Failed;
-                    session.updated_at = now_iso();
-                }
-                if let Some(job) = storage.data.jobs.get_mut(&job_id) {
-                    job.status = JobStatus::Failed;
-                    job.error = Some(error.clone());
-                    job.updated_at = now_iso();
-                }
-                storage.save()?;
+                session.status = SessionStatus::Failed;
+                session.updated_at = now_iso();
+                job.status = JobStatus::Failed;
+                job.error = Some(error.clone());
+                job.updated_at = now_iso();
+                storage.save_session_and_job(&session, &job)?;
                 return Err(error);
             }
         };
 
-        storage.save()?;
+        storage.save_session_and_job(&session, &job)?;
         (transcript, template, summary_config)
     };
 
@@ -269,12 +249,12 @@ pub fn summary_enqueue(
 
     std::thread::spawn(move || {
         let update_progress = |msg: &str| {
-            if let Ok(mut storage) = storage_arc.lock() {
-                if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+            if let Ok(storage) = storage_arc.lock() {
+                if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                     job.progress_msg = Some(msg.to_string());
                     job.updated_at = now_iso();
+                    let _ = storage.upsert_job(&job);
                 }
-                let _ = storage.save();
             }
         };
 
@@ -287,35 +267,38 @@ pub fn summary_enqueue(
             &summary_config,
         );
 
-        if let Ok(mut storage) = storage_arc.lock() {
+        if let Ok(storage) = storage_arc.lock() {
             match summary_result {
                 Ok(summary) => {
-                    if let Some(session) = storage.data.sessions.get_mut(&session_id_clone) {
+                    if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
                         session.summary = Some(summary);
                         session.status = SessionStatus::Completed;
                         session.updated_at = now_iso();
+                        let _ = storage.upsert_session(&session);
                     }
 
-                    if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+                    if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                         job.status = JobStatus::Completed;
                         job.error = None;
                         job.updated_at = now_iso();
+                        let _ = storage.upsert_job(&job);
                     }
                 }
                 Err(error) => {
-                    if let Some(session) = storage.data.sessions.get_mut(&session_id_clone) {
+                    if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
                         session.status = SessionStatus::Failed;
                         session.updated_at = now_iso();
+                        let _ = storage.upsert_session(&session);
                     }
 
-                    if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+                    if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                         job.status = JobStatus::Failed;
                         job.error = Some(error);
                         job.updated_at = now_iso();
+                        let _ = storage.upsert_job(&job);
                     }
                 }
             }
-            let _ = storage.save();
         }
     });
 

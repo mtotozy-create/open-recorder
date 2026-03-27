@@ -221,13 +221,13 @@ for model_id in sys.argv[2:]:
 pub fn local_provider_status(
     state: State<'_, AppState>,
 ) -> Result<LocalProviderStatusResponse, String> {
-    let mut storage = state
+    let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-    storage.data.settings.normalize();
+    let settings = storage.get_settings()?;
     let data_root = storage.data_root_dir()?;
-    build_status(&storage.data.settings, &data_root)
+    build_status(&settings, &data_root)
 }
 
 #[tauri::command]
@@ -235,15 +235,13 @@ pub fn local_provider_prepare(
     state: State<'_, AppState>,
 ) -> Result<LocalProviderStatusResponse, String> {
     let (bootstrap_python, venv_dir, model_cache_dir, offline_snapshot_models) = {
-        let mut storage = state
+        let storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
-        storage.data.settings.normalize();
+        let mut settings = storage.get_settings()?;
         let data_root = storage.data_root_dir()?;
-        let local_stt = storage
-            .data
-            .settings
+        let local_stt = settings
             .providers
             .iter_mut()
             .find(|provider| provider.kind == ProviderKind::LocalStt)
@@ -275,7 +273,8 @@ pub fn local_provider_prepare(
             .unwrap_or("python3")
             .to_string();
         let offline_snapshot_models = collect_offline_snapshot_models(local_stt);
-        storage.save()?;
+        settings.normalize();
+        storage.save_settings(&settings)?;
         (
             bootstrap_python,
             venv_dir,
@@ -341,11 +340,11 @@ pub fn local_provider_prepare(
         &offline_snapshot_models,
     )?;
 
-    let mut storage = state
+    let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-    storage.data.settings.normalize();
+    let settings = storage.get_settings()?;
     let data_root = storage.data_root_dir()?;
-    build_status(&storage.data.settings, &data_root)
+    build_status(&settings, &data_root)
 }

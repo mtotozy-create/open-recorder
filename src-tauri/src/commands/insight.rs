@@ -98,17 +98,15 @@ pub fn insight_get_cached(
     request: InsightQueryRequest,
     state: State<'_, AppState>,
 ) -> Result<Option<InsightResult>, String> {
-    let mut storage = state
+    let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-    storage.data.settings.normalize();
+    let settings = storage.get_settings()?;
     let normalized_query = normalize_insight_query(request)?;
-
-    let provider = resolve_discover_provider(&storage)?;
+    let provider = resolve_discover_provider(&settings)?;
     let summary_config = resolve_discover_config(provider)?;
-    let sessions = collect_source_sessions(&storage.data.sessions, &normalized_query.selection)?;
+    let sessions = collect_source_sessions(&storage.list_all_sessions()?, &normalized_query.selection)?;
 
     if sessions.is_empty() {
         return Ok(None);
@@ -124,9 +122,7 @@ pub fn insight_get_cached(
     );
 
     Ok(storage
-        .data
-        .insight_cache
-        .get(&cache_key)
+        .get_insight_cache(&cache_key)?
         .map(|entry| entry.result.clone()))
 }
 
@@ -153,21 +149,19 @@ pub fn insight_enqueue(
         include_suggestions,
         summary_config,
     ) = {
-        let mut storage = state
+        let storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
-
-        storage.data.settings.normalize();
+        let settings = storage.get_settings()?;
 
         let normalized_query = normalize_insight_query(request)?;
 
-        let provider = resolve_discover_provider(&storage)?;
+        let provider = resolve_discover_provider(&settings)?;
         let provider_id = provider.id.clone();
         let summary_config = resolve_discover_config(provider)?;
 
-        let sessions =
-            collect_source_sessions(&storage.data.sessions, &normalized_query.selection)?;
+        let sessions = collect_source_sessions(&storage.list_all_sessions()?, &normalized_query.selection)?;
         if sessions.is_empty() {
             return Err(normalized_query.empty_source_error);
         }
@@ -182,39 +176,30 @@ pub fn insight_enqueue(
             session_fingerprint.as_str(),
         );
 
-        if !force_refresh && storage.data.insight_cache.contains_key(&cache_key) {
-            storage.data.jobs.insert(
-                job_id.clone(),
-                Job {
-                    id: job_id.clone(),
-                    session_id: DISCOVER_JOB_SESSION_ID.to_string(),
-                    kind: JobKind::Insight,
-                    status: JobStatus::Completed,
-                    created_at: now.clone(),
-                    updated_at: now.clone(),
-                    error: None,
-                    progress_msg: Some("cache hit".to_string()),
-                },
-            );
-            storage.save()?;
-            return Ok(JobEnqueueResponse { job_id });
-        }
-
-        storage.data.jobs.insert(
-            job_id.clone(),
-            Job {
+        if !force_refresh && storage.get_insight_cache(&cache_key)?.is_some() {
+            storage.upsert_job(&Job {
                 id: job_id.clone(),
                 session_id: DISCOVER_JOB_SESSION_ID.to_string(),
                 kind: JobKind::Insight,
-                status: JobStatus::Running,
+                status: JobStatus::Completed,
                 created_at: now.clone(),
-                updated_at: now,
+                updated_at: now.clone(),
                 error: None,
-                progress_msg: Some("queued".to_string()),
-            },
-        );
+                progress_msg: Some("cache hit".to_string()),
+            })?;
+            return Ok(JobEnqueueResponse { job_id });
+        }
 
-        storage.save()?;
+        storage.upsert_job(&Job {
+            id: job_id.clone(),
+            session_id: DISCOVER_JOB_SESSION_ID.to_string(),
+            kind: JobKind::Insight,
+            status: JobStatus::Running,
+            created_at: now.clone(),
+            updated_at: now,
+            error: None,
+            progress_msg: Some("queued".to_string()),
+        })?;
 
         (
             state.storage.clone(),
@@ -233,12 +218,12 @@ pub fn insight_enqueue(
 
     std::thread::spawn(move || {
         let update_progress = |message: String| {
-            if let Ok(mut storage) = storage_arc.lock() {
-                if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+            if let Ok(storage) = storage_arc.lock() {
+                if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                     job.progress_msg = Some(message);
                     job.updated_at = now_iso();
+                    let _ = storage.upsert_job(&job);
                 }
-                let _ = storage.save();
             }
         };
 
@@ -261,13 +246,13 @@ pub fn insight_enqueue(
             ) {
                 Ok(value) => value,
                 Err(error) => {
-                    if let Ok(mut storage) = storage_arc.lock() {
-                        if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+                    if let Ok(storage) = storage_arc.lock() {
+                        if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                             job.status = JobStatus::Failed;
                             job.error = Some(error);
                             job.updated_at = now_iso();
+                            let _ = storage.upsert_job(&job);
                         }
-                        let _ = storage.save();
                     }
                     return;
                 }
@@ -297,28 +282,25 @@ pub fn insight_enqueue(
         };
 
         if let Ok(mut storage) = storage_arc.lock() {
-            storage.data.insight_cache.insert(
-                cache_key.clone(),
-                InsightCacheEntry {
-                    key: cache_key,
-                    result: insight_result,
-                    cached_at: now_iso(),
-                    session_fingerprint,
-                    provider_id,
-                    model: provider_model,
-                    prompt_version: INSIGHT_PROMPT_VERSION.to_string(),
-                    keyword,
-                },
-            );
-
-            if let Some(job) = storage.data.jobs.get_mut(&job_id_clone) {
+            let cache_entry = InsightCacheEntry {
+                key: cache_key,
+                result: insight_result,
+                cached_at: now_iso(),
+                session_fingerprint,
+                provider_id,
+                model: provider_model,
+                prompt_version: INSIGHT_PROMPT_VERSION.to_string(),
+                keyword,
+            };
+            if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                 job.status = JobStatus::Completed;
                 job.error = None;
                 job.updated_at = now_iso();
                 job.progress_msg = Some("done".to_string());
+                let _ = storage.save_job_and_insight_cache(&job, &cache_entry);
+            } else {
+                let _ = storage.upsert_insight_cache(&cache_entry);
             }
-
-            let _ = storage.save();
         }
     });
 
@@ -326,9 +308,8 @@ pub fn insight_enqueue(
 }
 
 fn resolve_discover_provider<'a>(
-    storage: &'a crate::storage::Storage,
+    settings: &'a crate::models::Settings,
 ) -> Result<&'a crate::models::ProviderConfig, String> {
-    let settings = &storage.data.settings;
     let provider = settings
         .providers
         .iter()
@@ -506,7 +487,7 @@ fn resolve_cutoff(time_range: &str) -> Result<DateTime<Utc>, String> {
 }
 
 fn collect_source_sessions(
-    sessions: &HashMap<String, Session>,
+    sessions: &[Session],
     selection: &InsightSelection,
 ) -> Result<Vec<InsightSourceSession>, String> {
     match selection {
@@ -520,13 +501,13 @@ fn collect_source_sessions(
 }
 
 fn collect_source_sessions_by_time_range(
-    sessions: &HashMap<String, Session>,
+    sessions: &[Session],
     time_range: &str,
 ) -> Result<Vec<InsightSourceSession>, String> {
     let cutoff = resolve_cutoff(time_range)?;
 
     let mut result = sessions
-        .values()
+        .iter()
         .filter_map(|session| {
             let source = build_source_session(session)?;
             let updated_at = parse_utc(session.updated_at.as_str());
@@ -544,12 +525,12 @@ fn collect_source_sessions_by_time_range(
 }
 
 fn collect_source_sessions_by_ids(
-    sessions: &HashMap<String, Session>,
+    sessions: &[Session],
     session_ids: &[String],
 ) -> Result<Vec<InsightSourceSession>, String> {
     let mut result = Vec::with_capacity(session_ids.len());
     for session_id in session_ids {
-        let Some(session) = sessions.get(session_id) else {
+        let Some(session) = sessions.iter().find(|session| session.id == *session_id) else {
             continue;
         };
         if let Some(source) = build_source_session(session) {
