@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.2](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.1...v0.4.2) (2026-03-27)
+
+### Features
+
+* improve job persistence and release bundling ([70c3abf](https://github-mtotozy/mtotozy-create/open-recorder/commit/70c3abfeb5f837c080af151a2d8adfbfe24bddbd))
+
 ## [0.4.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.0...v0.4.1) (2026-03-25)
 
 ### Features
