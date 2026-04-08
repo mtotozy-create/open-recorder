@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.4](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.3...v0.4.4) (2026-04-08)
+
+### Features
+
+* **session:** show segment created time ([5f7c0b8](https://github-mtotozy/mtotozy-create/open-recorder/commit/5f7c0b8dcf12b6a09352973b6103aa13f9d52c2f))
+
 ## [0.4.3](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.2...v0.4.3) (2026-04-08)
 
 ### Bug Fixes
