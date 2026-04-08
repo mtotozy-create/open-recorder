@@ -529,13 +529,19 @@ function SessionsTab({
   const summaryTaskRunning = isSummarizing || Boolean(runningSummaryJob);
   const hasMergedAudioFile = hasMergedAudio(activeSession);
   const segmentItems = useMemo(() => buildSessionSegmentItems(activeSession), [activeSession]);
-  const segmentDeletionBlockedReason = !hasMergedAudioFile
-    ? t("sessionDetail.deleteSegmentsRequiresMergedFile")
-    : activeSession?.status === "processing"
-      ? t("sessionDetail.deleteSegmentsProcessingDisabled")
+  const singleSegmentDeletionBlockedReason = activeSession?.status === "processing"
+    ? t("sessionDetail.deleteSegmentsProcessingDisabled")
+    : undefined;
+  const allSegmentsDeletionBlockedReason = activeSession?.status === "processing"
+    ? t("sessionDetail.deleteSegmentsProcessingDisabled")
+    : !hasMergedAudioFile
+      ? t("sessionDetail.deleteSegmentsRequiresMergedFile")
       : undefined;
-  const canDeleteSegments = Boolean(
-    activeSession && segmentItems.length > 0 && !segmentDeletionBlockedReason
+  const canDeleteSingleSegment = Boolean(
+    activeSession && segmentItems.length > 0 && !singleSegmentDeletionBlockedReason
+  );
+  const canDeleteAllSegments = Boolean(
+    activeSession && segmentItems.length > 0 && !allSegmentsDeletionBlockedReason
   );
   const summaryCopyText = activeSession?.summary?.rawMarkdown?.trim() ?? "";
   const canCopySummary =
@@ -1006,7 +1012,7 @@ function SessionsTab({
   }
 
   async function handleDeleteSingleSegment(segmentPath: string) {
-    if (!activeSession || isDeletingSegments || segmentDeletionBlockedReason) {
+    if (!activeSession || isDeletingSegments || singleSegmentDeletionBlockedReason) {
       return;
     }
 
@@ -1024,7 +1030,7 @@ function SessionsTab({
   }
 
   async function handleDeleteAllSegments() {
-    if (!activeSession || isDeletingSegments || segmentDeletionBlockedReason) {
+    if (!activeSession || isDeletingSegments || allSegmentsDeletionBlockedReason) {
       return;
     }
 
@@ -1691,17 +1697,17 @@ function SessionsTab({
                           type="button"
                           className="btn-secondary"
                           onClick={() => setDeleteDialog({ kind: "allSegments" })}
-                          disabled={!canDeleteSegments || isDeletingSegments}
-                          title={segmentDeletionBlockedReason}
+                          disabled={!canDeleteAllSegments || isDeletingSegments}
+                          title={allSegmentsDeletionBlockedReason}
                         >
                           {isDeletingSegments && !deletingSegmentPath
                             ? t("sessionDetail.deletingSegments")
                             : t("sessionDetail.deleteAllSegments")}
                         </button>
                       </div>
-                      {segmentDeletionBlockedReason && (
+                      {allSegmentsDeletionBlockedReason && (
                         <p className="empty-hint" style={{ marginTop: 0, marginBottom: "12px" }}>
-                          {segmentDeletionBlockedReason}
+                          {allSegmentsDeletionBlockedReason}
                         </p>
                       )}
                       <ul className="segment-meta-list" style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" }}>
@@ -1722,8 +1728,8 @@ function SessionsTab({
                                 type="button"
                                 className="btn-secondary"
                                 onClick={() => setDeleteDialog({ kind: "segment", path: item.path })}
-                                disabled={!canDeleteSegments || isDeletingSegments}
-                                title={segmentDeletionBlockedReason}
+                                disabled={!canDeleteSingleSegment || isDeletingSegments}
+                                title={singleSegmentDeletionBlockedReason}
                                 style={{ whiteSpace: "nowrap" }}
                               >
                                 {isDeletingSegments && deletingSegmentPath === item.path

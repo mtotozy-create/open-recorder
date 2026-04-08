@@ -65,13 +65,18 @@ fn session_has_merged_audio(session: &Session) -> bool {
     .any(|path| !path.trim().is_empty())
 }
 
-fn ensure_segment_deletion_allowed(session: &Session) -> Result<(), String> {
+fn ensure_single_segment_deletion_allowed(session: &Session) -> Result<(), String> {
     if matches!(session.status, SessionStatus::Processing) {
         return Err(
             "session is still processing segments; deleting audio segments is temporarily unavailable"
                 .to_string(),
         );
     }
+    Ok(())
+}
+
+fn ensure_all_segments_deletion_allowed(session: &Session) -> Result<(), String> {
+    ensure_single_segment_deletion_allowed(session)?;
     if !session_has_merged_audio(session) {
         return Err("merged audio file is required before deleting original segments".to_string());
     }
@@ -291,7 +296,7 @@ pub fn session_delete_segment(
         .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
 
-    ensure_segment_deletion_allowed(&session)?;
+    ensure_single_segment_deletion_allowed(&session)?;
     if !remove_segment_references(&mut session, target_path) {
         return Err("audio segment not found".to_string());
     }
@@ -315,7 +320,7 @@ pub fn session_delete_segments(
         .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
 
-    ensure_segment_deletion_allowed(&session)?;
+    ensure_all_segments_deletion_allowed(&session)?;
 
     let segment_paths = collect_session_audio_paths(&session);
     if segment_paths.is_empty() {
@@ -414,8 +419,8 @@ pub fn session_update_summary_raw_markdown(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_session_audio_paths, ensure_segment_deletion_allowed, remove_segment_references,
-        session_has_merged_audio,
+        collect_session_audio_paths, ensure_all_segments_deletion_allowed,
+        ensure_single_segment_deletion_allowed, remove_segment_references, session_has_merged_audio,
     };
     use crate::models::{AudioSegmentMeta, Session, SessionStatus};
 
@@ -452,20 +457,36 @@ mod tests {
     }
 
     #[test]
-    fn segment_deletion_requires_merged_audio() {
+    fn deleting_all_segments_requires_merged_audio() {
         let session = Session::default();
         assert_eq!(
-            ensure_segment_deletion_allowed(&session).unwrap_err(),
+            ensure_all_segments_deletion_allowed(&session).unwrap_err(),
             "merged audio file is required before deleting original segments"
         );
     }
 
     #[test]
-    fn segment_deletion_is_blocked_while_processing() {
+    fn deleting_single_segment_is_allowed_without_merged_audio() {
+        let session = Session::default();
+        assert!(ensure_single_segment_deletion_allowed(&session).is_ok());
+    }
+
+    #[test]
+    fn segment_deletion_is_blocked_while_processing_for_single_delete() {
         let mut session = build_session();
         session.status = SessionStatus::Processing;
         assert_eq!(
-            ensure_segment_deletion_allowed(&session).unwrap_err(),
+            ensure_single_segment_deletion_allowed(&session).unwrap_err(),
+            "session is still processing segments; deleting audio segments is temporarily unavailable"
+        );
+    }
+
+    #[test]
+    fn segment_deletion_is_blocked_while_processing_for_delete_all() {
+        let mut session = build_session();
+        session.status = SessionStatus::Processing;
+        assert_eq!(
+            ensure_all_segments_deletion_allowed(&session).unwrap_err(),
             "session is still processing segments; deleting audio segments is temporarily unavailable"
         );
     }
