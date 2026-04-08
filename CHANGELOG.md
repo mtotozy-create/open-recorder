@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.2...v0.4.3) (2026-04-08)
+
+### Bug Fixes
+
+* finalize release asset uploads ([15e8654](https://github-mtotozy/mtotozy-create/open-recorder/commit/15e86546f86fa9af42516639b5a223cb617e1319))
+* **session:** allow deleting individual segments before merge ([9f3ddca](https://github-mtotozy/mtotozy-create/open-recorder/commit/9f3ddca9ca24d81da66c388b70f0a23eb4e49635))
+
 ## [0.4.2](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.1...v0.4.2) (2026-03-27)
 
 ### Features
