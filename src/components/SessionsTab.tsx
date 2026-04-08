@@ -1723,6 +1723,12 @@ function SessionsTab({
                                 {item.meta && <span><strong>{t("sessionDetail.audioSegmentSampleRate")}:</strong> {item.meta.sampleRate}Hz</span>}
                                 {item.meta && <span><strong>{t("sessionDetail.audioSegmentChannels")}:</strong> {item.meta.channels}</span>}
                                 {item.meta?.fileSizeBytes !== undefined && <span><strong>{t("sessionDetail.audioSegmentFileSize")}:</strong> {formatFileSize(item.meta.fileSizeBytes)}</span>}
+                                {(item.meta?.endedAt || item.meta?.startedAt) && (
+                                  <span>
+                                    <strong>{t("sessionDetail.audioSegmentCreatedAt")}:</strong>{" "}
+                                    {formatDateTime(item.meta?.endedAt || item.meta?.startedAt || "")}
+                                  </span>
+                                )}
                               </div>
                               <button
                                 type="button"
