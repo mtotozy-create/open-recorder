@@ -4,12 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::models::{
     merge_session_tags_into_catalog, normalize_tags, InsightCacheEntry, Job, Session,
-    SessionSummary, Settings, DEFAULT_RECORDING_SESSION_TAG,
+    SessionStatus, SessionSummary, Settings, DEFAULT_RECORDING_SESSION_TAG,
 };
 
 const DATABASE_FILE_NAME: &str = "open-recorder.db";
@@ -124,6 +125,7 @@ impl Storage {
         let connection = open_connection(db_path)?;
         initialize_schema(&connection)?;
         ensure_settings_row(&connection)?;
+        recover_interrupted_sessions(&connection)?;
 
         Ok(Self {
             data_dir,
@@ -484,6 +486,24 @@ fn upsert_session(connection: &Connection, session: &Session) -> Result<(), Stri
         )
         .map_err(|error| format!("failed to save session '{}': {error}", session.id))?;
     Ok(())
+}
+
+fn recover_interrupted_sessions(connection: &Connection) -> Result<usize, String> {
+    let sessions = load_all_sessions(connection)?;
+    let mut recovered = 0_usize;
+
+    for mut session in sessions {
+        if !matches!(session.status, SessionStatus::Recording | SessionStatus::Paused) {
+            continue;
+        }
+
+        session.status = SessionStatus::Stopped;
+        session.updated_at = Utc::now().to_rfc3339();
+        upsert_session(connection, &session)?;
+        recovered += 1;
+    }
+
+    Ok(recovered)
 }
 
 fn load_job(connection: &Connection, job_id: &str) -> Result<Option<Job>, String> {
@@ -889,5 +909,74 @@ mod tests {
             .get_session("session-2")
             .expect("session should reload")
             .is_some());
+    }
+
+    #[test]
+    fn open_existing_recovers_interrupted_recording_sessions() {
+        let temp_dir = TempDirGuard::new("recover").expect("temp dir should be created");
+        let db_path = temp_dir.path().join(DATABASE_FILE_NAME);
+        let connection = open_connection(&db_path).expect("db should open");
+        super::initialize_schema(&connection).expect("schema should initialize");
+        super::ensure_settings_row(&connection).expect("settings row should exist");
+
+        let interrupted_recording = Session {
+            id: "session-recording".to_string(),
+            created_at: "2024-01-03T00:00:00Z".to_string(),
+            updated_at: "2024-01-03T00:00:00Z".to_string(),
+            status: SessionStatus::Recording,
+            tags: vec!["#or".to_string()],
+            ..Default::default()
+        };
+        let interrupted_paused = Session {
+            id: "session-paused".to_string(),
+            created_at: "2024-01-03T01:00:00Z".to_string(),
+            updated_at: "2024-01-03T01:00:00Z".to_string(),
+            status: SessionStatus::Paused,
+            tags: vec!["#or".to_string()],
+            ..Default::default()
+        };
+        let processing_session = Session {
+            id: "session-processing".to_string(),
+            created_at: "2024-01-03T02:00:00Z".to_string(),
+            updated_at: "2024-01-03T02:00:00Z".to_string(),
+            status: SessionStatus::Processing,
+            tags: vec!["#or".to_string()],
+            ..Default::default()
+        };
+
+        super::upsert_session(&connection, &interrupted_recording)
+            .expect("recording session should be stored");
+        super::upsert_session(&connection, &interrupted_paused)
+            .expect("paused session should be stored");
+        super::upsert_session(&connection, &processing_session)
+            .expect("processing session should be stored");
+        drop(connection);
+
+        let storage = Storage::open_existing(temp_dir.path().to_path_buf(), &db_path)
+            .expect("existing db should open");
+
+        let recovered_recording = storage
+            .get_session("session-recording")
+            .expect("recording session should load")
+            .expect("recording session should exist");
+        assert!(matches!(recovered_recording.status, SessionStatus::Stopped));
+        assert_ne!(recovered_recording.updated_at, "2024-01-03T00:00:00Z");
+
+        let recovered_paused = storage
+            .get_session("session-paused")
+            .expect("paused session should load")
+            .expect("paused session should exist");
+        assert!(matches!(recovered_paused.status, SessionStatus::Stopped));
+        assert_ne!(recovered_paused.updated_at, "2024-01-03T01:00:00Z");
+
+        let untouched_processing = storage
+            .get_session("session-processing")
+            .expect("processing session should load")
+            .expect("processing session should exist");
+        assert!(matches!(
+            untouched_processing.status,
+            SessionStatus::Processing
+        ));
+        assert_eq!(untouched_processing.updated_at, "2024-01-03T02:00:00Z");
     }
 }
