@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.4...v0.5.0) (2026-04-13)
+
+### Features
+
+* **session:** create session from selected segments ([f4f6475](https://github-mtotozy/mtotozy-create/open-recorder/commit/f4f64757de4335f0c8e2ca9c66ae90a9bb591f73))
+
+### Bug Fixes
+
+* **storage:** recover interrupted sessions on startup ([54b4bf1](https://github-mtotozy/mtotozy-create/open-recorder/commit/54b4bf1ce24fa40e5bb366687dc4e1c4659192e0))
+
 ## [0.4.4](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.3...v0.4.4) (2026-04-08)
 
 ### Features
