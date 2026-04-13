@@ -121,6 +121,17 @@ export async function createSessionFromAudio(
   return response.sessionId;
 }
 
+export async function createSessionFromSegments(
+  sessionId: string,
+  segmentPaths: string[]
+): Promise<string> {
+  const response = await invoke<{ sessionId: string }>("session_create_from_segments", {
+    sessionId,
+    segmentPaths
+  });
+  return response.sessionId;
+}
+
 export async function getSession(sessionId: string): Promise<SessionDetail> {
   return invoke("session_get", { sessionId });
 }

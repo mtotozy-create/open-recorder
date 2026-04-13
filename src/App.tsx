@@ -7,6 +7,7 @@ import SessionsTab from "./components/SessionsTab";
 import TabNav, { type AppTab } from "./components/TabNav";
 import {
   createSessionFromAudio,
+  createSessionFromSegments,
   deleteSessionSegment,
   deleteSessionSegments,
   enqueueSummary,
@@ -1443,6 +1444,31 @@ function App() {
     }
   }
 
+  async function onCreateSessionFromSelectedSegments(
+    sessionId: string,
+    segmentPaths: string[]
+  ) {
+    if (isCreatingSession || segmentPaths.length === 0) {
+      return;
+    }
+
+    setIsCreatingSession(true);
+    try {
+      const newSessionId = await createSessionFromSegments(sessionId, segmentPaths);
+      await refreshSessions();
+      setActiveSessionId(newSessionId);
+      await refreshSessionDetail(newSessionId);
+      setStatus("status.sessionCreateFromSegmentsFinished", {
+        count: String(segmentPaths.length)
+      });
+    } catch (error) {
+      setStatus("status.sessionCreateFromSegmentsFailed", { error: String(error) });
+      throw error;
+    } finally {
+      setIsCreatingSession(false);
+    }
+  }
+
   async function onRenameSession(sessionId: string, name: string) {
     const normalized = name.trim();
     const nextName = normalized.length > 0 ? normalized : undefined;
@@ -1725,6 +1751,9 @@ function App() {
           }}
           onSummaryTemplateChange={setSummaryTemplateId}
           onCreateSessionFromFile={(file) => void onCreateSessionFromFile(file)}
+          onCreateSessionFromSegments={(sessionId, segmentPaths) =>
+            void onCreateSessionFromSelectedSegments(sessionId, segmentPaths)
+          }
           onRefresh={() =>
             void refreshSessions().catch((error) => {
               setStatus("status.sessionsLoadFailed", { error: String(error) });

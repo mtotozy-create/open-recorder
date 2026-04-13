@@ -64,6 +64,10 @@ type SessionsTabProps = {
   isSummarizing?: boolean;
   isCreatingSession?: boolean;
   onCreateSessionFromFile: (file: File) => void | Promise<void>;
+  onCreateSessionFromSegments: (
+    sessionId: string,
+    segmentPaths: string[]
+  ) => void | Promise<void>;
   onRefresh: () => void;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => void;
@@ -405,6 +409,7 @@ function SessionsTab({
   isSummarizing = false,
   isCreatingSession = false,
   onCreateSessionFromFile,
+  onCreateSessionFromSegments,
   onRefresh,
   onSelectSession,
   onRenameSession,
@@ -439,6 +444,7 @@ function SessionsTab({
   const [isPreparingPlaybackAudio, setIsPreparingPlaybackAudio] = useState(false);
   const [isDeletingSegments, setIsDeletingSegments] = useState(false);
   const [deletingSegmentPath, setDeletingSegmentPath] = useState<string>();
+  const [selectedSegmentPaths, setSelectedSegmentPaths] = useState<string[]>([]);
   const [playbackAudioPath, setPlaybackAudioPath] = useState<string>();
   const [playbackAudioSrc, setPlaybackAudioSrc] = useState<string>();
   const [runningNowMs, setRunningNowMs] = useState<number>(() => Date.now());
@@ -529,6 +535,10 @@ function SessionsTab({
   const summaryTaskRunning = isSummarizing || Boolean(runningSummaryJob);
   const hasMergedAudioFile = hasMergedAudio(activeSession);
   const segmentItems = useMemo(() => buildSessionSegmentItems(activeSession), [activeSession]);
+  const selectedSegmentPathSet = useMemo(
+    () => new Set(selectedSegmentPaths),
+    [selectedSegmentPaths]
+  );
   const singleSegmentDeletionBlockedReason = activeSession?.status === "processing"
     ? t("sessionDetail.deleteSegmentsProcessingDisabled")
     : undefined;
@@ -542,6 +552,13 @@ function SessionsTab({
   );
   const canDeleteAllSegments = Boolean(
     activeSession && segmentItems.length > 0 && !allSegmentsDeletionBlockedReason
+  );
+  const selectedSegmentCount = selectedSegmentPaths.length;
+  const createSessionFromSegmentsBlockedReason = selectedSegmentCount > 0
+    ? undefined
+    : t("sessionDetail.createSessionFromSelectedSegmentsDisabled");
+  const canCreateSessionFromSegments = Boolean(
+    activeSession && selectedSegmentCount > 0 && !isCreatingSession
   );
   const summaryCopyText = activeSession?.summary?.rawMarkdown?.trim() ?? "";
   const canCopySummary =
@@ -572,7 +589,19 @@ function SessionsTab({
     setDeleteDialog(undefined);
     setIsDeletingSegments(false);
     setDeletingSegmentPath(undefined);
+    setSelectedSegmentPaths([]);
   }, [activeSession?.id, activeSession?.name, !!activeSession?.summary]);
+
+  useEffect(() => {
+    const availablePaths = new Set(segmentItems.map((item) => item.path));
+    setSelectedSegmentPaths((previous) => {
+      const next = previous.filter((path) => availablePaths.has(path));
+      if (next.length === previous.length && next.every((path, index) => path === previous[index])) {
+        return previous;
+      }
+      return next;
+    });
+  }, [segmentItems]);
 
   useEffect(() => {
     setIsSummaryEditing(false);
@@ -1042,6 +1071,35 @@ function SessionsTab({
       console.warn("[session-segments] failed to delete segments", { error: String(error) });
     } finally {
       setIsDeletingSegments(false);
+    }
+  }
+
+  function handleToggleSegmentSelection(segmentPath: string) {
+    if (isCreatingSession) {
+      return;
+    }
+    setSelectedSegmentPaths((previous) =>
+      previous.includes(segmentPath)
+        ? previous.filter((path) => path !== segmentPath)
+        : [...previous, segmentPath]
+    );
+  }
+
+  function handleClearSelectedSegments() {
+    setSelectedSegmentPaths([]);
+  }
+
+  async function handleCreateSessionFromSelectedSegments() {
+    if (!activeSession || isCreatingSession || selectedSegmentPaths.length === 0) {
+      return;
+    }
+
+    try {
+      await onCreateSessionFromSegments(activeSession.id, selectedSegmentPaths);
+    } catch (error) {
+      console.warn("[session-segments] failed to create session from selected segments", {
+        error: String(error)
+      });
     }
   }
 
@@ -1691,19 +1749,48 @@ function SessionsTab({
                   </div>
                   {segmentItems.length > 0 ? (
                     <div className="session-meta-full-width" style={{ gridColumn: "1 / -1", marginTop: "16px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginBottom: "12px", flexWrap: "wrap" }}>
+                      <div style={{ marginBottom: "12px" }}>
                         <h4 style={{ margin: 0, color: "var(--text-primary)" }}>{t("sessionDetail.audioSegmentsDetail")}</h4>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => setDeleteDialog({ kind: "allSegments" })}
-                          disabled={!canDeleteAllSegments || isDeletingSegments}
-                          title={allSegmentsDeletionBlockedReason}
+                        <p
+                          className="empty-hint"
+                          style={{ margin: "8px 0 0 0", whiteSpace: "nowrap" }}
                         >
-                          {isDeletingSegments && !deletingSegmentPath
-                            ? t("sessionDetail.deletingSegments")
-                            : t("sessionDetail.deleteAllSegments")}
-                        </button>
+                          {t("sessionDetail.selectedSegmentsCount", {
+                            count: String(selectedSegmentCount)
+                          })}
+                        </p>
+                        <div className="session-actions-row" style={{ marginTop: "8px" }}>
+                          <button
+                            type="button"
+                            className="action-btn"
+                            onClick={handleClearSelectedSegments}
+                            disabled={selectedSegmentCount === 0 || isCreatingSession}
+                          >
+                            {t("sessionDetail.clearSelectedSegments")}
+                          </button>
+                          <button
+                            type="button"
+                            className={`action-btn${isCreatingSession ? " loading" : ""}`}
+                            onClick={() => void handleCreateSessionFromSelectedSegments()}
+                            disabled={!canCreateSessionFromSegments}
+                            title={createSessionFromSegmentsBlockedReason}
+                          >
+                            {isCreatingSession
+                              ? t("sessionDetail.creatingSessionFromSegments")
+                              : t("sessionDetail.createSessionFromSelectedSegments")}
+                          </button>
+                          <button
+                            type="button"
+                            className="action-btn"
+                            onClick={() => setDeleteDialog({ kind: "allSegments" })}
+                            disabled={!canDeleteAllSegments || isDeletingSegments || isCreatingSession}
+                            title={allSegmentsDeletionBlockedReason}
+                          >
+                            {isDeletingSegments && !deletingSegmentPath
+                              ? t("sessionDetail.deletingSegments")
+                              : t("sessionDetail.deleteAllSegments")}
+                          </button>
+                        </div>
                       </div>
                       {allSegmentsDeletionBlockedReason && (
                         <p className="empty-hint" style={{ marginTop: 0, marginBottom: "12px" }}>
@@ -1713,35 +1800,58 @@ function SessionsTab({
                       <ul className="segment-meta-list" style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" }}>
                         {segmentItems.map((item, index) => (
                           <li key={`${item.path}-${index}`} style={{ background: "var(--bg-secondary)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color, #e5e7eb)" }}>
-                            <p style={{ margin: "0 0 8px 0", wordBreak: "break-all", fontSize: "0.9em", color: "var(--text-primary)" }}>
-                              <strong>{t("sessionDetail.audioSegmentPath")}:</strong> {item.path}
-                            </p>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px", flexWrap: "wrap" }}>
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", fontSize: "0.85em", color: "var(--text-secondary)", flex: "1 1 360px" }}>
-                                {item.meta && <span><strong>{t("sessionDetail.audioSegmentSequence")}:</strong> {item.meta.sequence}</span>}
-                                {item.meta && <span><strong>{t("sessionDetail.audioSegmentDuration")}:</strong> {formatDuration(item.meta.durationMs)}</span>}
-                                {item.meta && <span><strong>{t("sessionDetail.audioSegmentSampleRate")}:</strong> {item.meta.sampleRate}Hz</span>}
-                                {item.meta && <span><strong>{t("sessionDetail.audioSegmentChannels")}:</strong> {item.meta.channels}</span>}
-                                {item.meta?.fileSizeBytes !== undefined && <span><strong>{t("sessionDetail.audioSegmentFileSize")}:</strong> {formatFileSize(item.meta.fileSizeBytes)}</span>}
-                                {(item.meta?.endedAt || item.meta?.startedAt) && (
-                                  <span>
-                                    <strong>{t("sessionDetail.audioSegmentCreatedAt")}:</strong>{" "}
-                                    {formatDateTime(item.meta?.endedAt || item.meta?.startedAt || "")}
-                                  </span>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                className="btn-secondary"
-                                onClick={() => setDeleteDialog({ kind: "segment", path: item.path })}
-                                disabled={!canDeleteSingleSegment || isDeletingSegments}
-                                title={singleSegmentDeletionBlockedReason}
-                                style={{ whiteSpace: "nowrap" }}
+                            <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+                              <label
+                                style={{ display: "flex", alignItems: "center", paddingTop: "2px" }}
+                                title={t("sessionDetail.selectSegment")}
                               >
-                                {isDeletingSegments && deletingSegmentPath === item.path
-                                  ? t("sessionDetail.deletingSegment")
-                                  : t("sessionDetail.deleteSegment")}
-                              </button>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedSegmentPathSet.has(item.path)}
+                                  onChange={() => handleToggleSegmentSelection(item.path)}
+                                  disabled={isCreatingSession}
+                                  aria-label={t("sessionDetail.selectSegment")}
+                                  style={{
+                                    width: "18px",
+                                    height: "18px",
+                                    flex: "0 0 auto",
+                                    cursor: isCreatingSession ? "not-allowed" : "pointer",
+                                    accentColor: "var(--accent)"
+                                  }}
+                                />
+                              </label>
+                              <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                                <p style={{ margin: "0 0 8px 0", wordBreak: "break-all", fontSize: "0.9em", color: "var(--text-primary)" }}>
+                                  <strong>{t("sessionDetail.audioSegmentPath")}:</strong> {item.path}
+                                </p>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px", flexWrap: "wrap" }}>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", fontSize: "0.85em", color: "var(--text-secondary)", flex: "1 1 360px" }}>
+                                    {item.meta && <span><strong>{t("sessionDetail.audioSegmentSequence")}:</strong> {item.meta.sequence}</span>}
+                                    {item.meta && <span><strong>{t("sessionDetail.audioSegmentDuration")}:</strong> {formatDuration(item.meta.durationMs)}</span>}
+                                    {item.meta && <span><strong>{t("sessionDetail.audioSegmentSampleRate")}:</strong> {item.meta.sampleRate}Hz</span>}
+                                    {item.meta && <span><strong>{t("sessionDetail.audioSegmentChannels")}:</strong> {item.meta.channels}</span>}
+                                    {item.meta?.fileSizeBytes !== undefined && <span><strong>{t("sessionDetail.audioSegmentFileSize")}:</strong> {formatFileSize(item.meta.fileSizeBytes)}</span>}
+                                    {(item.meta?.endedAt || item.meta?.startedAt) && (
+                                      <span>
+                                        <strong>{t("sessionDetail.audioSegmentCreatedAt")}:</strong>{" "}
+                                        {formatDateTime(item.meta?.endedAt || item.meta?.startedAt || "")}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setDeleteDialog({ kind: "segment", path: item.path })}
+                                    disabled={!canDeleteSingleSegment || isDeletingSegments || isCreatingSession}
+                                    title={singleSegmentDeletionBlockedReason}
+                                    style={{ whiteSpace: "nowrap" }}
+                                  >
+                                    {isDeletingSegments && deletingSegmentPath === item.path
+                                      ? t("sessionDetail.deletingSegment")
+                                      : t("sessionDetail.deleteSegment")}
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                           </li>
                         ))}
