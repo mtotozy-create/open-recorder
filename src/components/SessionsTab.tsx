@@ -176,6 +176,18 @@ function formatDuration(ms: number): string {
     : `${pad(minutes)}:${pad(seconds)}`;
 }
 
+function formatDurationHourMinuteBadge(ms: number): string {
+  if (ms <= 0) {
+    return "00:00";
+  }
+
+  const totalMinutes = Math.ceil(ms / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(hours)}:${pad(minutes)}`;
+}
+
 function formatSegmentTime(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -1521,6 +1533,9 @@ function SessionsTab({
                           </button>
                           <span className="session-badge quality">
                             {getQualityLabel(session.qualityPreset, t)}
+                          </span>
+                          <span className="session-badge duration">
+                            {formatDurationHourMinuteBadge(session.elapsedMs)}
                           </span>
                           <span className={`session-badge ${statusClass}`}>{session.status}</span>
                         </div>
