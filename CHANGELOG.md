@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.5.0...v0.5.1) (2026-04-15)
+
+### Features
+
+* **session:** show session duration badge ([7708602](https://github-mtotozy/mtotozy-create/open-recorder/commit/7708602ef96f8f4ef33c560f71b7e1f5af310ed6))
+
+### Bug Fixes
+
+* **release:** build dmg bundles without applescript ([51e9e77](https://github-mtotozy/mtotozy-create/open-recorder/commit/51e9e77488e90422fa2cc51265cfc7ded46319fb))
+* **release:** sync Cargo.lock version ([fcdbc22](https://github-mtotozy/mtotozy-create/open-recorder/commit/fcdbc22c6ee98274dad966748aa1eb7ce0b99684))
+
 ## [0.5.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.4.4...v0.5.0) (2026-04-13)
 
 ### Features
