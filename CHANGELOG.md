@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.5.1...v0.5.2) (2026-04-22)
+
+### Bug Fixes
+
+* **insight:** repair malformed quoted json payloads ([acdf284](https://github-mtotozy/mtotozy-create/open-recorder/commit/acdf284e964e01099efb9702785d0103d8488edf))
+* **release:** sync Cargo.lock version ([fc0d674](https://github-mtotozy/mtotozy-create/open-recorder/commit/fc0d674f33071ef0cd682949b76c51cf8c38adae))
+
 ## [0.5.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.5.0...v0.5.1) (2026-04-15)
 
 ### Features
