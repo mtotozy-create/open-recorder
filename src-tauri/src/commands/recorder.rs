@@ -1799,9 +1799,7 @@ pub fn recorder_start(
         (
             storage.session_audio_dir(&session_id)?,
             settings.recording_segment_seconds,
-            normalize_requested_input_device_id(
-                settings.recording_input_device_id.clone(),
-            ),
+            normalize_requested_input_device_id(settings.recording_input_device_id.clone()),
             realtime_default,
             realtime_format_default,
             realtime_sample_rate_default,

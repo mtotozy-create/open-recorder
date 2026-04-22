@@ -16,9 +16,8 @@ use commands::{
     },
     session::{
         session_create_from_audio, session_create_from_segments, session_delete,
-        session_delete_segment, session_delete_segments, session_get, session_list,
-        session_rename, session_set_discoverable, session_set_tags,
-        session_update_summary_raw_markdown,
+        session_delete_segment, session_delete_segments, session_get, session_list, session_rename,
+        session_set_discoverable, session_set_tags, session_update_summary_raw_markdown,
     },
     settings::{settings_get, settings_get_storage_usage, settings_update},
     summary::summary_enqueue,

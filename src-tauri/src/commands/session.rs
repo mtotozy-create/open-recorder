@@ -210,7 +210,9 @@ fn collect_selected_session_segments(
             .into_iter()
             .find(|path| !matched.contains(path))
             .unwrap_or_else(|| "unknown".to_string());
-        return Err(format!("audio segment not found in source session: {missing}"));
+        return Err(format!(
+            "audio segment not found in source session: {missing}"
+        ));
     }
 
     Ok(selected)
@@ -426,10 +428,7 @@ pub fn session_create_from_audio(
         transcript: vec![],
         summary: None,
     };
-    merge_session_tags_into_catalog(
-        &mut settings.session_tag_catalog,
-        &default_tags,
-    );
+    merge_session_tags_into_catalog(&mut settings.session_tag_catalog, &default_tags);
     settings.normalize();
     storage.save_settings_and_session(&settings, &session)?;
     Ok(StartSessionResponse {
@@ -479,8 +478,12 @@ pub fn session_create_from_segments(
             return Err(error);
         }
     };
-    let session =
-        build_imported_session_from_segments(new_session_id.clone(), &source_session, copied_segments, &now);
+    let session = build_imported_session_from_segments(
+        new_session_id.clone(),
+        &source_session,
+        copied_segments,
+        &now,
+    );
 
     let save_result = {
         let mut storage = state
@@ -624,10 +627,7 @@ pub fn session_set_tags(
     session.tags = normalized_tags.clone();
     session.updated_at = now_iso();
 
-    merge_session_tags_into_catalog(
-        &mut settings.session_tag_catalog,
-        &normalized_tags,
-    );
+    merge_session_tags_into_catalog(&mut settings.session_tag_catalog, &normalized_tags);
     settings.normalize();
     storage.save_settings_and_session(&settings, &session)?;
     Ok(())
@@ -692,7 +692,9 @@ mod tests {
         ensure_all_segments_deletion_allowed, ensure_single_segment_deletion_allowed,
         remove_segment_references, session_has_merged_audio,
     };
-    use crate::models::{AudioSegmentMeta, Session, SessionStatus, SummaryResult, TranscriptSegment};
+    use crate::models::{
+        AudioSegmentMeta, Session, SessionStatus, SummaryResult, TranscriptSegment,
+    };
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -869,8 +871,8 @@ mod tests {
             ],
             ..Default::default()
         };
-        let selected =
-            collect_selected_session_segments(&session, &session.audio_segments).expect("selection should work");
+        let selected = collect_selected_session_segments(&session, &session.audio_segments)
+            .expect("selection should work");
 
         let copied = copy_selected_segments_to_dir(&target_dir, &selected)
             .expect("selected segments should be copied");
@@ -881,7 +883,10 @@ mod tests {
         assert!(Path::new(&copied[0].path).exists());
         assert!(Path::new(&copied[1].path).exists());
         assert_eq!(fs::read(&copied[0].path).expect("copied segment a"), b"aaa");
-        assert_eq!(fs::read(&copied[1].path).expect("copied segment b"), b"bbbb");
+        assert_eq!(
+            fs::read(&copied[1].path).expect("copied segment b"),
+            b"bbbb"
+        );
 
         remove_test_dir(&source_dir);
         remove_test_dir(&target_dir);

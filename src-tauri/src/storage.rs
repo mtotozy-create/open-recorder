@@ -143,7 +143,8 @@ impl Storage {
 
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, String> {
         let sessions = load_all_sessions(&self.connection)?;
-        let mut summaries: Vec<SessionSummary> = sessions.iter().map(SessionSummary::from).collect();
+        let mut summaries: Vec<SessionSummary> =
+            sessions.iter().map(SessionSummary::from).collect();
         summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(summaries)
     }
@@ -230,8 +231,11 @@ impl Storage {
             .transaction()
             .map_err(|error| format!("failed to start delete session transaction: {error}"))?;
         let session = load_session(&tx, session_id)?;
-        tx.execute("DELETE FROM jobs WHERE session_id = ?1", params![session_id])
-            .map_err(|error| format!("failed to delete jobs for session '{session_id}': {error}"))?;
+        tx.execute(
+            "DELETE FROM jobs WHERE session_id = ?1",
+            params![session_id],
+        )
+        .map_err(|error| format!("failed to delete jobs for session '{session_id}': {error}"))?;
         tx.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
             .map_err(|error| format!("failed to delete session '{session_id}': {error}"))?;
         tx.commit()
@@ -240,7 +244,11 @@ impl Storage {
     }
 
     pub fn session_audio_dir(&self, session_id: &str) -> Result<PathBuf, String> {
-        let audio_dir = self.data_dir.join("audio").join(session_id).join("segments");
+        let audio_dir = self
+            .data_dir
+            .join("audio")
+            .join(session_id)
+            .join("segments");
         fs::create_dir_all(&audio_dir).map_err(|error| {
             format!(
                 "failed to create session audio dir {}: {error}",
@@ -373,8 +381,12 @@ fn migrate_legacy_state_to_database(legacy_path: &Path, temp_db_path: &Path) -> 
         let _ = fs::remove_file(temp_db_path);
     }
 
-    let raw = fs::read_to_string(legacy_path)
-        .map_err(|error| format!("failed to read legacy state {}: {error}", legacy_path.display()))?;
+    let raw = fs::read_to_string(legacy_path).map_err(|error| {
+        format!(
+            "failed to read legacy state {}: {error}",
+            legacy_path.display()
+        )
+    })?;
     let mut data = serde_json::from_str::<PersistedState>(&raw).map_err(|error| {
         format!(
             "failed to parse legacy state {}: {error}",
@@ -409,7 +421,11 @@ fn migrate_legacy_state_to_database(legacy_path: &Path, temp_db_path: &Path) -> 
 
 fn load_settings(connection: &Connection) -> Result<Settings, String> {
     let payload: String = connection
-        .query_row("SELECT payload_json FROM settings WHERE id = 1", [], |row| row.get(0))
+        .query_row(
+            "SELECT payload_json FROM settings WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
         .map_err(|error| format!("failed to load settings: {error}"))?;
     let mut settings = deserialize_json::<Settings>(&payload, "settings")?;
     settings.normalize();
@@ -493,7 +509,10 @@ fn recover_interrupted_sessions(connection: &Connection) -> Result<usize, String
     let mut recovered = 0_usize;
 
     for mut session in sessions {
-        if !matches!(session.status, SessionStatus::Recording | SessionStatus::Paused) {
+        if !matches!(
+            session.status,
+            SessionStatus::Recording | SessionStatus::Paused
+        ) {
             continue;
         }
 
@@ -601,7 +620,12 @@ fn upsert_insight_cache(connection: &Connection, entry: &InsightCacheEntry) -> R
                 payload,
             ],
         )
-        .map_err(|error| format!("failed to save insight cache entry '{}': {error}", entry.key))?;
+        .map_err(|error| {
+            format!(
+                "failed to save insight cache entry '{}': {error}",
+                entry.key
+            )
+        })?;
     Ok(())
 }
 
@@ -745,8 +769,8 @@ mod tests {
     use crate::models::{JobKind, JobStatus, SessionStatus};
 
     use super::{
-        calculate_dir_size, migrate_legacy_state_to_database, open_connection, Session, Storage,
-        DATABASE_FILE_NAME, PersistedState,
+        calculate_dir_size, migrate_legacy_state_to_database, open_connection, PersistedState,
+        Session, Storage, DATABASE_FILE_NAME,
     };
 
     struct TempDirGuard {

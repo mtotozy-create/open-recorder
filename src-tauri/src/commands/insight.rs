@@ -106,7 +106,8 @@ pub fn insight_get_cached(
     let normalized_query = normalize_insight_query(request)?;
     let provider = resolve_discover_provider(&settings)?;
     let summary_config = resolve_discover_config(provider)?;
-    let sessions = collect_source_sessions(&storage.list_all_sessions()?, &normalized_query.selection)?;
+    let sessions =
+        collect_source_sessions(&storage.list_all_sessions()?, &normalized_query.selection)?;
 
     if sessions.is_empty() {
         return Ok(None);
@@ -161,7 +162,8 @@ pub fn insight_enqueue(
         let provider_id = provider.id.clone();
         let summary_config = resolve_discover_config(provider)?;
 
-        let sessions = collect_source_sessions(&storage.list_all_sessions()?, &normalized_query.selection)?;
+        let sessions =
+            collect_source_sessions(&storage.list_all_sessions()?, &normalized_query.selection)?;
         if sessions.is_empty() {
             return Err(normalized_query.empty_source_error);
         }
@@ -835,8 +837,20 @@ fn invoke_chat_completion(
 
 fn parse_json_payload<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, String> {
     let text = extract_json(raw);
-    serde_json::from_str::<T>(text)
-        .map_err(|error| format!("invalid JSON payload: {error}; raw={raw}"))
+    match serde_json::from_str::<T>(text) {
+        Ok(value) => Ok(value),
+        Err(primary_error) => {
+            let repaired = repair_json_inner_quotes(text);
+            if repaired == text {
+                return Err(format!("invalid JSON payload: {primary_error}; raw={raw}"));
+            }
+            serde_json::from_str::<T>(&repaired).map_err(|repair_error| {
+                format!(
+                    "invalid JSON payload: {primary_error}; repaired_parse_error={repair_error}; raw={raw}"
+                )
+            })
+        }
+    }
 }
 
 fn extract_json(raw: &str) -> &str {
@@ -854,6 +868,56 @@ fn extract_json(raw: &str) -> &str {
         return stripped.trim();
     }
     trimmed
+}
+
+fn repair_json_inner_quotes(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut repaired = String::with_capacity(raw.len());
+    let mut in_string = false;
+    let mut escaping = false;
+
+    for (index, ch) in chars.iter().enumerate() {
+        if !in_string {
+            repaired.push(*ch);
+            if *ch == '"' {
+                in_string = true;
+                escaping = false;
+            }
+            continue;
+        }
+
+        if escaping {
+            repaired.push(*ch);
+            escaping = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => {
+                repaired.push(*ch);
+                escaping = true;
+            }
+            '"' => {
+                let next_significant = chars
+                    .iter()
+                    .skip(index + 1)
+                    .find(|candidate| !candidate.is_whitespace())
+                    .copied();
+                if matches!(next_significant, Some(',' | '}' | ']' | ':'))
+                    || next_significant.is_none()
+                {
+                    repaired.push(*ch);
+                    in_string = false;
+                } else {
+                    repaired.push('\\');
+                    repaired.push(*ch);
+                }
+            }
+            _ => repaired.push(*ch),
+        }
+    }
+
+    repaired
 }
 
 fn normalize_extraction_payload(
@@ -1317,5 +1381,54 @@ fn merge_topic_status(
         next.clone()
     } else {
         current.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_json_payload, repair_json_inner_quotes, InsightExtractionPayload};
+
+    #[test]
+    fn repair_json_inner_quotes_keeps_valid_json_unchanged() {
+        let raw = r#"{"message":"valid \"quoted\" content","count":1}"#;
+        assert_eq!(repair_json_inner_quotes(raw), raw);
+    }
+
+    #[test]
+    fn parse_json_payload_repairs_unescaped_quotes_inside_values() {
+        let raw = r#"{
+          "people": [
+            {
+              "name": "王超",
+              "tasks": [
+                {
+                  "description": "完善整体进度评估表，发送至"京行AI扩展"微信群",
+                  "status": "pending",
+                  "deadline": "2026-04-17",
+                  "sourceSessionId": "ffeecc56-2f2e-4f54-81db-2085fa181e54",
+                  "sourceDate": "2026-04-17"
+                }
+              ],
+              "decisions": [
+                "本周内先修复"查询知识库->查案例->生成计划"流程"
+              ],
+              "risks": [],
+              "suggestions": []
+            }
+          ],
+          "topics": [],
+          "upcomingActions": []
+        }"#;
+
+        let parsed = parse_json_payload::<InsightExtractionPayload>(raw).unwrap();
+        assert_eq!(parsed.people.len(), 1);
+        assert_eq!(
+            parsed.people[0].tasks[0].description,
+            "完善整体进度评估表，发送至\"京行AI扩展\"微信群"
+        );
+        assert_eq!(
+            parsed.people[0].decisions[0],
+            "本周内先修复\"查询知识库->查案例->生成计划\"流程"
+        );
     }
 }
