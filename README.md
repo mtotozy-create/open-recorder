@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/github/license/mtotozy-create/open-recorder" alt="License">
   <img src="https://img.shields.io/badge/version-0.5.2-blue" alt="Version">
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Platform">
 </p>
 
 ## Screenshot
@@ -95,13 +95,21 @@
 | Dependency | Version | Notes |
 |-----------|---------|-------|
 | [Node.js](https://nodejs.org/) | 20+ | Frontend build |
-| [Rust](https://rustup.rs/) | Latest stable | Backend build |
+| [Rust](https://rustup.rs/) | Latest stable | Backend build (`stable-x86_64-pc-windows-msvc` on Windows) |
 | [Tauri CLI](https://v2.tauri.app/start/prerequisites/) | v2 | Installed via npm devDependencies |
+| [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) | Latest | Required on Windows for the MSVC toolchain |
+| [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) | Latest stable | Required to run the packaged Windows app |
+| [NSIS](https://nsis.sourceforge.io/Download) | 3+ | Required for the default Windows installer bundle |
 | [ffmpeg](https://ffmpeg.org/) | Any recent | Required for MP3 export and audio merging |
 
 On macOS, you can install ffmpeg via Homebrew:
 ```bash
 brew install ffmpeg
+```
+
+On Windows, install ffmpeg and make sure `ffmpeg.exe` is available in `PATH`:
+```powershell
+winget install Gyan.FFmpeg
 ```
 
 #### Build Steps
@@ -121,9 +129,18 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-The built `.app` bundle is located at:
-```
+Build outputs:
+```text
+# macOS
 src-tauri/target/release/bundle/macos/Open Recorder.app
+
+# Windows (default NSIS installer)
+src-tauri/target/release/bundle/nsis/
+```
+
+On Windows, `npm run tauri:build` defaults to the `nsis` bundle target. If you want to make that explicit:
+```powershell
+npm run tauri:build -- --bundles nsis
 ```
 
 ---
@@ -253,10 +270,12 @@ Manage reusable summary prompt templates:
 All data is stored locally. The app resolves the data directory in this order:
 
 1. `OPEN_RECORDER_DATA_DIR` environment variable (if set)
-2. `~/Library/Application Support/Open Recorder` (macOS)
-3. `~/.open-recorder-data`
-4. `<project_dir>/.open-recorder-data`
-5. System temp directory → `open-recorder-data`
+2. `%APPDATA%\Open Recorder` (Windows)
+3. `%LOCALAPPDATA%\Open Recorder` (Windows fallback)
+4. `~/Library/Application Support/Open Recorder` (macOS)
+5. `~/.open-recorder-data`
+6. `<project_dir>/.open-recorder-data`
+7. System temp directory → `open-recorder-data`
 
 ### Directory Structure
 
@@ -285,6 +304,9 @@ Recording just stopped and audio post-processing is still running. Wait a moment
 ```bash
 # macOS
 brew install ffmpeg
+
+# Windows
+winget install Gyan.FFmpeg
 ```
 
 ### "realtime websocket disconnected; retried every 5 seconds for 3 times but still failed"

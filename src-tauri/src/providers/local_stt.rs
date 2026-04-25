@@ -89,34 +89,92 @@ pub fn ensure_worker_script_on_disk() -> Result<PathBuf, String> {
     Ok(worker_path)
 }
 
-fn resolve_python_executable(config: &LocalSttConfig) -> String {
-    if let Some(path) = config
-        .python_path
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        return path.to_string();
+#[derive(Debug, Clone)]
+pub(crate) struct PythonCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+impl PythonCommand {
+    fn new(program: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            program: program.into(),
+            args,
+        }
     }
 
-    if let Some(venv_dir) = config
-        .venv_dir
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        let unix_python = Path::new(venv_dir).join("bin").join("python3");
+    pub(crate) fn display(&self) -> String {
+        if self.args.is_empty() {
+            self.program.clone()
+        } else {
+            format!("{} {}", self.program, self.args.join(" "))
+        }
+    }
+
+    pub(crate) fn to_command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args);
+        command
+    }
+
+    pub(crate) fn is_available(&self) -> bool {
+        self.to_command()
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+}
+
+pub(crate) fn resolve_python_command(
+    python_path: Option<&str>,
+    venv_dir: Option<&Path>,
+) -> PythonCommand {
+    if let Some(path) = python_path.map(str::trim).filter(|value| !value.is_empty()) {
+        return PythonCommand::new(path, vec![]);
+    }
+
+    if let Some(venv_dir) = venv_dir {
+        let unix_python = venv_dir.join("bin").join("python3");
         if unix_python.is_file() {
-            return unix_python.to_string_lossy().to_string();
+            return PythonCommand::new(unix_python.to_string_lossy().to_string(), vec![]);
         }
 
-        let windows_python = Path::new(venv_dir).join("Scripts").join("python.exe");
+        let windows_python = venv_dir.join("Scripts").join("python.exe");
         if windows_python.is_file() {
-            return windows_python.to_string_lossy().to_string();
+            return PythonCommand::new(windows_python.to_string_lossy().to_string(), vec![]);
         }
     }
 
-    "python3".to_string()
+    let default_commands = default_python_commands();
+    for command in &default_commands {
+        if command.is_available() {
+            return command.clone();
+        }
+    }
+
+    default_commands
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PythonCommand::new("python", vec![]))
+}
+
+fn default_python_commands() -> Vec<PythonCommand> {
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            PythonCommand::new("python", vec![]),
+            PythonCommand::new("py", vec!["-3".to_string()]),
+        ]
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec![
+            PythonCommand::new("python3", vec![]),
+            PythonCommand::new("python", vec![]),
+        ]
+    }
 }
 
 fn build_segment_meta(
@@ -185,8 +243,13 @@ pub fn transcribe_with_local_stt(
         .map_err(|error| format!("failed to write local stt request file: {error}"))?;
 
     progress_callback("Running local STT model...");
-    let python_executable = resolve_python_executable(config);
-    let command_output = Command::new(&python_executable)
+    let python_command = resolve_python_command(
+        config.python_path.as_deref(),
+        config.venv_dir.as_deref().map(Path::new),
+    );
+    let python_executable = python_command.display();
+    let command_output = python_command
+        .to_command()
         .arg(&script_path)
         .arg("--request")
         .arg(&request_path)

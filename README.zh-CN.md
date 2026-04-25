@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/github/license/mtotozy-create/open-recorder" alt="License">
   <img src="https://img.shields.io/badge/version-0.5.2-blue" alt="Version">
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Platform">
 </p>
 
 ---
@@ -91,13 +91,21 @@
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | [Node.js](https://nodejs.org/) | 20+ | 前端构建 |
-| [Rust](https://rustup.rs/) | 最新稳定版 | 后端构建 |
+| [Rust](https://rustup.rs/) | 最新稳定版 | 后端构建（Windows 建议使用 `stable-x86_64-pc-windows-msvc`） |
 | [Tauri CLI](https://v2.tauri.app/start/prerequisites/) | v2 | 通过 npm devDependencies 安装 |
+| [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) | 最新版 | Windows 下 MSVC 工具链必需 |
+| [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) | 最新稳定版 | Windows 打包应用运行必需 |
+| [NSIS](https://nsis.sourceforge.io/Download) | 3+ | 默认 Windows 安装包产物依赖 |
 | [ffmpeg](https://ffmpeg.org/) | 任意较新版本 | MP3 导出和音频合并需要 |
 
 在 macOS 上可以通过 Homebrew 安装 ffmpeg：
 ```bash
 brew install ffmpeg
+```
+
+在 Windows 上，请安装 ffmpeg 并确保 `ffmpeg.exe` 已加入 `PATH`：
+```powershell
+winget install Gyan.FFmpeg
 ```
 
 #### 构建步骤
@@ -117,9 +125,18 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-构建产物 `.app` 位于：
-```
+构建产物位置：
+```text
+# macOS
 src-tauri/target/release/bundle/macos/Open Recorder.app
+
+# Windows（默认 NSIS 安装包）
+src-tauri/target/release/bundle/nsis/
+```
+
+在 Windows 上，`npm run tauri:build` 默认会产出 `nsis` 安装包；如果你想显式指定：
+```powershell
+npm run tauri:build -- --bundles nsis
 ```
 
 ---
@@ -249,10 +266,12 @@ src-tauri/target/release/bundle/macos/Open Recorder.app
 所有数据保存在本地。应用按以下顺序查找数据目录：
 
 1. `OPEN_RECORDER_DATA_DIR` 环境变量（如果设置）
-2. `~/Library/Application Support/Open Recorder`（macOS）
-3. `~/.open-recorder-data`
-4. `<项目目录>/.open-recorder-data`
-5. 系统临时目录下的 `open-recorder-data`
+2. `%APPDATA%\Open Recorder`（Windows）
+3. `%LOCALAPPDATA%\Open Recorder`（Windows 回退）
+4. `~/Library/Application Support/Open Recorder`（macOS）
+5. `~/.open-recorder-data`
+6. `<项目目录>/.open-recorder-data`
+7. 系统临时目录下的 `open-recorder-data`
 
 ### 目录结构
 
@@ -281,6 +300,9 @@ src-tauri/target/release/bundle/macos/Open Recorder.app
 ```bash
 # macOS
 brew install ffmpeg
+
+# Windows
+winget install Gyan.FFmpeg
 ```
 
 ### "realtime websocket disconnected; retried every 5 seconds for 3 times but still failed"

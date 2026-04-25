@@ -10,7 +10,7 @@ use tauri::State;
 
 use crate::{
     models::{LocalSttEngine, LocalSttProviderSettings, ProviderKind, Settings},
-    providers::local_stt::ensure_worker_script_on_disk,
+    providers::local_stt::{ensure_worker_script_on_disk, resolve_python_command, PythonCommand},
     state::AppState,
 };
 
@@ -35,32 +35,18 @@ fn resolve_local_stt_settings(settings: &Settings) -> Option<&LocalSttProviderSe
 }
 
 fn resolve_python_executable(local_stt: &LocalSttProviderSettings, venv_dir: &Path) -> String {
-    if let Some(path) = local_stt
-        .python_path
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        return path.to_string();
-    }
-
-    let unix_python = venv_dir.join("bin").join("python3");
-    if unix_python.is_file() {
-        return unix_python.to_string_lossy().to_string();
-    }
-    let windows_python = venv_dir.join("Scripts").join("python.exe");
-    if windows_python.is_file() {
-        return windows_python.to_string_lossy().to_string();
-    }
-    "python3".to_string()
+    resolve_python_command(local_stt.python_path.as_deref(), Some(venv_dir)).display()
 }
 
-fn check_python_ready(python_executable: &str) -> bool {
-    Command::new(python_executable)
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+fn resolve_python_command_for_settings(
+    local_stt: &LocalSttProviderSettings,
+    venv_dir: &Path,
+) -> PythonCommand {
+    resolve_python_command(local_stt.python_path.as_deref(), Some(venv_dir))
+}
+
+fn check_python_ready(python_command: &PythonCommand) -> bool {
+    python_command.is_available()
 }
 
 fn build_status(
@@ -87,11 +73,12 @@ fn build_status(
         .map(PathBuf::from)
         .unwrap_or(default_model_cache_dir);
     let worker_script_path = ensure_worker_script_on_disk()?;
+    let python_command = resolve_python_command_for_settings(&local_stt, &venv_dir);
     let python_executable = resolve_python_executable(&local_stt, &venv_dir);
     let venv_ready = venv_dir.join("bin").join("python3").is_file()
         || venv_dir.join("Scripts").join("python.exe").is_file();
     Ok(LocalProviderStatusResponse {
-        python_ready: check_python_ready(&python_executable),
+        python_ready: check_python_ready(&python_command),
         venv_ready,
         worker_script_ready: true,
         python_executable,
@@ -114,6 +101,26 @@ fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
     Err(format!(
         "command failed: {} {:?}; stderr={}; stdout={}",
         program, args, stderr, stdout
+    ))
+}
+
+fn run_python_command(python_command: &PythonCommand, args: &[&str]) -> Result<(), String> {
+    let output = python_command
+        .to_command()
+        .args(args)
+        .output()
+        .map_err(|error| format!("failed to run '{}': {error}", python_command.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Err(format!(
+        "command failed: {} {:?}; stderr={}; stdout={}",
+        python_command.display(),
+        args,
+        stderr,
+        stdout
     ))
 }
 
@@ -265,13 +272,7 @@ pub fn local_provider_prepare(
         local_stt.venv_dir = Some(venv_dir.to_string_lossy().to_string());
         local_stt.model_cache_dir = Some(model_cache_dir.to_string_lossy().to_string());
 
-        let bootstrap_python = local_stt
-            .python_path
-            .as_ref()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-            .unwrap_or("python3")
-            .to_string();
+        let bootstrap_python = resolve_python_command(local_stt.python_path.as_deref(), None);
         let offline_snapshot_models = collect_offline_snapshot_models(local_stt);
         settings.normalize();
         storage.save_settings(&settings)?;
@@ -293,7 +294,7 @@ pub fn local_provider_prepare(
     let venv_python_unix = venv_dir.join("bin").join("python3");
     let venv_python_windows = venv_dir.join("Scripts").join("python.exe");
     if !venv_python_unix.is_file() && !venv_python_windows.is_file() {
-        run_command(
+        run_python_command(
             &bootstrap_python,
             &["-m", "venv", venv_dir.to_string_lossy().as_ref()],
         )?;

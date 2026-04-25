@@ -698,11 +698,22 @@ fn resolve_data_dir_candidates() -> Vec<PathBuf> {
         candidates.push(PathBuf::from(path));
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(path) = std::env::var("APPDATA") {
+            candidates.push(PathBuf::from(path).join("Open Recorder"));
+        }
+
+        if let Ok(path) = std::env::var("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(path).join("Open Recorder"));
+        }
+    }
+
     #[cfg(target_os = "macos")]
     {
-        if let Ok(home) = std::env::var("HOME") {
+        if let Some(home) = resolve_home_dir() {
             candidates.push(
-                PathBuf::from(home)
+                home
                     .join("Library")
                     .join("Application Support")
                     .join("Open Recorder"),
@@ -710,8 +721,8 @@ fn resolve_data_dir_candidates() -> Vec<PathBuf> {
         }
     }
 
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(PathBuf::from(home).join(".open-recorder-data"));
+    if let Some(home) = resolve_home_dir() {
+        candidates.push(home.join(".open-recorder-data"));
     }
 
     if let Ok(current_dir) = std::env::current_dir() {
@@ -728,6 +739,31 @@ fn resolve_data_dir_candidates() -> Vec<PathBuf> {
     }
 
     deduped
+}
+
+fn resolve_home_dir() -> Option<PathBuf> {
+    for env_var in ["HOME", "USERPROFILE"] {
+        if let Ok(path) = std::env::var(env_var) {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let (Ok(home_drive), Ok(home_path)) =
+            (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH"))
+        {
+            let combined = format!("{}{}", home_drive.trim(), home_path.trim());
+            if !combined.is_empty() {
+                return Some(PathBuf::from(combined));
+            }
+        }
+    }
+
+    None
 }
 
 fn calculate_dir_size(path: &Path) -> Result<u64, String> {

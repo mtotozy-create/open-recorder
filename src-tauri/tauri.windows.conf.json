@@ -1,0 +1,22 @@
+{
+  "app": {
+    "security": {
+      "assetProtocol": {
+        "scope": [
+          "$APPDATA/**",
+          "$LOCALAPPDATA/**",
+          "$USERPROFILE/.open-recorder-data/**",
+          "$TEMP/open-recorder-data/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "targets": "nsis",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

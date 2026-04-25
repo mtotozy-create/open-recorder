@@ -963,11 +963,19 @@ fn resolve_input_device(
 }
 
 fn ffmpeg_candidates() -> [&'static str; 3] {
-    [
-        "ffmpeg",
-        "/opt/homebrew/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-    ]
+    #[cfg(target_os = "windows")]
+    {
+        ["ffmpeg.exe", "ffmpeg", "C:\\ffmpeg\\bin\\ffmpeg.exe"]
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        [
+            "ffmpeg",
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+        ]
+    }
 }
 
 fn run_ffmpeg(args: &[&str]) -> Result<std::process::ExitStatus, String> {
