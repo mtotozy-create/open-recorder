@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.5.2...v0.6.0) (2026-04-25)
+
+### Features
+
+* **windows:** add runtime and storage support ([7e76576](https://github-mtotozy/mtotozy-create/open-recorder/commit/7e76576a41590923ce8ba52b708c227eea7bb5dc))
+
+### Bug Fixes
+
+* **release:** sync Cargo.lock version ([182bd30](https://github-mtotozy/mtotozy-create/open-recorder/commit/182bd3038173b0870456aeef17214ddbde08da38))
+
 ## [0.5.2](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.5.1...v0.5.2) (2026-04-22)
 
 ### Bug Fixes
