@@ -19,7 +19,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/github/license/mtotozy-create/open-recorder" alt="License">
-  <img src="https://img.shields.io/badge/version-0.6.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.7.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Platform">
 </p>
 

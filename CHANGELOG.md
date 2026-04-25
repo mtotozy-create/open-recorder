@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.6.0...v0.7.0) (2026-04-25)
+
+### Features
+
+* **summary:** export markdown summaries and search sessions ([78617f7](https://github-mtotozy/mtotozy-create/open-recorder/commit/78617f7344645f57180c4b31c1439577a736270f))
+
+### Bug Fixes
+
+* **release:** sync Cargo.lock version ([8d7f3cd](https://github-mtotozy/mtotozy-create/open-recorder/commit/8d7f3cd9d550c88a63ab4b02187dcb255ae10d67))
+
 ## [0.6.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.5.2...v0.6.0) (2026-04-25)
 
 ### Features
