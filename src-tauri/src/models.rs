@@ -670,6 +670,8 @@ pub struct Settings {
     pub recording_segment_seconds: u64,
     #[serde(default)]
     pub recording_input_device_id: Option<String>,
+    #[serde(default)]
+    pub summary_export_folder_path: Option<String>,
     #[serde(default = "default_session_tag_catalog")]
     pub session_tag_catalog: Vec<String>,
     pub default_template_id: String,
@@ -762,6 +764,7 @@ impl Default for Settings {
             selected_discover_provider_id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
             recording_segment_seconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
             recording_input_device_id: None,
+            summary_export_folder_path: None,
             session_tag_catalog: default_session_tag_catalog(),
             default_template_id: "meeting-default".to_string(),
             templates: vec![create_default_template()],
@@ -895,6 +898,15 @@ impl Settings {
                 Some(trimmed.to_string())
             }
         });
+        self.summary_export_folder_path =
+            self.summary_export_folder_path.clone().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
     }
 
     fn migrate_legacy_providers(&self) -> (Vec<ProviderConfig>, ProviderOssSettings) {
@@ -1883,6 +1895,7 @@ pub struct SettingsPatch {
     pub selected_discover_provider_id: Option<String>,
     pub recording_segment_seconds: Option<u64>,
     pub recording_input_device_id: Option<String>,
+    pub summary_export_folder_path: Option<String>,
     pub session_tag_catalog: Option<Vec<String>>,
     pub default_template_id: Option<String>,
     pub templates: Option<Vec<PromptTemplate>>,

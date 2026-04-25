@@ -69,6 +69,7 @@ type SessionsTabProps = {
     segmentPaths: string[]
   ) => void | Promise<void>;
   onRefresh: () => void;
+  onSearchSessions: (query: string) => Promise<SessionSummary[]>;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => void;
   onSetSessionTags: (sessionId: string, tags: string[]) => void | Promise<void>;
@@ -423,6 +424,7 @@ function SessionsTab({
   onCreateSessionFromFile,
   onCreateSessionFromSegments,
   onRefresh,
+  onSearchSessions,
   onSelectSession,
   onRenameSession,
   onSetSessionTags,
@@ -468,6 +470,11 @@ function SessionsTab({
   const [summaryEditError, setSummaryEditError] = useState<string>();
   const [isSavingSummary, setIsSavingSummary] = useState(false);
   const [isTagFilterExpanded, setIsTagFilterExpanded] = useState(false);
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const [sessionSearchResults, setSessionSearchResults] = useState<SessionSummary[]>([]);
+  const [resolvedSessionSearchQuery, setResolvedSessionSearchQuery] = useState("");
+  const [isSearchingSessions, setIsSearchingSessions] = useState(false);
+  const [sessionSearchError, setSessionSearchError] = useState<string>();
   const [selectedFilterTags, setSelectedFilterTags] = useState<string[]>([]);
   const [tagEditorSessionId, setTagEditorSessionId] = useState<string>();
   const [tagDraft, setTagDraft] = useState<string[]>([]);
@@ -480,6 +487,15 @@ function SessionsTab({
   const playbackAudioRef = useRef<HTMLAudioElement>(null);
   const summaryCopyResetTimerRef = useRef<number | undefined>(undefined);
 
+  const normalizedSessionSearchQuery = sessionSearchQuery.trim();
+  const hasSessionSearchQuery = normalizedSessionSearchQuery.length > 0;
+  const searchResultsReady =
+    hasSessionSearchQuery && resolvedSessionSearchQuery === normalizedSessionSearchQuery;
+  const searchBaseSessions = hasSessionSearchQuery
+    ? searchResultsReady
+      ? sessionSearchResults
+      : []
+    : sessions;
   const availableTags = uniqueTags([
     ...tagCatalog,
     ...sessions.flatMap((session) => session.tags ?? [])
@@ -520,14 +536,14 @@ function SessionsTab({
   for (const tag of availableTags) {
     tagSessionCounts.set(tag, 0);
   }
-  for (const session of sessions) {
+  for (const session of searchBaseSessions) {
     for (const tag of uniqueTags(session.tags ?? [])) {
       tagSessionCounts.set(tag, (tagSessionCounts.get(tag) ?? 0) + 1);
     }
   }
   const filteredSessions = selectedFilterTags.length === 0
-    ? sessions
-    : sessions.filter((session) =>
+    ? searchBaseSessions
+    : searchBaseSessions.filter((session) =>
         (session.tags ?? []).some((tag) => selectedFilterTags.includes(tag))
       );
   const runningTranscribeJob = sessionJobs?.find((j) => j.kind === "transcription" && j.status === "running");
@@ -704,6 +720,48 @@ function SessionsTab({
       return next;
     });
   }, [availableTags]);
+
+  useEffect(() => {
+    if (!hasSessionSearchQuery) {
+      setSessionSearchResults([]);
+      setResolvedSessionSearchQuery("");
+      setIsSearchingSessions(false);
+      setSessionSearchError(undefined);
+      return;
+    }
+
+    let disposed = false;
+    setIsSearchingSessions(true);
+    setSessionSearchError(undefined);
+    const timer = window.setTimeout(() => {
+      void onSearchSessions(normalizedSessionSearchQuery)
+        .then((results) => {
+          if (disposed) {
+            return;
+          }
+          setSessionSearchResults(results);
+          setResolvedSessionSearchQuery(normalizedSessionSearchQuery);
+        })
+        .catch((error) => {
+          if (disposed) {
+            return;
+          }
+          setSessionSearchResults([]);
+          setResolvedSessionSearchQuery(normalizedSessionSearchQuery);
+          setSessionSearchError(String(error));
+        })
+        .finally(() => {
+          if (!disposed) {
+            setIsSearchingSessions(false);
+          }
+        });
+    }, 200);
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [hasSessionSearchQuery, normalizedSessionSearchQuery, onSearchSessions, sessions]);
 
   function handleTranscribeClick() {
     if (!isTranscribing) {
@@ -1256,6 +1314,42 @@ function SessionsTab({
               <span>{filteredSessions.length}</span>
             </header>
 
+            <section className="session-search">
+              <div className="session-search-input-wrap">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z" />
+                </svg>
+                <input
+                  type="search"
+                  value={sessionSearchQuery}
+                  placeholder={t("sessions.searchPlaceholder")}
+                  aria-label={t("sessions.searchPlaceholder")}
+                  onChange={(event) => setSessionSearchQuery(event.target.value)}
+                />
+                {hasSessionSearchQuery && (
+                  <button
+                    type="button"
+                    className="session-search-clear"
+                    onClick={() => setSessionSearchQuery("")}
+                    aria-label={t("sessions.clearSearch")}
+                    title={t("sessions.clearSearch")}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 6l12 12M18 6L6 18" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              {isSearchingSessions && (
+                <p className="session-search-hint">{t("sessions.searching")}</p>
+              )}
+              {sessionSearchError && (
+                <p className="session-search-error">
+                  {t("sessions.searchFailed", { error: sessionSearchError })}
+                </p>
+              )}
+            </section>
+
             <section className="session-tag-filter">
               <button
                 type="button"
@@ -1316,7 +1410,14 @@ function SessionsTab({
             </section>
 
             {sessions.length === 0 && <p className="empty-hint">{t("sessions.empty")}</p>}
-            {sessions.length > 0 && filteredSessions.length === 0 && (
+            {sessions.length > 0 &&
+              hasSessionSearchQuery &&
+              !isSearchingSessions &&
+              searchResultsReady &&
+              searchBaseSessions.length === 0 && (
+                <p className="empty-hint">{t("sessions.searchEmpty")}</p>
+              )}
+            {sessions.length > 0 && searchBaseSessions.length > 0 && filteredSessions.length === 0 && (
               <p className="empty-hint">{t("sessions.filterEmpty")}</p>
             )}
 

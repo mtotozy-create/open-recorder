@@ -713,8 +713,7 @@ fn resolve_data_dir_candidates() -> Vec<PathBuf> {
     {
         if let Some(home) = resolve_home_dir() {
             candidates.push(
-                home
-                    .join("Library")
+                home.join("Library")
                     .join("Application Support")
                     .join("Open Recorder"),
             );

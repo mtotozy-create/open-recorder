@@ -167,6 +167,7 @@ export type Settings = {
   selectedDiscoverProviderId: string;
   recordingSegmentSeconds: number;
   recordingInputDeviceId?: string | null;
+  summaryExportFolderPath?: string | null;
   sessionTagCatalog: string[];
   defaultTemplateId: string;
   templates: PromptTemplate[];
@@ -175,6 +176,24 @@ export type Settings = {
 export type StorageUsageSummary = {
   dataDirPath: string;
   totalBytes: number;
+};
+
+export type SummaryMarkdownExportProgress = {
+  totalSessions: number;
+  processedSessions: number;
+  exportedCount: number;
+  skippedExistingCount: number;
+  skippedEmptyCount: number;
+  currentSessionName?: string | null;
+};
+
+export type SummaryMarkdownExportResult = {
+  totalSessions: number;
+  summarySessions: number;
+  exportedCount: number;
+  skippedExistingCount: number;
+  skippedEmptyCount: number;
+  folderPath: string;
 };
 
 export type InsightTimeRange = "1d" | "2d" | "3d" | "1w" | "1m";

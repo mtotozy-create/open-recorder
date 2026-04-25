@@ -1,4 +1,5 @@
 import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import type { Translator } from "../i18n";
 import type { Locale, TranslationKey } from "../i18n/messages";
@@ -13,6 +14,8 @@ import type {
   ProviderKind,
   RecorderInputDevice,
   Settings,
+  SummaryMarkdownExportProgress,
+  SummaryMarkdownExportResult,
   StorageUsageSummary
 } from "../types/domain";
 
@@ -25,8 +28,14 @@ type SettingsTabProps = {
     | { status: "loading"; summary?: StorageUsageSummary }
     | { status: "success"; summary: StorageUsageSummary }
     | { status: "error"; error: string; summary?: StorageUsageSummary };
+  summaryMarkdownExportState:
+    | { status: "idle" }
+    | { status: "running"; progress?: SummaryMarkdownExportProgress }
+    | { status: "success"; result: SummaryMarkdownExportResult }
+    | { status: "error"; error: string; progress?: SummaryMarkdownExportProgress };
   onLocaleChange: (locale: Locale) => void;
   onRefreshStorageUsage: () => void;
+  onExportAllSummariesMarkdown: (folderPath: string) => void;
   onSettingsChange: (patch: Partial<Settings>) => void;
   onSave: () => void;
   t: Translator;
@@ -117,8 +126,10 @@ function SettingsTab({
   settings,
   inputDevices,
   storageUsageState,
+  summaryMarkdownExportState,
   onLocaleChange,
   onRefreshStorageUsage,
+  onExportAllSummariesMarkdown,
   onSettingsChange,
   onSave,
   t
@@ -137,6 +148,7 @@ function SettingsTab({
   const [aliyunJsonFieldErrors, setAliyunJsonFieldErrors] = useState<
     Record<string, { serviceInspection?: TranslationKey; customPrompt?: TranslationKey }>
   >({});
+  const [summaryFolderPickerError, setSummaryFolderPickerError] = useState<string>();
 
   useEffect(() => {
     if (settings.providers.length === 0) {
@@ -210,6 +222,22 @@ function SettingsTab({
 
   function handleLocaleChange(event: ChangeEvent<HTMLSelectElement>) {
     onLocaleChange(event.target.value as Locale);
+  }
+
+  async function handleChooseSummaryExportFolder() {
+    setSummaryFolderPickerError(undefined);
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t("settings.summaryExportFolderPickerTitle")
+      });
+      if (typeof selected === "string") {
+        onSettingsChange({ summaryExportFolderPath: selected });
+      }
+    } catch (error) {
+      setSummaryFolderPickerError(String(error));
+    }
   }
 
   function handleSubTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -1225,6 +1253,40 @@ function SettingsTab({
       ? t("settings.storageUsageErrorDetail", { error: storageUsageState.error })
       : undefined;
   const isRefreshingStorageUsage = storageUsageState.status === "loading";
+  const summaryExportFolderPath = settings.summaryExportFolderPath ?? "";
+  const isExportingSummaries = summaryMarkdownExportState.status === "running";
+  const summaryExportProgress =
+    summaryMarkdownExportState.status === "running" ||
+    summaryMarkdownExportState.status === "error"
+      ? summaryMarkdownExportState.progress
+      : undefined;
+  const summaryExportProgressValue = summaryExportProgress
+    ? t("settings.summaryExportProgress", {
+        processed: summaryExportProgress.processedSessions,
+        total: summaryExportProgress.totalSessions,
+        exported: summaryExportProgress.exportedCount,
+        skipped: summaryExportProgress.skippedExistingCount,
+        empty: summaryExportProgress.skippedEmptyCount
+      })
+    : isExportingSummaries
+      ? t("settings.summaryExportPreparing")
+      : undefined;
+  const summaryExportResultText =
+    summaryMarkdownExportState.status === "success"
+      ? t("settings.summaryExportFinished", {
+          total: summaryMarkdownExportState.result.totalSessions,
+          summary: summaryMarkdownExportState.result.summarySessions,
+          exported: summaryMarkdownExportState.result.exportedCount,
+          skipped: summaryMarkdownExportState.result.skippedExistingCount,
+          empty: summaryMarkdownExportState.result.skippedEmptyCount
+        })
+      : undefined;
+  const summaryExportErrorText =
+    summaryMarkdownExportState.status === "error"
+      ? t("settings.summaryExportFailed", { error: summaryMarkdownExportState.error })
+      : summaryFolderPickerError
+        ? t("settings.summaryExportFolderPickerFailed", { error: summaryFolderPickerError })
+        : undefined;
 
   return (
     <section className="panel settings-panel">
@@ -1314,6 +1376,64 @@ function SettingsTab({
                 )}
               </select>
             </label>
+
+            <section className="settings-summary-export" aria-live="polite">
+              <div className="settings-summary-export-header">
+                <div>
+                  <h4>{t("settings.summaryExportTitle")}</h4>
+                  <p>{t("settings.summaryExportHint")}</p>
+                </div>
+              </div>
+              <div className="settings-field">
+                <span>{t("settings.summaryExportFolder")}</span>
+                <div className="settings-path-row">
+                  <input
+                    value={summaryExportFolderPath}
+                    onChange={(event) => {
+                      setSummaryFolderPickerError(undefined);
+                      onSettingsChange({ summaryExportFolderPath: event.target.value });
+                    }}
+                    placeholder={t("settings.summaryExportFolderPlaceholder")}
+                    disabled={isExportingSummaries}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary settings-inline-btn"
+                    onClick={() => void handleChooseSummaryExportFolder()}
+                    disabled={isExportingSummaries}
+                  >
+                    {t("settings.summaryExportFolderChoose")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary settings-inline-btn"
+                    onClick={() => onExportAllSummariesMarkdown(summaryExportFolderPath)}
+                    disabled={isExportingSummaries || summaryExportFolderPath.trim().length === 0}
+                  >
+                    {isExportingSummaries
+                      ? t("settings.summaryExportRunning")
+                      : t("settings.summaryExportAll")}
+                  </button>
+                </div>
+              </div>
+
+              {summaryExportProgress ? (
+                <progress
+                  className="settings-summary-export-progress"
+                  max={Math.max(summaryExportProgress.totalSessions, 1)}
+                  value={summaryExportProgress.processedSessions}
+                />
+              ) : null}
+              {summaryExportProgressValue ? (
+                <p className="settings-summary-export-status">{summaryExportProgressValue}</p>
+              ) : null}
+              {summaryExportResultText ? (
+                <p className="settings-summary-export-status success">{summaryExportResultText}</p>
+              ) : null}
+              {summaryExportErrorText ? (
+                <p className="settings-summary-export-status error">{summaryExportErrorText}</p>
+              ) : null}
+            </section>
 
             <section className="settings-storage-usage" aria-live="polite">
               <div className="settings-storage-usage-header">

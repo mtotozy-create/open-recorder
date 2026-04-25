@@ -62,6 +62,10 @@ pub fn settings_update(
         settings.recording_input_device_id = Some(recording_input_device_id);
     }
 
+    if let Some(summary_export_folder_path) = request.summary_export_folder_path {
+        settings.summary_export_folder_path = Some(summary_export_folder_path);
+    }
+
     if let Some(session_tag_catalog) = request.session_tag_catalog {
         settings.session_tag_catalog = session_tag_catalog;
     }

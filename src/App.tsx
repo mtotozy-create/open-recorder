@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import DiscoverTab from "./components/DiscoverTab";
 import RecorderTab from "./components/RecorderTab";
@@ -12,6 +13,7 @@ import {
   deleteSessionSegments,
   enqueueSummary,
   enqueueTranscription,
+  exportAllSummariesMarkdown,
   exportRecording,
   getStorageUsage,
   listInputDevices,
@@ -26,6 +28,7 @@ import {
   prepareTranscriptionAudio,
   renameSession,
   resumeRecording,
+  searchSessions,
   setRealtimeSourceLanguage as setRealtimeSourceLanguageApi,
   setSessionDiscoverable,
   setSessionTags as saveSessionTags,
@@ -57,6 +60,8 @@ import type {
   RecordingQualityPreset,
   SessionDetail,
   SessionSummary,
+  SummaryMarkdownExportProgress,
+  SummaryMarkdownExportResult,
   TranscriptSegment,
   Settings,
   StorageUsageSummary
@@ -264,6 +269,7 @@ const emptySettings: Settings = {
   selectedDiscoverProviderId: DEFAULT_OLLAMA_PROVIDER_ID,
   recordingSegmentSeconds: DEFAULT_RECORDING_SEGMENT_SECONDS,
   recordingInputDeviceId: "",
+  summaryExportFolderPath: "",
   sessionTagCatalog: DEFAULT_SESSION_TAG_CATALOG,
   defaultTemplateId: "meeting-default",
   templates: []
@@ -295,6 +301,24 @@ type StorageUsageState =
       status: "error";
       error: string;
       summary?: StorageUsageSummary;
+    };
+
+type SummaryMarkdownExportState =
+  | {
+      status: "idle";
+    }
+  | {
+      status: "running";
+      progress?: SummaryMarkdownExportProgress;
+    }
+  | {
+      status: "success";
+      result: SummaryMarkdownExportResult;
+    }
+  | {
+      status: "error";
+      error: string;
+      progress?: SummaryMarkdownExportProgress;
     };
 
 type PollJobOptions = {
@@ -393,6 +417,10 @@ function normalizeSettings(input: Settings): Settings {
     : DEFAULT_RECORDING_SEGMENT_SECONDS;
   const recordingInputDeviceId =
     typeof input.recordingInputDeviceId === "string" ? input.recordingInputDeviceId.trim() : "";
+  const summaryExportFolderPath =
+    typeof input.summaryExportFolderPath === "string"
+      ? input.summaryExportFolderPath.trim()
+      : "";
   const sessionTagCatalog = normalizeSessionTagCatalog([
     ...DEFAULT_SESSION_TAG_CATALOG,
     ...(input.sessionTagCatalog ?? [])
@@ -638,6 +666,7 @@ function normalizeSettings(input: Settings): Settings {
     selectedDiscoverProviderId,
     recordingSegmentSeconds,
     recordingInputDeviceId,
+    summaryExportFolderPath,
     sessionTagCatalog,
     templates,
     defaultTemplateId: defaultExists ? input.defaultTemplateId : templates[0].id
@@ -774,6 +803,8 @@ function App() {
   const [summaryTemplateId, setSummaryTemplateId] = useState<string>(initialSettings.defaultTemplateId);
   const [statusState, setStatusState] = useState<StatusState>({ key: "status.ready" });
   const [storageUsageState, setStorageUsageState] = useState<StorageUsageState>({ status: "idle" });
+  const [summaryMarkdownExportState, setSummaryMarkdownExportState] =
+    useState<SummaryMarkdownExportState>({ status: "idle" });
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
@@ -895,6 +926,29 @@ function App() {
         setRealtimeTranslationTargetLanguage(realtimeDefaults.translationTargetLanguage);
       })
       .catch((error) => setStatus("status.settingsLoadFailed", { error: String(error) }));
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void listen<SummaryMarkdownExportProgress>("summary-export-progress", (event) => {
+      if (disposed) {
+        return;
+      }
+      setSummaryMarkdownExportState({ status: "running", progress: event.payload });
+    }).then((nextUnlisten) => {
+      if (disposed) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -1665,6 +1719,35 @@ function App() {
     }
   }
 
+  async function onExportAllSummariesMarkdown(folderPath: string) {
+    const normalizedFolderPath = folderPath.trim();
+    if (!normalizedFolderPath) {
+      setSummaryMarkdownExportState({
+        status: "error",
+        error: t("settings.summaryExportFolderRequired")
+      });
+      return;
+    }
+
+    setSummaryMarkdownExportState({ status: "running" });
+    try {
+      const result = await exportAllSummariesMarkdown(normalizedFolderPath);
+      setSummaryMarkdownExportState({ status: "success", result });
+      setStatus("status.summaryMarkdownExportFinished", {
+        exported: result.exportedCount,
+        skipped: result.skippedExistingCount
+      });
+    } catch (error) {
+      const errorMessage = String(error);
+      setSummaryMarkdownExportState((previous) => ({
+        status: "error",
+        error: errorMessage,
+        progress: previous.status === "running" ? previous.progress : undefined
+      }));
+      setStatus("status.summaryMarkdownExportFailed", { error: errorMessage });
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="app-header panel">
@@ -1759,6 +1842,7 @@ function App() {
               setStatus("status.sessionsLoadFailed", { error: String(error) });
             })
           }
+          onSearchSessions={searchSessions}
           onSelectSession={setActiveSessionId}
           onRenameSession={(sessionId, name) => void onRenameSession(sessionId, name)}
           onSetSessionTags={(sessionId, tags) => void onSetSessionTags(sessionId, tags)}
@@ -1800,8 +1884,12 @@ function App() {
           settings={settings}
           inputDevices={inputDevices}
           storageUsageState={storageUsageState}
+          summaryMarkdownExportState={summaryMarkdownExportState}
           onLocaleChange={setLocale}
           onRefreshStorageUsage={() => void onRefreshStorageUsage()}
+          onExportAllSummariesMarkdown={(folderPath) =>
+            void onExportAllSummariesMarkdown(folderPath)
+          }
           onSettingsChange={(patch) => {
             setSettings((previous) => normalizeSettings({ ...previous, ...patch }));
           }}

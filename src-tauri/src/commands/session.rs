@@ -126,6 +126,43 @@ fn remove_segment_references(session: &mut Session, segment_path: &str) -> bool 
         || before_meta != session.audio_segment_meta.len()
 }
 
+fn normalized_session_search_query(query: &str) -> String {
+    query.trim().to_lowercase()
+}
+
+fn session_matches_search_query(session: &Session, normalized_query: &str) -> bool {
+    if normalized_query.is_empty() {
+        return true;
+    }
+
+    session
+        .name
+        .as_deref()
+        .map(|name| name.to_lowercase().contains(normalized_query))
+        .unwrap_or(false)
+        || session
+            .summary
+            .as_ref()
+            .map(|summary| {
+                summary
+                    .raw_markdown
+                    .to_lowercase()
+                    .contains(normalized_query)
+            })
+            .unwrap_or(false)
+}
+
+fn search_session_summaries(sessions: Vec<Session>, query: &str) -> Vec<SessionSummary> {
+    let normalized_query = normalized_session_search_query(query);
+    let mut summaries = sessions
+        .iter()
+        .filter(|session| session_matches_search_query(session, &normalized_query))
+        .map(SessionSummary::from)
+        .collect::<Vec<SessionSummary>>();
+    summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    summaries
+}
+
 #[derive(Debug, Clone)]
 struct SelectedSessionSegment {
     source_path: String,
@@ -333,6 +370,19 @@ pub fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionSummary>, S
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
     storage.list_sessions()
+}
+
+#[tauri::command]
+pub fn session_search(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<SessionSummary>, String> {
+    let storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let sessions = storage.list_all_sessions()?;
+    Ok(search_session_summaries(sessions, &query))
 }
 
 #[tauri::command]
@@ -690,7 +740,7 @@ mod tests {
         build_imported_session_from_segments, collect_selected_session_segments,
         collect_session_audio_paths, copy_selected_segments_to_dir,
         ensure_all_segments_deletion_allowed, ensure_single_segment_deletion_allowed,
-        remove_segment_references, session_has_merged_audio,
+        remove_segment_references, search_session_summaries, session_has_merged_audio,
     };
     use crate::models::{
         AudioSegmentMeta, Session, SessionStatus, SummaryResult, TranscriptSegment,
@@ -801,6 +851,76 @@ mod tests {
                 "/tmp/segment-b.m4a".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn search_session_summaries_matches_name_and_summary_content() {
+        let sessions = vec![
+            Session {
+                id: "older".to_string(),
+                name: Some("Weekly Planning".to_string()),
+                created_at: "2026-04-12T10:00:00Z".to_string(),
+                summary: Some(SummaryResult {
+                    title: "Other".to_string(),
+                    decisions: vec![],
+                    action_items: vec![],
+                    risks: vec![],
+                    timeline: vec![],
+                    raw_markdown: "Discussed launch readiness.".to_string(),
+                }),
+                ..Default::default()
+            },
+            Session {
+                id: "newer".to_string(),
+                name: Some("Design Review".to_string()),
+                created_at: "2026-04-13T10:00:00Z".to_string(),
+                summary: Some(SummaryResult {
+                    title: "Summary".to_string(),
+                    decisions: vec![],
+                    action_items: vec![],
+                    risks: vec![],
+                    timeline: vec![],
+                    raw_markdown: "The team finalized the onboarding flow.".to_string(),
+                }),
+                ..Default::default()
+            },
+            Session {
+                id: "unmatched".to_string(),
+                name: Some("Budget".to_string()),
+                created_at: "2026-04-14T10:00:00Z".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        let name_matches = search_session_summaries(sessions.clone(), "planning");
+        assert_eq!(name_matches.len(), 1);
+        assert_eq!(name_matches[0].id, "older");
+
+        let summary_matches = search_session_summaries(sessions, "ONBOARDING");
+        assert_eq!(summary_matches.len(), 1);
+        assert_eq!(summary_matches[0].id, "newer");
+    }
+
+    #[test]
+    fn empty_search_query_returns_all_sessions_newest_first() {
+        let sessions = vec![
+            Session {
+                id: "older".to_string(),
+                created_at: "2026-04-12T10:00:00Z".to_string(),
+                ..Default::default()
+            },
+            Session {
+                id: "newer".to_string(),
+                created_at: "2026-04-13T10:00:00Z".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        let results = search_session_summaries(sessions, "   ");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "newer");
+        assert_eq!(results[1].id, "older");
     }
 
     #[test]

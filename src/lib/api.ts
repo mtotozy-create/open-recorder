@@ -12,6 +12,7 @@ import type {
   SessionSummary,
   StartRecordingResponse,
   Settings,
+  SummaryMarkdownExportResult,
   StorageUsageSummary
 } from "../types/domain";
 
@@ -104,6 +105,10 @@ export async function exportRecording(
 
 export async function listSessions(): Promise<SessionSummary[]> {
   return invoke("session_list");
+}
+
+export async function searchSessions(query: string): Promise<SessionSummary[]> {
+  return invoke("session_search", { query });
 }
 
 export async function createSessionFromAudio(
@@ -201,6 +206,12 @@ export async function enqueueSummary(
     providerId
   });
   return response.jobId;
+}
+
+export async function exportAllSummariesMarkdown(
+  folderPath: string
+): Promise<SummaryMarkdownExportResult> {
+  return invoke("summary_export_all_markdown", { folderPath });
 }
 
 export async function enqueueInsight(

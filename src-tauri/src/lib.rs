@@ -17,10 +17,12 @@ use commands::{
     session::{
         session_create_from_audio, session_create_from_segments, session_delete,
         session_delete_segment, session_delete_segments, session_get, session_list, session_rename,
-        session_set_discoverable, session_set_tags, session_update_summary_raw_markdown,
+        session_search, session_set_discoverable, session_set_tags,
+        session_update_summary_raw_markdown,
     },
     settings::{settings_get, settings_get_storage_usage, settings_update},
     summary::summary_enqueue,
+    summary_export::summary_export_all_markdown,
     transcribe::{session_prepare_transcription_audio, transcribe_enqueue},
 };
 use state::AppState;
@@ -29,6 +31,7 @@ pub fn run() {
     let app_state = AppState::load().expect("failed to initialize persisted app state");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             recorder_start,
@@ -44,6 +47,7 @@ pub fn run() {
             recorder_export,
             recorder_list_input_devices,
             session_list,
+            session_search,
             session_get,
             session_create_from_audio,
             session_create_from_segments,
@@ -57,6 +61,7 @@ pub fn run() {
             transcribe_enqueue,
             session_prepare_transcription_audio,
             summary_enqueue,
+            summary_export_all_markdown,
             insight_enqueue,
             insight_get_cached,
             job_get,
