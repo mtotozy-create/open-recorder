@@ -1,11 +1,13 @@
+use std::collections::HashSet;
+
 use chrono::Utc;
 use tauri::State;
 use uuid::Uuid;
 
 use crate::{
     models::{
-        Job, JobEnqueueResponse, JobKind, JobStatus, PromptTemplate, ProviderCapability,
-        ProviderConfig, ProviderKind, SessionStatus,
+        Job, JobEnqueueResponse, JobKind, JobStatus, PersonNameMapping, PromptTemplate,
+        ProviderCapability, ProviderConfig, ProviderKind, SessionStatus, TranscriptSegment,
     },
     providers::bailian::{summarize_with_chat_compatible, ChatCompatibleSummaryConfig},
     state::AppState,
@@ -183,7 +185,8 @@ pub fn summary_enqueue(
 
         session.status = SessionStatus::Summarizing;
         session.updated_at = now_iso();
-        let transcript = session.transcript.clone();
+        let transcript =
+            apply_person_name_mappings(&session.transcript, &settings.person_name_mappings);
 
         if transcript.is_empty() {
             session.status = SessionStatus::Failed;
@@ -310,4 +313,128 @@ fn resolve_template<'a>(
     template_id: &str,
 ) -> Option<&'a PromptTemplate> {
     templates.iter().find(|template| template.id == template_id)
+}
+
+pub(crate) fn apply_person_name_mappings(
+    transcript: &[TranscriptSegment],
+    mappings: &[PersonNameMapping],
+) -> Vec<TranscriptSegment> {
+    let rules = normalized_person_name_mapping_rules(mappings);
+    if rules.is_empty() {
+        return transcript.to_vec();
+    }
+
+    transcript
+        .iter()
+        .cloned()
+        .map(|mut segment| {
+            for (source_name, target_name) in &rules {
+                segment.text = segment.text.replace(source_name, target_name);
+            }
+            segment
+        })
+        .collect()
+}
+
+fn normalized_person_name_mapping_rules(mappings: &[PersonNameMapping]) -> Vec<(String, String)> {
+    let mut seen_sources = HashSet::new();
+    let mut rules = Vec::with_capacity(mappings.len());
+
+    for mapping in mappings {
+        let source_name = mapping.source_name.trim();
+        let target_name = mapping.target_name.trim();
+        if source_name.is_empty() || target_name.is_empty() || source_name == target_name {
+            continue;
+        }
+        if !seen_sources.insert(source_name.to_string()) {
+            continue;
+        }
+        rules.push((source_name.to_string(), target_name.to_string()));
+    }
+
+    rules.sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()));
+    rules
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_person_name_mappings;
+    use crate::models::{PersonNameMapping, TranscriptSegment};
+
+    fn mapping(id: &str, source_name: &str, target_name: &str) -> PersonNameMapping {
+        PersonNameMapping {
+            id: id.to_string(),
+            source_name: source_name.to_string(),
+            target_name: target_name.to_string(),
+        }
+    }
+
+    fn segment(text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            start_ms: 0,
+            end_ms: 1000,
+            text: text.to_string(),
+            translation_text: Some("translation stays original".to_string()),
+            translation_target_language: Some("en".to_string()),
+            confidence: Some(0.9),
+            speaker_id: Some("speaker-1".to_string()),
+            speaker_label: Some("Speaker 1".to_string()),
+        }
+    }
+
+    #[test]
+    fn applies_exact_replacements_across_segments() {
+        let transcript = vec![segment("任希介绍方案"), segment("请任希跟进")];
+        let corrected = apply_person_name_mappings(&transcript, &[mapping("one", "任希", "任曦")]);
+
+        assert_eq!(corrected[0].text, "任曦介绍方案");
+        assert_eq!(corrected[1].text, "请任曦跟进");
+    }
+
+    #[test]
+    fn ignores_invalid_duplicate_and_noop_mappings() {
+        let transcript = vec![segment("Alice and Bob")];
+        let corrected = apply_person_name_mappings(
+            &transcript,
+            &[
+                mapping("empty-source", " ", "Nobody"),
+                mapping("empty-target", "Bob", " "),
+                mapping("noop", "Alice", "Alice"),
+                mapping("first", "Alice", "Alicia"),
+                mapping("duplicate", "Alice", "Ally"),
+                mapping("shared-target", "Bob", "Alicia"),
+            ],
+        );
+
+        assert_eq!(corrected[0].text, "Alicia and Alicia");
+    }
+
+    #[test]
+    fn applies_longer_source_names_before_shorter_sources() {
+        let transcript = vec![segment("王小明和王都参加")];
+        let corrected = apply_person_name_mappings(
+            &transcript,
+            &[
+                mapping("short", "王", "Wang"),
+                mapping("long", "王小明", "Alex Wang"),
+            ],
+        );
+
+        assert_eq!(corrected[0].text, "Alex Wang和Wang都参加");
+    }
+
+    #[test]
+    fn does_not_mutate_original_transcript_or_non_text_fields() {
+        let transcript = vec![segment("Ren Shee joined")];
+        let corrected =
+            apply_person_name_mappings(&transcript, &[mapping("one", "Ren Shee", "Renxi")]);
+
+        assert_eq!(transcript[0].text, "Ren Shee joined");
+        assert_eq!(corrected[0].text, "Renxi joined");
+        assert_eq!(
+            corrected[0].translation_text,
+            transcript[0].translation_text
+        );
+        assert_eq!(corrected[0].speaker_label, transcript[0].speaker_label);
+    }
 }

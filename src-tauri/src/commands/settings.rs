@@ -70,6 +70,10 @@ pub fn settings_update(
         settings.session_tag_catalog = session_tag_catalog;
     }
 
+    if let Some(person_name_mappings) = request.person_name_mappings {
+        settings.person_name_mappings = person_name_mappings;
+    }
+
     if let Some(default_template_id) = request.default_template_id {
         settings.default_template_id = default_template_id;
     }

@@ -52,6 +52,7 @@ import type {
   JobInfo,
   OssConfig,
   OssProviderKind,
+  PersonNameMapping,
   ProviderCapability,
   ProviderConfig,
   PromptTemplate,
@@ -271,6 +272,7 @@ const emptySettings: Settings = {
   recordingInputDeviceId: "",
   summaryExportFolderPath: "",
   sessionTagCatalog: DEFAULT_SESSION_TAG_CATALOG,
+  personNameMappings: [],
   defaultTemplateId: "meeting-default",
   templates: []
 };
@@ -425,6 +427,7 @@ function normalizeSettings(input: Settings): Settings {
     ...DEFAULT_SESSION_TAG_CATALOG,
     ...(input.sessionTagCatalog ?? [])
   ]);
+  const personNameMappings = normalizePersonNameMappingsForEditing(input.personNameMappings);
 
   const templates = input.templates.length > 0 ? input.templates : [createDefaultTemplate()];
   const defaultExists = templates.some((template) => template.id === input.defaultTemplateId);
@@ -668,6 +671,7 @@ function normalizeSettings(input: Settings): Settings {
     recordingInputDeviceId,
     summaryExportFolderPath,
     sessionTagCatalog,
+    personNameMappings,
     templates,
     defaultTemplateId: defaultExists ? input.defaultTemplateId : templates[0].id
   };
@@ -736,6 +740,16 @@ function normalizeSummarizationTypesCsv(raw: string | undefined): string {
     .filter((item): item is string => Boolean(item))
     .filter((item, index, list) => list.indexOf(item) === index);
   return result.join(",");
+}
+
+function normalizePersonNameMappingsForEditing(
+  input: PersonNameMapping[] | undefined
+): PersonNameMapping[] {
+  return (input ?? []).map((mapping, index) => ({
+    id: mapping.id?.trim() || `person-name-${index + 1}`,
+    sourceName: typeof mapping.sourceName === "string" ? mapping.sourceName : "",
+    targetName: typeof mapping.targetName === "string" ? mapping.targetName : ""
+  }));
 }
 
 function getAliyunRealtimeDefaults(settings: Settings): AliyunRealtimeDefaults {

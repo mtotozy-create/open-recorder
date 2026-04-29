@@ -627,6 +627,14 @@ pub struct PromptTemplate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonNameMapping {
+    pub id: String,
+    pub source_name: String,
+    pub target_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AudioSegmentMeta {
     pub path: String,
@@ -674,6 +682,8 @@ pub struct Settings {
     pub summary_export_folder_path: Option<String>,
     #[serde(default = "default_session_tag_catalog")]
     pub session_tag_catalog: Vec<String>,
+    #[serde(default)]
+    pub person_name_mappings: Vec<PersonNameMapping>,
     pub default_template_id: String,
     pub templates: Vec<PromptTemplate>,
 
@@ -766,6 +776,7 @@ impl Default for Settings {
             recording_input_device_id: None,
             summary_export_folder_path: None,
             session_tag_catalog: default_session_tag_catalog(),
+            person_name_mappings: vec![],
             default_template_id: "meeting-default".to_string(),
             templates: vec![create_default_template()],
 
@@ -887,6 +898,7 @@ impl Settings {
             &mut self.session_tag_catalog,
             &default_session_tag_catalog(),
         );
+        self.person_name_mappings = normalize_person_name_mappings(&self.person_name_mappings);
         self.recording_segment_seconds = self
             .recording_segment_seconds
             .clamp(MIN_RECORDING_SEGMENT_SECONDS, MAX_RECORDING_SEGMENT_SECONDS);
@@ -1897,13 +1909,53 @@ pub struct SettingsPatch {
     pub recording_input_device_id: Option<String>,
     pub summary_export_folder_path: Option<String>,
     pub session_tag_catalog: Option<Vec<String>>,
+    pub person_name_mappings: Option<Vec<PersonNameMapping>>,
     pub default_template_id: Option<String>,
     pub templates: Option<Vec<PromptTemplate>>,
 }
 
+pub fn normalize_person_name_mappings(mappings: &[PersonNameMapping]) -> Vec<PersonNameMapping> {
+    let mut seen_sources = HashSet::new();
+    let mut normalized = Vec::with_capacity(mappings.len());
+
+    for (index, mapping) in mappings.iter().enumerate() {
+        let source_name = mapping.source_name.trim();
+        let target_name = mapping.target_name.trim();
+        if source_name.is_empty() || target_name.is_empty() || source_name == target_name {
+            continue;
+        }
+        if !seen_sources.insert(source_name.to_string()) {
+            continue;
+        }
+
+        let id = mapping.id.trim();
+        normalized.push(PersonNameMapping {
+            id: if id.is_empty() {
+                format!("person-name-{}", index + 1)
+            } else {
+                id.to_string()
+            },
+            source_name: source_name.to_string(),
+            target_name: target_name.to_string(),
+        });
+    }
+
+    normalized
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{OssConfig, OssProviderKind, ProviderKind, ProviderOssSettings, Settings};
+    use super::{
+        OssConfig, OssProviderKind, PersonNameMapping, ProviderKind, ProviderOssSettings, Settings,
+    };
+
+    fn person_name_mapping(id: &str, source_name: &str, target_name: &str) -> PersonNameMapping {
+        PersonNameMapping {
+            id: id.to_string(),
+            source_name: source_name.to_string(),
+            target_name: target_name.to_string(),
+        }
+    }
 
     #[test]
     fn default_settings_select_ollama_for_summary() {
@@ -2053,5 +2105,33 @@ mod tests {
         ];
         let result = super::validate_session_tags(&tags);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn normalize_person_name_mappings_trims_and_filters_invalid_rows() {
+        let normalized = super::normalize_person_name_mappings(&[
+            person_name_mapping(" one ", " Ren Shee ", " Renxi "),
+            person_name_mapping("empty-source", " ", "Nobody"),
+            person_name_mapping("empty-target", "Bob", " "),
+            person_name_mapping("noop", "Alice", "Alice"),
+            person_name_mapping("duplicate", "Ren Shee", "Ren X"),
+            person_name_mapping("shared-target", "Bob", "Renxi"),
+        ]);
+
+        assert_eq!(normalized.len(), 2);
+        assert_eq!(normalized[0].id, "one");
+        assert_eq!(normalized[0].source_name, "Ren Shee");
+        assert_eq!(normalized[0].target_name, "Renxi");
+        assert_eq!(normalized[1].id, "shared-target");
+        assert_eq!(normalized[1].source_name, "Bob");
+        assert_eq!(normalized[1].target_name, "Renxi");
+    }
+
+    #[test]
+    fn normalize_person_name_mappings_assigns_missing_ids() {
+        let normalized =
+            super::normalize_person_name_mappings(&[person_name_mapping("", "任希", "任曦")]);
+
+        assert_eq!(normalized[0].id, "person-name-1");
     }
 }

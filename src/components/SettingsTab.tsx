@@ -8,6 +8,7 @@ import { WHISPER_MODEL_PROFILES } from "../lib/localSttWhisperModels";
 import type {
   OssConfig,
   OssProviderKind,
+  PersonNameMapping,
   PromptTemplate,
   ProviderCapability,
   ProviderConfig,
@@ -41,7 +42,10 @@ type SettingsTabProps = {
   t: Translator;
 };
 
-type SettingsSubTab = "general" | "provider" | "oss" | "templates" | "about";
+type SettingsSubTab = "general" | "provider" | "oss" | "templates" | "tools" | "about";
+type SettingsToolPanel = "personNameMappings";
+type PersonNameMappingSortKey = "sourceName" | "targetName";
+type SortDirection = "asc" | "desc";
 
 type SettingsSubTabItem = {
   id: SettingsSubTab;
@@ -53,9 +57,22 @@ const settingsSubTabs: SettingsSubTabItem[] = [
   { id: "provider", labelKey: "settings.tabs.provider" },
   { id: "oss", labelKey: "settings.tabs.oss" },
   { id: "templates", labelKey: "settings.tabs.templates" },
+  { id: "tools", labelKey: "settings.tabs.tools" },
   { id: "about", labelKey: "settings.tabs.about" }
 ];
 const DEFAULT_RECORDING_SEGMENT_SECONDS = 120;
+
+const settingsToolPanels: Array<{
+  id: SettingsToolPanel;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
+}> = [
+  {
+    id: "personNameMappings",
+    labelKey: "settings.tools.personNameMappings",
+    descriptionKey: "settings.tools.personNameMappingsDescription"
+  }
+];
 
 function buildTemplateId(name: string, index: number): string {
   const normalized = name
@@ -75,6 +92,14 @@ function createTemplate(index: number): PromptTemplate {
     systemPrompt: "You are an assistant for writing concise meeting notes.",
     userPrompt: "Organize transcript into: conclusion, action items, risks, timeline.",
     variables: ["language", "audience"]
+  };
+}
+
+function createPersonNameMapping(index: number): PersonNameMapping {
+  return {
+    id: `person-name-${Date.now()}-${index}`,
+    sourceName: "",
+    targetName: ""
   };
 }
 
@@ -135,6 +160,12 @@ function SettingsTab({
   t
 }: SettingsTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>("general");
+  const [activeToolPanel, setActiveToolPanel] =
+    useState<SettingsToolPanel>("personNameMappings");
+  const [personNameMappingSort, setPersonNameMappingSort] = useState<{
+    key: PersonNameMappingSortKey;
+    direction: SortDirection;
+  }>({ key: "targetName", direction: "asc" });
   const [activeProviderId, setActiveProviderId] = useState<string>(
     settings.providers[0]?.id ?? ""
   );
@@ -295,6 +326,41 @@ function SettingsTab({
         : settings.defaultTemplateId;
 
     onSettingsChange({ templates, defaultTemplateId });
+  }
+
+  function updatePersonNameMappings(personNameMappings: PersonNameMapping[]) {
+    onSettingsChange({ personNameMappings });
+  }
+
+  function patchPersonNameMapping(
+    mappingId: string,
+    patch: Partial<Pick<PersonNameMapping, "sourceName" | "targetName">>
+  ) {
+    updatePersonNameMappings(
+      settings.personNameMappings.map((mapping) =>
+        mapping.id === mappingId ? { ...mapping, ...patch } : mapping
+      )
+    );
+  }
+
+  function addPersonNameMapping() {
+    updatePersonNameMappings([
+      ...settings.personNameMappings,
+      createPersonNameMapping(settings.personNameMappings.length + 1)
+    ]);
+  }
+
+  function removePersonNameMapping(mappingId: string) {
+    updatePersonNameMappings(
+      settings.personNameMappings.filter((mapping) => mapping.id !== mappingId)
+    );
+  }
+
+  function handlePersonNameMappingSort(key: PersonNameMappingSortKey) {
+    setPersonNameMappingSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc"
+    }));
   }
 
   function updateProviders(nextProviders: ProviderConfig[]) {
@@ -1231,9 +1297,42 @@ function SettingsTab({
   );
   const activeProvider = settings.providers.find((provider) => provider.id === activeProviderId);
   const activeOssConfig = settings.ossConfigs.find((config) => config.id === activeOssConfigId);
-  const hasValidationErrors = Object.values(aliyunJsonFieldErrors).some(
+  const personNameSourceCounts = settings.personNameMappings.reduce<Record<string, number>>(
+    (counts, mapping) => {
+      const sourceName = mapping.sourceName.trim();
+      if (sourceName) {
+        counts[sourceName] = (counts[sourceName] ?? 0) + 1;
+      }
+      return counts;
+    },
+    {}
+  );
+  const sortedPersonNameMappings = [...settings.personNameMappings].sort((left, right) => {
+    const leftValue = left[personNameMappingSort.key].trim();
+    const rightValue = right[personNameMappingSort.key].trim();
+    const comparison = leftValue.localeCompare(rightValue, locale, {
+      numeric: true,
+      sensitivity: "base"
+    });
+    if (comparison !== 0) {
+      return personNameMappingSort.direction === "asc" ? comparison : -comparison;
+    }
+    return left.id.localeCompare(right.id);
+  });
+  const hasPersonNameMappingErrors = settings.personNameMappings.some((mapping) => {
+    const sourceName = mapping.sourceName.trim();
+    const targetName = mapping.targetName.trim();
+    return (
+      !sourceName ||
+      !targetName ||
+      sourceName === targetName ||
+      personNameSourceCounts[sourceName] > 1
+    );
+  });
+  const hasAliyunValidationErrors = Object.values(aliyunJsonFieldErrors).some(
     (value) => Boolean(value.serviceInspection || value.customPrompt)
   );
+  const hasValidationErrors = hasAliyunValidationErrors || hasPersonNameMappingErrors;
   const storageUsageSummary =
     storageUsageState.status === "loading" ||
     storageUsageState.status === "success" ||
@@ -1855,6 +1954,158 @@ function SettingsTab({
           </div>
         )}
 
+        {activeSubTab === "tools" && (
+          <div className="settings-section">
+            <h3>{t("settings.tabs.tools")}</h3>
+            <div className="settings-tools-layout">
+              <aside
+                className="settings-tools-list"
+                role="listbox"
+                aria-label={t("settings.tools.ariaLabel")}
+              >
+                {settingsToolPanels.map((tool) => {
+                  const active = activeToolPanel === tool.id;
+                  return (
+                    <button
+                      key={tool.id}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      className={`settings-tools-list-item${active ? " active" : ""}`}
+                      onClick={() => setActiveToolPanel(tool.id)}
+                    >
+                      <strong>{t(tool.labelKey)}</strong>
+                      <span>{t(tool.descriptionKey)}</span>
+                    </button>
+                  );
+                })}
+              </aside>
+
+              <div className="settings-tool-panel">
+                {activeToolPanel === "personNameMappings" && (
+                  <>
+                    <div className="settings-tool-panel-header">
+                      <div>
+                        <h4>{t("settings.personNameMappingsTitle")}</h4>
+                        <p>{t("settings.personNameMappingsHint")}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="settings-inline-btn"
+                        onClick={addPersonNameMapping}
+                      >
+                        {t("settings.personNameMappingsAdd")}
+                      </button>
+                    </div>
+
+                    {settings.personNameMappings.length > 0 ? (
+                      <div className="settings-person-name-table" role="table">
+                        <div className="settings-person-name-row header" role="row">
+                          <button
+                            type="button"
+                            role="columnheader"
+                            aria-sort={
+                              personNameMappingSort.key === "sourceName"
+                                ? personNameMappingSort.direction === "asc"
+                                  ? "ascending"
+                                  : "descending"
+                                : "none"
+                            }
+                            className="settings-person-name-sort"
+                            onClick={() => handlePersonNameMappingSort("sourceName")}
+                          >
+                            {t("settings.personNameMappingsSource")}
+                            {personNameMappingSort.key === "sourceName"
+                              ? personNameMappingSort.direction === "asc"
+                                ? " ↑"
+                                : " ↓"
+                              : ""}
+                          </button>
+                          <button
+                            type="button"
+                            role="columnheader"
+                            aria-sort={
+                              personNameMappingSort.key === "targetName"
+                                ? personNameMappingSort.direction === "asc"
+                                  ? "ascending"
+                                  : "descending"
+                                : "none"
+                            }
+                            className="settings-person-name-sort"
+                            onClick={() => handlePersonNameMappingSort("targetName")}
+                          >
+                            {t("settings.personNameMappingsTarget")}
+                            {personNameMappingSort.key === "targetName"
+                              ? personNameMappingSort.direction === "asc"
+                                ? " ↑"
+                                : " ↓"
+                              : ""}
+                          </button>
+                          <span role="columnheader">{t("settings.personNameMappingsActions")}</span>
+                        </div>
+                        {sortedPersonNameMappings.map((mapping) => {
+                          const sourceName = mapping.sourceName.trim();
+                          const targetName = mapping.targetName.trim();
+                          const sourceInvalid =
+                            !sourceName || personNameSourceCounts[sourceName] > 1;
+                          const targetInvalid =
+                            !targetName || sourceName === targetName;
+                          const invalid = sourceInvalid || targetInvalid;
+                          return (
+                            <div
+                              key={mapping.id}
+                              className={`settings-person-name-row${invalid ? " invalid" : ""}`}
+                              role="row"
+                            >
+                              <input
+                                role="cell"
+                                value={mapping.sourceName}
+                                placeholder={t("settings.personNameMappingsSourcePlaceholder")}
+                                aria-invalid={sourceInvalid}
+                                onChange={(event) =>
+                                  patchPersonNameMapping(mapping.id, {
+                                    sourceName: event.target.value
+                                  })
+                                }
+                              />
+                              <input
+                                role="cell"
+                                value={mapping.targetName}
+                                placeholder={t("settings.personNameMappingsTargetPlaceholder")}
+                                aria-invalid={targetInvalid}
+                                onChange={(event) =>
+                                  patchPersonNameMapping(mapping.id, {
+                                    targetName: event.target.value
+                                  })
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="settings-person-name-remove"
+                                onClick={() => removePersonNameMapping(mapping.id)}
+                              >
+                                {t("settings.personNameMappingsRemove")}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="provider-empty-hint">{t("settings.personNameMappingsEmpty")}</p>
+                    )}
+
+                    {hasPersonNameMappingErrors ? (
+                      <p className="provider-validation-error">
+                        {t("settings.personNameMappingsInvalid")}
+                      </p>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeSubTab === "about" && (
           <div className="settings-section">
             <h3>{t("settings.tabs.about")}</h3>
@@ -1870,8 +2121,11 @@ function SettingsTab({
       </div>
 
       <div className="settings-save-row">
-        {hasValidationErrors ? (
+        {hasAliyunValidationErrors ? (
           <p className="provider-validation-error">{t("settings.aliyunJsonFixBeforeSave")}</p>
+        ) : null}
+        {hasPersonNameMappingErrors ? (
+          <p className="provider-validation-error">{t("settings.personNameMappingsInvalid")}</p>
         ) : null}
         <button
           type="button"

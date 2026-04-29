@@ -47,6 +47,12 @@ export type PromptTemplate = {
   variables: string[];
 };
 
+export type PersonNameMapping = {
+  id: string;
+  sourceName: string;
+  targetName: string;
+};
+
 export type ProviderKind = "bailian" | "aliyun_tingwu" | "openrouter" | "ollama" | "local_stt";
 
 export type ProviderCapability = "transcription" | "summary";
@@ -169,6 +175,7 @@ export type Settings = {
   recordingInputDeviceId?: string | null;
   summaryExportFolderPath?: string | null;
   sessionTagCatalog: string[];
+  personNameMappings: PersonNameMapping[];
   defaultTemplateId: string;
   templates: PromptTemplate[];
 };
