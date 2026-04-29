@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.7.0...v0.8.0) (2026-04-29)
+
+### Features
+
+* **summary:** add person name mappings ([4d20cde](https://github-mtotozy/mtotozy-create/open-recorder/commit/4d20cde37f9bd45af625a44b6604472ed638ca8e))
+
+### Bug Fixes
+
+* **release:** sync Cargo.lock version ([2752d7a](https://github-mtotozy/mtotozy-create/open-recorder/commit/2752d7af0c97eacf49e5d306851d6e7cba9c6eb1))
+
 ## [0.7.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.6.0...v0.7.0) (2026-04-25)
 
 ### Features
