@@ -20,11 +20,12 @@ pub fn settings_update(
     request: SettingsPatch,
     state: State<'_, AppState>,
 ) -> Result<Settings, String> {
-    let storage = state
+    let mut storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
     let mut settings = storage.get_settings()?;
+    let mut should_save_person_name_mappings = false;
 
     if let Some(providers) = request.providers {
         settings.providers = providers;
@@ -72,6 +73,7 @@ pub fn settings_update(
 
     if let Some(person_name_mappings) = request.person_name_mappings {
         settings.person_name_mappings = person_name_mappings;
+        should_save_person_name_mappings = true;
     }
 
     if let Some(default_template_id) = request.default_template_id {
@@ -83,7 +85,11 @@ pub fn settings_update(
     }
 
     settings.normalize();
-    storage.save_settings(&settings)?;
+    if should_save_person_name_mappings {
+        storage.save_settings_and_person_name_mappings(&settings)?;
+    } else {
+        storage.save_settings(&settings)?;
+    }
     Ok(settings)
 }
 

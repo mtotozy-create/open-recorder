@@ -9,14 +9,14 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::models::{
-    merge_session_tags_into_catalog, normalize_tags, InsightCacheEntry, Job, Session,
-    SessionStatus, SessionSummary, Settings, DEFAULT_RECORDING_SESSION_TAG,
+    merge_session_tags_into_catalog, normalize_tags, InsightCacheEntry, Job, PersonNameMapping,
+    Session, SessionStatus, SessionSummary, Settings, DEFAULT_RECORDING_SESSION_TAG,
 };
 
 const DATABASE_FILE_NAME: &str = "open-recorder.db";
 const DATABASE_TEMP_FILE_NAME: &str = "open-recorder.db.tmp";
 const LEGACY_STATE_FILE_NAME: &str = "state.json";
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -114,6 +114,7 @@ impl Storage {
         let connection = open_connection(&db_path)?;
         initialize_schema(&connection)?;
         ensure_settings_row(&connection)?;
+        migrate_legacy_person_name_mappings_if_needed(&connection)?;
 
         Ok(Self {
             data_dir: data_dir.to_path_buf(),
@@ -125,6 +126,7 @@ impl Storage {
         let connection = open_connection(db_path)?;
         initialize_schema(&connection)?;
         ensure_settings_row(&connection)?;
+        migrate_legacy_person_name_mappings_if_needed(&connection)?;
         recover_interrupted_sessions(&connection)?;
 
         Ok(Self {
@@ -139,6 +141,21 @@ impl Storage {
 
     pub fn save_settings(&self, settings: &Settings) -> Result<(), String> {
         upsert_settings(&self.connection, settings)
+    }
+
+    pub fn save_settings_and_person_name_mappings(
+        &mut self,
+        settings: &Settings,
+    ) -> Result<(), String> {
+        let tx = self.connection.transaction().map_err(|error| {
+            format!("failed to start settings/person-name transaction: {error}")
+        })?;
+        upsert_settings(&tx, settings)?;
+        replace_person_name_mappings(&tx, &settings.person_name_mappings)?;
+        tx.commit().map_err(|error| {
+            format!("failed to commit settings/person-name transaction: {error}")
+        })?;
+        Ok(())
     }
 
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, String> {
@@ -339,12 +356,22 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
                 payload_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS person_name_mappings (
+                id TEXT PRIMARY KEY,
+                source_name TEXT NOT NULL UNIQUE,
+                target_name TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_sessions_discoverable_created_at ON sessions(discoverable, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_session_created_at ON jobs(session_id, created_at ASC);
             CREATE INDEX IF NOT EXISTS idx_jobs_status_updated_at ON jobs(status, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_insight_cache_cached_at ON insight_cache(cached_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_person_name_mappings_position ON person_name_mappings(position ASC);
             ",
         )
         .map_err(|error| format!("failed to initialize sqlite schema: {error}"))?;
@@ -404,6 +431,7 @@ fn migrate_legacy_state_to_database(legacy_path: &Path, temp_db_path: &Path) -> 
         .transaction()
         .map_err(|error| format!("failed to start migration transaction: {error}"))?;
     upsert_settings(&tx, &data.settings)?;
+    replace_person_name_mappings(&tx, &data.settings.person_name_mappings)?;
     for session in data.sessions.values() {
         upsert_session(&tx, session)?;
     }
@@ -429,13 +457,14 @@ fn load_settings(connection: &Connection) -> Result<Settings, String> {
         .map_err(|error| format!("failed to load settings: {error}"))?;
     let mut settings = deserialize_json::<Settings>(&payload, "settings")?;
     settings.normalize();
+    settings.person_name_mappings = load_person_name_mappings(connection)?;
     Ok(settings)
 }
 
 fn upsert_settings(connection: &Connection, settings: &Settings) -> Result<(), String> {
     let mut normalized = settings.clone();
     normalized.normalize();
-    let payload = serialize_json(&normalized, "settings")?;
+    let payload = serialize_settings_json_without_person_name_mappings(&normalized)?;
     connection
         .execute(
             "INSERT INTO settings (id, payload_json) VALUES (1, ?1)
@@ -443,6 +472,105 @@ fn upsert_settings(connection: &Connection, settings: &Settings) -> Result<(), S
             params![payload],
         )
         .map_err(|error| format!("failed to save settings: {error}"))?;
+    Ok(())
+}
+
+fn serialize_settings_json_without_person_name_mappings(
+    settings: &Settings,
+) -> Result<String, String> {
+    let mut value = serde_json::to_value(settings)
+        .map_err(|error| format!("failed to serialize settings: {error}"))?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("personNameMappings");
+    }
+    serde_json::to_string(&value).map_err(|error| format!("failed to serialize settings: {error}"))
+}
+
+fn migrate_legacy_person_name_mappings_if_needed(connection: &Connection) -> Result<(), String> {
+    let existing_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM person_name_mappings", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| format!("failed to count person name mappings: {error}"))?;
+    if existing_count > 0 {
+        return Ok(());
+    }
+
+    let payload: String = connection
+        .query_row(
+            "SELECT payload_json FROM settings WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("failed to load settings for person-name migration: {error}"))?;
+    let mut settings = deserialize_json::<Settings>(&payload, "settings")?;
+    settings.normalize();
+    if settings.person_name_mappings.is_empty() {
+        return Ok(());
+    }
+
+    replace_person_name_mappings(connection, &settings.person_name_mappings)
+}
+
+fn load_person_name_mappings(connection: &Connection) -> Result<Vec<PersonNameMapping>, String> {
+    let mut stmt = connection
+        .prepare(
+            "SELECT id, source_name, target_name
+             FROM person_name_mappings
+             ORDER BY position ASC, source_name ASC",
+        )
+        .map_err(|error| format!("failed to prepare person name mappings query: {error}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(PersonNameMapping {
+                id: row.get(0)?,
+                source_name: row.get(1)?,
+                target_name: row.get(2)?,
+            })
+        })
+        .map_err(|error| format!("failed to query person name mappings: {error}"))?;
+
+    let mut mappings = Vec::new();
+    for row in rows {
+        mappings
+            .push(row.map_err(|error| format!("failed to read person name mapping row: {error}"))?);
+    }
+    Ok(mappings)
+}
+
+fn replace_person_name_mappings(
+    connection: &Connection,
+    mappings: &[PersonNameMapping],
+) -> Result<(), String> {
+    let normalized = crate::models::normalize_person_name_mappings(mappings);
+    connection
+        .execute("DELETE FROM person_name_mappings", [])
+        .map_err(|error| format!("failed to clear person name mappings: {error}"))?;
+
+    let now = Utc::now().to_rfc3339();
+    for (index, mapping) in normalized.iter().enumerate() {
+        connection
+            .execute(
+                "INSERT INTO person_name_mappings
+                 (id, source_name, target_name, position, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    mapping.id.as_str(),
+                    mapping.source_name.as_str(),
+                    mapping.target_name.as_str(),
+                    index as i64,
+                    now.as_str(),
+                    now.as_str(),
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to save person name mapping '{}': {error}",
+                    mapping.id
+                )
+            })?;
+    }
+
     Ok(())
 }
 
@@ -801,7 +929,9 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use crate::models::{JobKind, JobStatus, SessionStatus};
+    use rusqlite::params;
+
+    use crate::models::{JobKind, JobStatus, PersonNameMapping, SessionStatus};
 
     use super::{
         calculate_dir_size, migrate_legacy_state_to_database, open_connection, PersistedState,
@@ -836,6 +966,14 @@ mod tests {
     impl Drop for TempDirGuard {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn person_name_mapping(id: &str, source_name: &str, target_name: &str) -> PersonNameMapping {
+        PersonNameMapping {
+            id: id.to_string(),
+            source_name: source_name.to_string(),
+            target_name: target_name.to_string(),
         }
     }
 
@@ -968,6 +1106,84 @@ mod tests {
             .get_session("session-2")
             .expect("session should reload")
             .is_some());
+    }
+
+    #[test]
+    fn save_settings_and_person_name_mappings_persists_mapping_table() {
+        let temp_dir = TempDirGuard::new("person-names").expect("temp dir should be created");
+        let db_path = temp_dir.path().join(DATABASE_FILE_NAME);
+        let connection = open_connection(&db_path).expect("db should open");
+        super::initialize_schema(&connection).expect("schema should initialize");
+        super::ensure_settings_row(&connection).expect("settings row should exist");
+
+        let mut storage = Storage {
+            data_dir: temp_dir.path().to_path_buf(),
+            connection,
+        };
+        let mut settings = storage.get_settings().expect("settings should load");
+        settings.person_name_mappings = vec![
+            person_name_mapping("one", " Ren Shee ", " Renxi "),
+            person_name_mapping("two", "任希", "Renxi"),
+        ];
+
+        storage
+            .save_settings_and_person_name_mappings(&settings)
+            .expect("settings/person-name transaction should succeed");
+
+        let reloaded = storage.get_settings().expect("settings should reload");
+        assert_eq!(reloaded.person_name_mappings.len(), 2);
+        assert_eq!(reloaded.person_name_mappings[0].source_name, "Ren Shee");
+        assert_eq!(reloaded.person_name_mappings[0].target_name, "Renxi");
+        assert_eq!(reloaded.person_name_mappings[1].source_name, "任希");
+        assert_eq!(reloaded.person_name_mappings[1].target_name, "Renxi");
+
+        let payload: String = storage
+            .connection
+            .query_row(
+                "SELECT payload_json FROM settings WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("settings payload should load");
+        assert!(
+            !payload.contains("personNameMappings"),
+            "person name mappings should live outside settings JSON"
+        );
+    }
+
+    #[test]
+    fn legacy_settings_json_person_name_mappings_migrate_into_table() {
+        let temp_dir =
+            TempDirGuard::new("legacy-person-names").expect("temp dir should be created");
+        let db_path = temp_dir.path().join(DATABASE_FILE_NAME);
+        let connection = open_connection(&db_path).expect("db should open");
+        super::initialize_schema(&connection).expect("schema should initialize");
+        let legacy_settings = serde_json::json!({
+            "personNameMappings": [
+                { "id": "one", "sourceName": " Ren Shee ", "targetName": " Renxi " },
+                { "id": "two", "sourceName": "任希", "targetName": "Renxi" },
+                { "id": "duplicate", "sourceName": "任希", "targetName": "Ignored" }
+            ]
+        });
+        connection
+            .execute(
+                "INSERT INTO settings (id, payload_json) VALUES (1, ?1)",
+                params![legacy_settings.to_string()],
+            )
+            .expect("legacy settings should be inserted");
+
+        super::migrate_legacy_person_name_mappings_if_needed(&connection)
+            .expect("legacy person mappings should migrate");
+
+        let mappings =
+            super::load_person_name_mappings(&connection).expect("person mappings should load");
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[0].id, "one");
+        assert_eq!(mappings[0].source_name, "Ren Shee");
+        assert_eq!(mappings[0].target_name, "Renxi");
+        assert_eq!(mappings[1].id, "two");
+        assert_eq!(mappings[1].source_name, "任希");
+        assert_eq!(mappings[1].target_name, "Renxi");
     }
 
     #[test]
