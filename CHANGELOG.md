@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.8.1...v0.9.0) (2026-05-05)
+
+### Features
+
+* **settings:** add backups and custom chat providers ([db5f531](https://github-mtotozy/mtotozy-create/open-recorder/commit/db5f531b387dc24c851bae4cc0e33bb74cae130b))
+
+### Bug Fixes
+
+* **release:** sync Cargo.lock version ([849cde6](https://github-mtotozy/mtotozy-create/open-recorder/commit/849cde628c1363b12a0e60a91f1917781745d3ba))
+
 ## [0.8.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.8.0...v0.8.1) (2026-04-29)
 
 ### Bug Fixes
