@@ -20,7 +20,10 @@ use commands::{
         session_search, session_set_discoverable, session_set_tags,
         session_update_summary_raw_markdown,
     },
-    settings::{settings_get, settings_get_storage_usage, settings_update},
+    settings::{
+        settings_export_backup, settings_get, settings_get_storage_usage, settings_import_backup,
+        settings_update,
+    },
     summary::summary_enqueue,
     summary_export::summary_export_all_markdown,
     transcribe::{session_prepare_transcription_audio, transcribe_enqueue},
@@ -71,6 +74,8 @@ pub fn run() {
             settings_get,
             settings_get_storage_usage,
             settings_update,
+            settings_export_backup,
+            settings_import_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running open-recorder");

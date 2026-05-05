@@ -53,7 +53,13 @@ export type PersonNameMapping = {
   targetName: string;
 };
 
-export type ProviderKind = "bailian" | "aliyun_tingwu" | "openrouter" | "ollama" | "local_stt";
+export type ProviderKind =
+  | "bailian"
+  | "aliyun_tingwu"
+  | "openrouter"
+  | "ollama"
+  | "local_stt"
+  | "custom_chat";
 
 export type ProviderCapability = "transcription" | "summary";
 
@@ -132,6 +138,15 @@ export type OllamaProviderSettings = {
   summaryModel: string;
 };
 
+export type CustomChatApiMode = "openai" | "anthropic";
+
+export type CustomChatProviderSettings = {
+  apiMode: CustomChatApiMode;
+  apiKey?: string;
+  baseUrl: string;
+  model: string;
+};
+
 export type LocalSttEngine = "whisper" | "sensevoice_small";
 
 export type LocalSttProviderSettings = {
@@ -161,6 +176,7 @@ export type ProviderConfig = {
   aliyunTingwu?: AliyunTingwuProviderSettings;
   openrouter?: OpenrouterProviderSettings;
   ollama?: OllamaProviderSettings;
+  customChat?: CustomChatProviderSettings;
   localStt?: LocalSttProviderSettings;
 };
 
@@ -183,6 +199,21 @@ export type Settings = {
 export type StorageUsageSummary = {
   dataDirPath: string;
   totalBytes: number;
+};
+
+export type SettingsBackupExportRequest = {
+  filePath: string;
+  settings: Settings;
+  locale: "zh-CN" | "en-US";
+};
+
+export type SettingsBackupExportResult = {
+  filePath: string;
+};
+
+export type SettingsBackupImportResult = {
+  settings: Settings;
+  locale: "zh-CN" | "en-US";
 };
 
 export type SummaryMarkdownExportProgress = {

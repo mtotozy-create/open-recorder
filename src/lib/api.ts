@@ -12,6 +12,9 @@ import type {
   SessionSummary,
   StartRecordingResponse,
   Settings,
+  SettingsBackupExportRequest,
+  SettingsBackupExportResult,
+  SettingsBackupImportResult,
   SummaryMarkdownExportResult,
   StorageUsageSummary
 } from "../types/domain";
@@ -247,6 +250,18 @@ export async function updateSettings(settings: Partial<Settings>): Promise<Setti
 
 export async function getStorageUsage(): Promise<StorageUsageSummary> {
   return invoke("settings_get_storage_usage");
+}
+
+export async function exportSettingsBackup(
+  request: SettingsBackupExportRequest
+): Promise<SettingsBackupExportResult> {
+  return invoke("settings_export_backup", { request });
+}
+
+export async function importSettingsBackup(
+  filePath: string
+): Promise<SettingsBackupImportResult> {
+  return invoke("settings_import_backup", { filePath });
 }
 
 export async function getLocalProviderStatus(): Promise<LocalProviderStatus> {

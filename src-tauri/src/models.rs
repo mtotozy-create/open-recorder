@@ -112,6 +112,7 @@ pub enum ProviderKind {
     Openrouter,
     Ollama,
     LocalStt,
+    CustomChat,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -338,6 +339,34 @@ impl Default for OllamaProviderSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomChatApiMode {
+    #[default]
+    Openai,
+    Anthropic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CustomChatProviderSettings {
+    pub api_mode: CustomChatApiMode,
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub model: String,
+}
+
+impl Default for CustomChatProviderSettings {
+    fn default() -> Self {
+        Self {
+            api_mode: CustomChatApiMode::Openai,
+            api_key: None,
+            base_url: String::new(),
+            model: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalSttEngine {
@@ -403,6 +432,7 @@ pub struct ProviderConfig {
     pub aliyun_tingwu: Option<AliyunTingwuProviderSettings>,
     pub openrouter: Option<OpenrouterProviderSettings>,
     pub ollama: Option<OllamaProviderSettings>,
+    pub custom_chat: Option<CustomChatProviderSettings>,
     pub local_stt: Option<LocalSttProviderSettings>,
 }
 
@@ -421,6 +451,7 @@ impl Default for ProviderConfig {
             aliyun_tingwu: None,
             openrouter: None,
             ollama: None,
+            custom_chat: None,
             local_stt: None,
         }
     }
@@ -970,6 +1001,7 @@ impl Settings {
             aliyun_tingwu: None,
             openrouter: None,
             ollama: None,
+            custom_chat: None,
             local_stt: None,
         };
         let aliyun_provider = ProviderConfig {
@@ -1055,6 +1087,7 @@ impl Settings {
             }),
             openrouter: None,
             ollama: None,
+            custom_chat: None,
             local_stt: None,
         };
         let openrouter_provider = ProviderConfig {
@@ -1072,6 +1105,7 @@ impl Settings {
                 discover_model: default_openrouter.discover_model,
             }),
             ollama: None,
+            custom_chat: None,
             local_stt: None,
         };
         let ollama_provider = ProviderConfig {
@@ -1088,6 +1122,7 @@ impl Settings {
                 base_url: default_ollama.base_url,
                 summary_model: default_ollama.summary_model,
             }),
+            custom_chat: None,
             local_stt: None,
         };
         let local_stt_provider = ProviderConfig {
@@ -1100,6 +1135,7 @@ impl Settings {
             aliyun_tingwu: None,
             openrouter: None,
             ollama: None,
+            custom_chat: None,
             local_stt: Some(LocalSttProviderSettings::default()),
         };
 
@@ -1167,6 +1203,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             aliyun_tingwu: None,
             openrouter: None,
             ollama: None,
+            custom_chat: None,
             local_stt: None,
         },
         ProviderConfig {
@@ -1179,6 +1216,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             aliyun_tingwu: Some(AliyunTingwuProviderSettings::default()),
             openrouter: None,
             ollama: None,
+            custom_chat: None,
             local_stt: None,
         },
         ProviderConfig {
@@ -1191,6 +1229,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             aliyun_tingwu: None,
             openrouter: Some(OpenrouterProviderSettings::default()),
             ollama: None,
+            custom_chat: None,
             local_stt: None,
         },
         ProviderConfig {
@@ -1203,6 +1242,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             aliyun_tingwu: None,
             openrouter: None,
             ollama: Some(OllamaProviderSettings::default()),
+            custom_chat: None,
             local_stt: None,
         },
         ProviderConfig {
@@ -1215,6 +1255,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             aliyun_tingwu: None,
             openrouter: None,
             ollama: None,
+            custom_chat: None,
             local_stt: Some(LocalSttProviderSettings::default()),
         },
     ]
@@ -1322,6 +1363,14 @@ fn normalize_provider(provider: &mut ProviderConfig) {
         _ => None,
     };
 
+    provider.custom_chat = match provider.kind {
+        ProviderKind::CustomChat => {
+            provider.capabilities = vec![ProviderCapability::Summary];
+            Some(provider.custom_chat.clone().unwrap_or_default())
+        }
+        _ => None,
+    };
+
     provider.local_stt = match provider.kind {
         ProviderKind::LocalStt => {
             let mut config = provider.local_stt.clone().unwrap_or_default();
@@ -1345,6 +1394,7 @@ fn default_capabilities_for_kind(kind: &ProviderKind) -> Vec<ProviderCapability>
         ProviderKind::Openrouter => vec![ProviderCapability::Summary],
         ProviderKind::Ollama => vec![ProviderCapability::Summary],
         ProviderKind::LocalStt => vec![ProviderCapability::Transcription],
+        ProviderKind::CustomChat => vec![ProviderCapability::Summary],
     }
 }
 
@@ -1370,7 +1420,7 @@ fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderC
         ProviderKind::LocalStt,
     ];
 
-    ordered_kinds
+    let mut canonical = ordered_kinds
         .iter()
         .map(|kind| {
             let mut provider = defaults
@@ -1440,11 +1490,38 @@ fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderC
                         provider.local_stt = Some(config);
                     }
                 }
+                ProviderKind::CustomChat => {}
             }
 
             provider
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    canonical.extend(
+        providers
+            .iter()
+            .filter(|provider| provider.kind == ProviderKind::CustomChat)
+            .enumerate()
+            .map(|(index, provider)| {
+                let mut custom = provider.clone();
+                if custom.id.trim().is_empty() {
+                    custom.id = format!("custom-chat-{}", index + 1);
+                }
+                if custom.name.trim().is_empty() {
+                    custom.name = "Compatible Provider".to_string();
+                }
+                custom.capabilities = vec![ProviderCapability::Summary];
+                custom.bailian = None;
+                custom.aliyun_tingwu = None;
+                custom.openrouter = None;
+                custom.ollama = None;
+                custom.local_stt = None;
+                custom.custom_chat = Some(custom.custom_chat.clone().unwrap_or_default());
+                custom
+            }),
+    );
+
+    canonical
 }
 
 fn provider_supports_capability(provider: &ProviderConfig, capability: ProviderCapability) -> bool {
@@ -1504,6 +1581,7 @@ fn ensure_capability_provider(providers: &mut Vec<ProviderConfig>, capability: P
             aliyun_tingwu: None,
             openrouter: None,
             ollama: None,
+            custom_chat: None,
             local_stt: None,
         },
         ProviderCapability::Summary => ProviderConfig {
@@ -1516,6 +1594,7 @@ fn ensure_capability_provider(providers: &mut Vec<ProviderConfig>, capability: P
             aliyun_tingwu: None,
             openrouter: None,
             ollama: Some(OllamaProviderSettings::default()),
+            custom_chat: None,
             local_stt: None,
         },
     };
@@ -1682,6 +1761,7 @@ impl ProviderConfig {
             ProviderKind::Openrouter => "openrouter",
             ProviderKind::Ollama => "ollama",
             ProviderKind::LocalStt => "local_stt",
+            ProviderKind::CustomChat => "custom_chat",
         }
     }
 }
@@ -1946,7 +2026,9 @@ pub fn normalize_person_name_mappings(mappings: &[PersonNameMapping]) -> Vec<Per
 #[cfg(test)]
 mod tests {
     use super::{
-        OssConfig, OssProviderKind, PersonNameMapping, ProviderKind, ProviderOssSettings, Settings,
+        CustomChatApiMode, CustomChatProviderSettings, OssConfig, OssProviderKind,
+        PersonNameMapping, ProviderCapability, ProviderConfig, ProviderKind, ProviderOssSettings,
+        Settings,
     };
 
     fn person_name_mapping(id: &str, source_name: &str, target_name: &str) -> PersonNameMapping {
@@ -1966,6 +2048,58 @@ mod tests {
             .providers
             .iter()
             .any(|provider| provider.kind == ProviderKind::Ollama));
+    }
+
+    #[test]
+    fn normalize_preserves_multiple_custom_chat_providers() {
+        let mut settings = Settings::default();
+        settings.providers.push(ProviderConfig {
+            id: "custom-openai".to_string(),
+            name: "Custom OpenAI".to_string(),
+            kind: ProviderKind::CustomChat,
+            capabilities: vec![ProviderCapability::Summary],
+            enabled: true,
+            bailian: None,
+            aliyun_tingwu: None,
+            openrouter: None,
+            ollama: None,
+            custom_chat: Some(CustomChatProviderSettings {
+                api_mode: CustomChatApiMode::Openai,
+                api_key: Some("key".to_string()),
+                base_url: "http://localhost:8000/v1".to_string(),
+                model: "model-a".to_string(),
+            }),
+            local_stt: None,
+        });
+        settings.providers.push(ProviderConfig {
+            id: "custom-anthropic".to_string(),
+            name: "Custom Anthropic".to_string(),
+            kind: ProviderKind::CustomChat,
+            capabilities: vec![ProviderCapability::Summary],
+            enabled: true,
+            bailian: None,
+            aliyun_tingwu: None,
+            openrouter: None,
+            ollama: None,
+            custom_chat: Some(CustomChatProviderSettings {
+                api_mode: CustomChatApiMode::Anthropic,
+                api_key: Some("key".to_string()),
+                base_url: "http://localhost:8000/v1".to_string(),
+                model: "model-b".to_string(),
+            }),
+            local_stt: None,
+        });
+        settings.selected_summary_provider_id = "custom-anthropic".to_string();
+
+        settings.normalize();
+
+        let custom_providers = settings
+            .providers
+            .iter()
+            .filter(|provider| provider.kind == ProviderKind::CustomChat)
+            .collect::<Vec<_>>();
+        assert_eq!(custom_providers.len(), 2);
+        assert_eq!(settings.selected_summary_provider_id, "custom-anthropic");
     }
 
     #[test]

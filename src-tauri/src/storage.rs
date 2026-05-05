@@ -158,6 +158,10 @@ impl Storage {
         Ok(())
     }
 
+    pub fn replace_settings(&mut self, settings: &Settings) -> Result<(), String> {
+        self.save_settings_and_person_name_mappings(settings)
+    }
+
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, String> {
         let sessions = load_all_sessions(&self.connection)?;
         let mut summaries: Vec<SessionSummary> =

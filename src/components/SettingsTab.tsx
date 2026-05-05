@@ -1,5 +1,5 @@
 import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { Translator } from "../i18n";
 import type { Locale, TranslationKey } from "../i18n/messages";
@@ -34,16 +34,27 @@ type SettingsTabProps = {
     | { status: "running"; progress?: SummaryMarkdownExportProgress }
     | { status: "success"; result: SummaryMarkdownExportResult }
     | { status: "error"; error: string; progress?: SummaryMarkdownExportProgress };
+  settingsBackupState:
+    | { status: "idle" }
+    | { status: "running"; action: "export" | "import" }
+    | { status: "success"; action: "export" | "import"; filePath: string }
+    | { status: "error"; action: "export" | "import"; error: string };
   onLocaleChange: (locale: Locale) => void;
   onRefreshStorageUsage: () => void;
   onExportAllSummariesMarkdown: (folderPath: string) => void;
+  onExportSettingsBackup: (filePath: string) => void;
+  onImportSettingsBackup: (filePath: string) => void;
   onSettingsChange: (patch: Partial<Settings>) => void;
   onSave: () => void;
   t: Translator;
 };
 
 type SettingsSubTab = "general" | "provider" | "oss" | "templates" | "tools" | "about";
-type SettingsToolPanel = "personNameMappings";
+type SettingsToolPanel =
+  | "settingsBackup"
+  | "summaryMarkdownExport"
+  | "storageUsage"
+  | "personNameMappings";
 type PersonNameMappingSortKey = "sourceName" | "targetName";
 type SortDirection = "asc" | "desc";
 
@@ -67,6 +78,21 @@ const settingsToolPanels: Array<{
   labelKey: TranslationKey;
   descriptionKey: TranslationKey;
 }> = [
+  {
+    id: "settingsBackup",
+    labelKey: "settings.tools.settingsBackup",
+    descriptionKey: "settings.tools.settingsBackupDescription"
+  },
+  {
+    id: "summaryMarkdownExport",
+    labelKey: "settings.tools.summaryMarkdownExport",
+    descriptionKey: "settings.tools.summaryMarkdownExportDescription"
+  },
+  {
+    id: "storageUsage",
+    labelKey: "settings.tools.storageUsage",
+    descriptionKey: "settings.tools.storageUsageDescription"
+  },
   {
     id: "personNameMappings",
     labelKey: "settings.tools.personNameMappings",
@@ -103,6 +129,22 @@ function createPersonNameMapping(index: number): PersonNameMapping {
   };
 }
 
+function createCustomChatProvider(index: number): ProviderConfig {
+  return {
+    id: `custom-chat-${Date.now()}-${index}`,
+    name: `Compatible Provider ${index}`,
+    kind: "custom_chat",
+    capabilities: ["summary"],
+    enabled: true,
+    customChat: {
+      apiMode: "openai",
+      apiKey: "",
+      baseUrl: "",
+      model: ""
+    }
+  };
+}
+
 function supportsCapability(provider: ProviderConfig, capability: ProviderCapability): boolean {
   return provider.enabled && provider.capabilities.includes(capability);
 }
@@ -119,6 +161,9 @@ function providerKindLabel(kind: ProviderKind, t: Translator): string {
   }
   if (kind === "ollama") {
     return "Ollama";
+  }
+  if (kind === "custom_chat") {
+    return t("settings.customChatProvider");
   }
   return t("settings.localStt");
 }
@@ -146,26 +191,43 @@ function stringifyJsonObject(value: Record<string, unknown> | undefined): string
   }
 }
 
+function buildSettingsBackupFileName(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    "open-recorder-settings-backup",
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`,
+    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  ].join("-") + ".zip";
+}
+
+function ensureZipExtension(filePath: string): string {
+  return filePath.toLowerCase().endsWith(".zip") ? filePath : `${filePath}.zip`;
+}
+
 function SettingsTab({
   locale,
   settings,
   inputDevices,
   storageUsageState,
   summaryMarkdownExportState,
+  settingsBackupState,
   onLocaleChange,
   onRefreshStorageUsage,
   onExportAllSummariesMarkdown,
+  onExportSettingsBackup,
+  onImportSettingsBackup,
   onSettingsChange,
   onSave,
   t
 }: SettingsTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>("general");
   const [activeToolPanel, setActiveToolPanel] =
-    useState<SettingsToolPanel>("personNameMappings");
+    useState<SettingsToolPanel>("settingsBackup");
   const [personNameMappingSort, setPersonNameMappingSort] = useState<{
     key: PersonNameMappingSortKey;
     direction: SortDirection;
-  }>({ key: "targetName", direction: "asc" });
+  }>();
   const [activeProviderId, setActiveProviderId] = useState<string>(
     settings.providers[0]?.id ?? ""
   );
@@ -180,6 +242,7 @@ function SettingsTab({
     Record<string, { serviceInspection?: TranslationKey; customPrompt?: TranslationKey }>
   >({});
   const [summaryFolderPickerError, setSummaryFolderPickerError] = useState<string>();
+  const [settingsBackupPickerError, setSettingsBackupPickerError] = useState<string>();
 
   useEffect(() => {
     if (settings.providers.length === 0) {
@@ -271,6 +334,39 @@ function SettingsTab({
     }
   }
 
+  async function handleExportSettingsBackup() {
+    setSettingsBackupPickerError(undefined);
+    try {
+      const selected = await save({
+        title: t("settings.backupExportPickerTitle"),
+        defaultPath: buildSettingsBackupFileName(),
+        filters: [{ name: "ZIP", extensions: ["zip"] }]
+      });
+      if (typeof selected === "string") {
+        onExportSettingsBackup(ensureZipExtension(selected));
+      }
+    } catch (error) {
+      setSettingsBackupPickerError(String(error));
+    }
+  }
+
+  async function handleImportSettingsBackup() {
+    setSettingsBackupPickerError(undefined);
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        title: t("settings.backupImportPickerTitle"),
+        filters: [{ name: "ZIP", extensions: ["zip"] }]
+      });
+      if (typeof selected === "string") {
+        onImportSettingsBackup(selected);
+      }
+    } catch (error) {
+      setSettingsBackupPickerError(String(error));
+    }
+  }
+
   function handleSubTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
       return;
@@ -357,10 +453,28 @@ function SettingsTab({
   }
 
   function handlePersonNameMappingSort(key: PersonNameMappingSortKey) {
-    setPersonNameMappingSort((current) => ({
+    const nextSort = {
       key,
-      direction: current.key === key && current.direction === "asc" ? "desc" : "asc"
-    }));
+      direction:
+        personNameMappingSort?.key === key && personNameMappingSort.direction === "asc"
+          ? "desc"
+          : "asc"
+    } satisfies { key: PersonNameMappingSortKey; direction: SortDirection };
+    setPersonNameMappingSort(nextSort);
+    updatePersonNameMappings(
+      [...settings.personNameMappings].sort((left, right) => {
+        const leftValue = left[key].trim();
+        const rightValue = right[key].trim();
+        const comparison = leftValue.localeCompare(rightValue, locale, {
+          numeric: true,
+          sensitivity: "base"
+        });
+        if (comparison !== 0) {
+          return nextSort.direction === "asc" ? comparison : -comparison;
+        }
+        return left.id.localeCompare(right.id);
+      })
+    );
   }
 
   function updateProviders(nextProviders: ProviderConfig[]) {
@@ -372,6 +486,19 @@ function SettingsTab({
       provider.id === providerId ? next(provider) : provider
     );
     updateProviders(providers);
+  }
+
+  function addCustomChatProvider() {
+    const customCount = settings.providers.filter((provider) => provider.kind === "custom_chat").length;
+    const provider = createCustomChatProvider(customCount + 1);
+    updateProviders([...settings.providers, provider]);
+    setActiveProviderId(provider.id);
+  }
+
+  function removeCustomChatProvider(providerId: string) {
+    const providers = settings.providers.filter((provider) => provider.id !== providerId);
+    updateProviders(providers);
+    setActiveProviderId(providers[0]?.id ?? "");
   }
 
   function updateAliyunJsonField(
@@ -1086,6 +1213,64 @@ function SettingsTab({
       );
     }
 
+    if (provider.kind === "custom_chat") {
+      const customChat = provider.customChat;
+      if (!customChat) {
+        return null;
+      }
+      const updateCustomChat = (next: Partial<typeof customChat>) =>
+        patchProvider(provider.id, (current) => ({
+          ...current,
+          customChat: { ...customChat, ...next }
+        }));
+
+      return (
+        <>
+          <label>
+            {t("settings.customChatApiMode")}
+            <div className="segmented-control" role="group" aria-label={t("settings.customChatApiMode")}>
+              <button
+                type="button"
+                className={customChat.apiMode === "openai" ? "active" : ""}
+                onClick={() => updateCustomChat({ apiMode: "openai" })}
+              >
+                {t("settings.customChatApiMode.openai")}
+              </button>
+              <button
+                type="button"
+                className={customChat.apiMode === "anthropic" ? "active" : ""}
+                onClick={() => updateCustomChat({ apiMode: "anthropic" })}
+              >
+                {t("settings.customChatApiMode.anthropic")}
+              </button>
+            </div>
+          </label>
+          <label>
+            {t("settings.customChatEndpoint")}
+            <input
+              value={customChat.baseUrl}
+              onChange={(event) => updateCustomChat({ baseUrl: event.target.value })}
+            />
+          </label>
+          <label>
+            {t("settings.customChatApiKey")}
+            <input
+              type="password"
+              value={customChat.apiKey ?? ""}
+              onChange={(event) => updateCustomChat({ apiKey: event.target.value })}
+            />
+          </label>
+          <label>
+            {t("settings.customChatModel")}
+            <input
+              value={customChat.model}
+              onChange={(event) => updateCustomChat({ model: event.target.value })}
+            />
+          </label>
+        </>
+      );
+    }
+
     const localStt = provider.localStt;
     if (!localStt) {
       return null;
@@ -1307,18 +1492,6 @@ function SettingsTab({
     },
     {}
   );
-  const sortedPersonNameMappings = [...settings.personNameMappings].sort((left, right) => {
-    const leftValue = left[personNameMappingSort.key].trim();
-    const rightValue = right[personNameMappingSort.key].trim();
-    const comparison = leftValue.localeCompare(rightValue, locale, {
-      numeric: true,
-      sensitivity: "base"
-    });
-    if (comparison !== 0) {
-      return personNameMappingSort.direction === "asc" ? comparison : -comparison;
-    }
-    return left.id.localeCompare(right.id);
-  });
   const hasPersonNameMappingErrors = settings.personNameMappings.some((mapping) => {
     const sourceName = mapping.sourceName.trim();
     const targetName = mapping.targetName.trim();
@@ -1333,6 +1506,25 @@ function SettingsTab({
     (value) => Boolean(value.serviceInspection || value.customPrompt)
   );
   const hasValidationErrors = hasAliyunValidationErrors || hasPersonNameMappingErrors;
+  const isSettingsBackupRunning = settingsBackupState.status === "running";
+  const settingsBackupStatusText =
+    settingsBackupPickerError
+      ? t("settings.backupPickerFailed", { error: settingsBackupPickerError })
+      : settingsBackupState.status === "success"
+      ? settingsBackupState.action === "export"
+        ? t("settings.backupExportFinished", { path: settingsBackupState.filePath })
+        : t("settings.backupImportFinished", { path: settingsBackupState.filePath })
+      : settingsBackupState.status === "error"
+        ? settingsBackupState.action === "export"
+          ? t("settings.backupExportFailed", { error: settingsBackupState.error })
+          : t("settings.backupImportFailed", { error: settingsBackupState.error })
+        : undefined;
+  const settingsBackupStatusClass =
+    settingsBackupPickerError || settingsBackupState.status === "error"
+      ? " error"
+      : settingsBackupState.status === "success"
+        ? " success"
+        : "";
   const storageUsageSummary =
     storageUsageState.status === "loading" ||
     storageUsageState.status === "success" ||
@@ -1475,104 +1667,17 @@ function SettingsTab({
                 )}
               </select>
             </label>
-
-            <section className="settings-summary-export" aria-live="polite">
-              <div className="settings-summary-export-header">
-                <div>
-                  <h4>{t("settings.summaryExportTitle")}</h4>
-                  <p>{t("settings.summaryExportHint")}</p>
-                </div>
-              </div>
-              <div className="settings-field">
-                <span>{t("settings.summaryExportFolder")}</span>
-                <div className="settings-path-row">
-                  <input
-                    value={summaryExportFolderPath}
-                    onChange={(event) => {
-                      setSummaryFolderPickerError(undefined);
-                      onSettingsChange({ summaryExportFolderPath: event.target.value });
-                    }}
-                    placeholder={t("settings.summaryExportFolderPlaceholder")}
-                    disabled={isExportingSummaries}
-                  />
-                  <button
-                    type="button"
-                    className="btn-secondary settings-inline-btn"
-                    onClick={() => void handleChooseSummaryExportFolder()}
-                    disabled={isExportingSummaries}
-                  >
-                    {t("settings.summaryExportFolderChoose")}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-primary settings-inline-btn"
-                    onClick={() => onExportAllSummariesMarkdown(summaryExportFolderPath)}
-                    disabled={isExportingSummaries || summaryExportFolderPath.trim().length === 0}
-                  >
-                    {isExportingSummaries
-                      ? t("settings.summaryExportRunning")
-                      : t("settings.summaryExportAll")}
-                  </button>
-                </div>
-              </div>
-
-              {summaryExportProgress ? (
-                <progress
-                  className="settings-summary-export-progress"
-                  max={Math.max(summaryExportProgress.totalSessions, 1)}
-                  value={summaryExportProgress.processedSessions}
-                />
-              ) : null}
-              {summaryExportProgressValue ? (
-                <p className="settings-summary-export-status">{summaryExportProgressValue}</p>
-              ) : null}
-              {summaryExportResultText ? (
-                <p className="settings-summary-export-status success">{summaryExportResultText}</p>
-              ) : null}
-              {summaryExportErrorText ? (
-                <p className="settings-summary-export-status error">{summaryExportErrorText}</p>
-              ) : null}
-            </section>
-
-            <section className="settings-storage-usage" aria-live="polite">
-              <div className="settings-storage-usage-header">
-                <div>
-                  <h4>{t("settings.storageUsageTitle")}</h4>
-                  <p>{t("settings.storageUsageHint")}</p>
-                </div>
-                <button
-                  type="button"
-                  className="btn-secondary settings-inline-btn"
-                  onClick={onRefreshStorageUsage}
-                  disabled={isRefreshingStorageUsage}
-                >
-                  {isRefreshingStorageUsage
-                    ? t("settings.storageUsageRefreshing")
-                    : t("settings.storageUsageRefresh")}
-                </button>
-              </div>
-
-              <dl className="settings-storage-usage-grid">
-                <div>
-                  <dt>{t("settings.storageUsagePath")}</dt>
-                  <dd>{storageUsageSummary?.dataDirPath ?? "—"}</dd>
-                </div>
-                <div>
-                  <dt>{t("settings.storageUsageSize")}</dt>
-                  <dd>{storageUsageValue}</dd>
-                </div>
-              </dl>
-
-              {storageUsageError ? (
-                <p className="settings-storage-usage-error">{storageUsageError}</p>
-              ) : null}
-            </section>
           </div>
         )}
 
         {activeSubTab === "provider" && (
           <div className="settings-section">
             <h3>{t("settings.providerConfigs")}</h3>
+            <div className="provider-toolbar">
+              <button type="button" className="btn-secondary" onClick={addCustomChatProvider}>
+                {t("settings.addProvider.compatible")}
+              </button>
+            </div>
             <div className="provider-layout">
               <aside className="provider-list" role="listbox" aria-label={t("settings.providerSelect")}>
                 {settings.providers.map((provider) => {
@@ -1601,6 +1706,15 @@ function SettingsTab({
                   <article className="provider-editor">
                     <div className="provider-editor-header">
                       <strong>{providerKindLabel(activeProvider.kind, t)}</strong>
+                      {activeProvider.kind === "custom_chat" ? (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => removeCustomChatProvider(activeProvider.id)}
+                        >
+                          {t("settings.removeProvider")}
+                        </button>
+                      ) : null}
                     </div>
 
                     <label>
@@ -1982,6 +2096,156 @@ function SettingsTab({
               </aside>
 
               <div className="settings-tool-panel">
+                {activeToolPanel === "settingsBackup" && (
+                  <section className="settings-config-backup" aria-live="polite">
+                    <div className="settings-tool-panel-header">
+                      <div>
+                        <h4>{t("settings.backupTitle")}</h4>
+                        <p>{t("settings.backupHint")}</p>
+                      </div>
+                    </div>
+                    <p className="settings-config-backup-warning">
+                      {t("settings.backupSensitiveWarning")}
+                    </p>
+                    <div className="settings-config-backup-actions">
+                      <button
+                        type="button"
+                        className="btn-primary settings-inline-btn"
+                        onClick={() => void handleExportSettingsBackup()}
+                        disabled={isSettingsBackupRunning || hasValidationErrors}
+                      >
+                        {isSettingsBackupRunning && settingsBackupState.action === "export"
+                          ? t("settings.backupExportRunning")
+                          : t("settings.backupExport")}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary settings-inline-btn"
+                        onClick={() => void handleImportSettingsBackup()}
+                        disabled={isSettingsBackupRunning}
+                      >
+                        {isSettingsBackupRunning && settingsBackupState.action === "import"
+                          ? t("settings.backupImportRunning")
+                          : t("settings.backupImport")}
+                      </button>
+                    </div>
+                    {hasValidationErrors ? (
+                      <p className="provider-validation-error">
+                        {t("settings.backupFixBeforeExport")}
+                      </p>
+                    ) : null}
+                    {settingsBackupStatusText ? (
+                      <p
+                        className={`settings-summary-export-status${settingsBackupStatusClass}`}
+                      >
+                        {settingsBackupStatusText}
+                      </p>
+                    ) : null}
+                  </section>
+                )}
+
+                {activeToolPanel === "summaryMarkdownExport" && (
+                  <section className="settings-summary-export" aria-live="polite">
+                    <div className="settings-summary-export-header">
+                      <div>
+                        <h4>{t("settings.summaryExportTitle")}</h4>
+                        <p>{t("settings.summaryExportHint")}</p>
+                      </div>
+                    </div>
+                    <div className="settings-field">
+                      <span>{t("settings.summaryExportFolder")}</span>
+                      <div className="settings-path-row">
+                        <input
+                          value={summaryExportFolderPath}
+                          onChange={(event) => {
+                            setSummaryFolderPickerError(undefined);
+                            onSettingsChange({ summaryExportFolderPath: event.target.value });
+                          }}
+                          placeholder={t("settings.summaryExportFolderPlaceholder")}
+                          disabled={isExportingSummaries}
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary settings-inline-btn"
+                          onClick={() => void handleChooseSummaryExportFolder()}
+                          disabled={isExportingSummaries}
+                        >
+                          {t("settings.summaryExportFolderChoose")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-primary settings-inline-btn"
+                          onClick={() => onExportAllSummariesMarkdown(summaryExportFolderPath)}
+                          disabled={
+                            isExportingSummaries || summaryExportFolderPath.trim().length === 0
+                          }
+                        >
+                          {isExportingSummaries
+                            ? t("settings.summaryExportRunning")
+                            : t("settings.summaryExportAll")}
+                        </button>
+                      </div>
+                    </div>
+
+                    {summaryExportProgress ? (
+                      <progress
+                        className="settings-summary-export-progress"
+                        max={Math.max(summaryExportProgress.totalSessions, 1)}
+                        value={summaryExportProgress.processedSessions}
+                      />
+                    ) : null}
+                    {summaryExportProgressValue ? (
+                      <p className="settings-summary-export-status">{summaryExportProgressValue}</p>
+                    ) : null}
+                    {summaryExportResultText ? (
+                      <p className="settings-summary-export-status success">
+                        {summaryExportResultText}
+                      </p>
+                    ) : null}
+                    {summaryExportErrorText ? (
+                      <p className="settings-summary-export-status error">
+                        {summaryExportErrorText}
+                      </p>
+                    ) : null}
+                  </section>
+                )}
+
+                {activeToolPanel === "storageUsage" && (
+                  <section className="settings-storage-usage" aria-live="polite">
+                    <div className="settings-storage-usage-header">
+                      <div>
+                        <h4>{t("settings.storageUsageTitle")}</h4>
+                        <p>{t("settings.storageUsageHint")}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-secondary settings-inline-btn"
+                        onClick={onRefreshStorageUsage}
+                        disabled={isRefreshingStorageUsage}
+                      >
+                        {isRefreshingStorageUsage
+                          ? t("settings.storageUsageRefreshing")
+                          : t("settings.storageUsageRefresh")}
+                      </button>
+                    </div>
+
+                    <dl className="settings-storage-usage-grid">
+                      <div>
+                        <dt>{t("settings.storageUsagePath")}</dt>
+                        <dd>{storageUsageSummary?.dataDirPath ?? "—"}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("settings.storageUsageSize")}</dt>
+                        <dd>{storageUsageValue}</dd>
+                      </div>
+                    </dl>
+
+                    {storageUsageError ? (
+                      <p className="settings-storage-usage-error">{storageUsageError}</p>
+                    ) : null}
+                  </section>
+                )}
+
                 {activeToolPanel === "personNameMappings" && (
                   <>
                     <div className="settings-tool-panel-header">
@@ -2005,7 +2269,7 @@ function SettingsTab({
                             type="button"
                             role="columnheader"
                             aria-sort={
-                              personNameMappingSort.key === "sourceName"
+                              personNameMappingSort?.key === "sourceName"
                                 ? personNameMappingSort.direction === "asc"
                                   ? "ascending"
                                   : "descending"
@@ -2015,7 +2279,7 @@ function SettingsTab({
                             onClick={() => handlePersonNameMappingSort("sourceName")}
                           >
                             {t("settings.personNameMappingsSource")}
-                            {personNameMappingSort.key === "sourceName"
+                            {personNameMappingSort?.key === "sourceName"
                               ? personNameMappingSort.direction === "asc"
                                 ? " ↑"
                                 : " ↓"
@@ -2025,7 +2289,7 @@ function SettingsTab({
                             type="button"
                             role="columnheader"
                             aria-sort={
-                              personNameMappingSort.key === "targetName"
+                              personNameMappingSort?.key === "targetName"
                                 ? personNameMappingSort.direction === "asc"
                                   ? "ascending"
                                   : "descending"
@@ -2035,7 +2299,7 @@ function SettingsTab({
                             onClick={() => handlePersonNameMappingSort("targetName")}
                           >
                             {t("settings.personNameMappingsTarget")}
-                            {personNameMappingSort.key === "targetName"
+                            {personNameMappingSort?.key === "targetName"
                               ? personNameMappingSort.direction === "asc"
                                 ? " ↑"
                                 : " ↓"
@@ -2043,7 +2307,7 @@ function SettingsTab({
                           </button>
                           <span role="columnheader">{t("settings.personNameMappingsActions")}</span>
                         </div>
-                        {sortedPersonNameMappings.map((mapping) => {
+                        {settings.personNameMappings.map((mapping) => {
                           const sourceName = mapping.sourceName.trim();
                           const targetName = mapping.targetName.trim();
                           const sourceInvalid =

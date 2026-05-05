@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    models::{AudioSegmentMeta, SummaryResult, TranscriptSegment},
+    models::{AudioSegmentMeta, CustomChatApiMode, SummaryResult, TranscriptSegment},
     providers::oss::{upload_segments_and_sign_urls, OssConfig},
 };
 
@@ -31,6 +31,7 @@ pub struct ChatCompatibleSummaryConfig {
     pub endpoint: String,
     pub api_key: Option<String>,
     pub model: String,
+    pub api_mode: CustomChatApiMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +55,33 @@ struct ChatCompletionsResponse {
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: ChatMessage,
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicMessagesRequest {
+    model: String,
+    max_tokens: u32,
+    system: String,
+    messages: Vec<AnthropicMessage>,
+    temperature: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AnthropicMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicMessagesResponse {
+    content: Vec<AnthropicContentBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicContentBlock {
+    #[serde(rename = "type")]
+    kind: String,
+    text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -338,6 +366,57 @@ pub fn summarize_with_chat_compatible(
         .collect::<Vec<_>>()
         .join("\n");
 
+    let raw_content = invoke_chat_compatible_text(
+        config,
+        system_prompt,
+        format!("{user_prompt}\n\n{transcript_text}").as_str(),
+        0.2,
+    )?;
+
+    let json_text = extract_json(&raw_content);
+    if let Ok(summary) = serde_json::from_str::<SummaryPayload>(json_text) {
+        return Ok(SummaryResult {
+            title: summary.title,
+            decisions: summary.decisions,
+            action_items: summary.action_items,
+            risks: summary.risks,
+            timeline: summary.timeline,
+            raw_markdown: summary.raw_markdown,
+        });
+    }
+
+    Ok(SummaryResult {
+        title: derive_summary_title(&raw_content),
+        decisions: vec![],
+        action_items: vec![],
+        risks: vec![],
+        timeline: vec![],
+        raw_markdown: raw_content,
+    })
+}
+
+pub fn invoke_chat_compatible_text(
+    config: &ChatCompatibleSummaryConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+    temperature: f32,
+) -> Result<String, String> {
+    match config.api_mode {
+        CustomChatApiMode::Openai => {
+            invoke_openai_compatible_text(config, system_prompt, user_prompt, temperature)
+        }
+        CustomChatApiMode::Anthropic => {
+            invoke_anthropic_compatible_text(config, system_prompt, user_prompt, temperature)
+        }
+    }
+}
+
+fn invoke_openai_compatible_text(
+    config: &ChatCompatibleSummaryConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+    temperature: f32,
+) -> Result<String, String> {
     let request = ChatCompletionsRequest {
         model: config.model.clone(),
         messages: vec![
@@ -347,10 +426,10 @@ pub fn summarize_with_chat_compatible(
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: format!("{user_prompt}\n\n{transcript_text}"),
+                content: user_prompt.to_string(),
             },
         ],
-        temperature: 0.2,
+        temperature,
     };
 
     let client = Client::builder()
@@ -398,26 +477,77 @@ pub fn summarize_with_chat_compatible(
         .trim()
         .to_string();
 
-    let json_text = extract_json(&raw_content);
-    if let Ok(summary) = serde_json::from_str::<SummaryPayload>(json_text) {
-        return Ok(SummaryResult {
-            title: summary.title,
-            decisions: summary.decisions,
-            action_items: summary.action_items,
-            risks: summary.risks,
-            timeline: summary.timeline,
-            raw_markdown: summary.raw_markdown,
-        });
+    Ok(raw_content)
+}
+
+fn invoke_anthropic_compatible_text(
+    config: &ChatCompatibleSummaryConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+    temperature: f32,
+) -> Result<String, String> {
+    let request = AnthropicMessagesRequest {
+        model: config.model.clone(),
+        max_tokens: 4096,
+        system: system_prompt.to_string(),
+        messages: vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: user_prompt.to_string(),
+        }],
+        temperature,
+    };
+
+    let client = Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|error| format!("failed to create http client: {error}"))?;
+
+    let request_builder = client
+        .post(&config.endpoint)
+        .header("anthropic-version", "2023-06-01");
+    let request_builder = if let Some(api_key) = config
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        request_builder.header("x-api-key", api_key)
+    } else {
+        request_builder
+    };
+
+    let response = request_builder
+        .json(&request)
+        .send()
+        .map_err(|error| format!("{} request failed: {error}", config.provider_name))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!(
+            "{} request failed with {status}: {body}",
+            config.provider_name
+        ));
     }
 
-    Ok(SummaryResult {
-        title: derive_summary_title(&raw_content),
-        decisions: vec![],
-        action_items: vec![],
-        risks: vec![],
-        timeline: vec![],
-        raw_markdown: raw_content,
-    })
+    let payload: AnthropicMessagesResponse = response
+        .json()
+        .map_err(|error| format!("failed to parse {} response: {error}", config.provider_name))?;
+
+    extract_anthropic_text(&payload)
+        .ok_or_else(|| format!("{} response has no text content", config.provider_name))
+}
+
+fn extract_anthropic_text(payload: &AnthropicMessagesResponse) -> Option<String> {
+    payload
+        .content
+        .iter()
+        .find(|block| block.kind == "text")
+        .and_then(|block| block.text.as_deref())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToString::to_string)
 }
 
 fn extract_transcription_text(payload: &Value) -> Option<String> {
@@ -551,6 +681,22 @@ pub fn build_endpoint(base_url: &str, path: &str) -> String {
     format!("{}{}", normalize_bailian_base_url(base_url), path)
 }
 
+pub fn build_openai_chat_endpoint(base_url: &str) -> String {
+    let mut endpoint = base_url.trim().trim_end_matches('/').to_string();
+    if !endpoint.ends_with("/chat/completions") {
+        endpoint.push_str("/chat/completions");
+    }
+    endpoint
+}
+
+pub fn build_anthropic_messages_endpoint(base_url: &str) -> String {
+    let mut endpoint = base_url.trim().trim_end_matches('/').to_string();
+    if !endpoint.ends_with("/messages") {
+        endpoint.push_str("/messages");
+    }
+    endpoint
+}
+
 pub fn normalize_bailian_base_url(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     let known_suffixes = [
@@ -571,8 +717,9 @@ pub fn normalize_bailian_base_url(base_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_endpoint, BAILIAN_ASR_PATH, BAILIAN_COMPATIBLE_AUDIO_PATH,
-        BAILIAN_COMPATIBLE_CHAT_PATH,
+        build_anthropic_messages_endpoint, build_endpoint, build_openai_chat_endpoint,
+        extract_anthropic_text, AnthropicContentBlock, AnthropicMessagesResponse, BAILIAN_ASR_PATH,
+        BAILIAN_COMPATIBLE_AUDIO_PATH, BAILIAN_COMPATIBLE_CHAT_PATH,
     };
 
     #[test]
@@ -630,5 +777,49 @@ mod tests {
             endpoint,
             "https://dashscope.aliyuncs.com/compatible-mode/v1/audio/transcriptions"
         );
+    }
+
+    #[test]
+    fn build_openai_chat_endpoint_appends_chat_completions() {
+        assert_eq!(
+            build_openai_chat_endpoint("http://10.147.18.85:8000"),
+            "http://10.147.18.85:8000/chat/completions"
+        );
+    }
+
+    #[test]
+    fn build_openai_chat_endpoint_accepts_full_chat_url() {
+        assert_eq!(
+            build_openai_chat_endpoint("http://10.147.18.85:8000/v1/chat/completions"),
+            "http://10.147.18.85:8000/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn build_anthropic_messages_endpoint_appends_messages() {
+        assert_eq!(
+            build_anthropic_messages_endpoint("http://10.147.18.85:8000/v1"),
+            "http://10.147.18.85:8000/v1/messages"
+        );
+    }
+
+    #[test]
+    fn build_anthropic_messages_endpoint_accepts_full_messages_url() {
+        assert_eq!(
+            build_anthropic_messages_endpoint("http://10.147.18.85:8000/v1/messages"),
+            "http://10.147.18.85:8000/v1/messages"
+        );
+    }
+
+    #[test]
+    fn extract_anthropic_text_returns_first_text_block() {
+        let payload = AnthropicMessagesResponse {
+            content: vec![AnthropicContentBlock {
+                kind: "text".to_string(),
+                text: Some("  hello  ".to_string()),
+            }],
+        };
+
+        assert_eq!(extract_anthropic_text(&payload), Some("hello".to_string()));
     }
 }

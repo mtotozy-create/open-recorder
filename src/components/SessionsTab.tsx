@@ -107,6 +107,9 @@ function providerKindLabel(kind: ProviderKind, t: Translator): string {
   if (kind === "ollama") {
     return "Ollama";
   }
+  if (kind === "custom_chat") {
+    return t("settings.customChatProvider");
+  }
   return t("settings.localStt");
 }
 

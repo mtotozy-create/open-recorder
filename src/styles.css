@@ -324,6 +324,31 @@ p {
   background: #fee2e2;
 }
 
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 4px;
+}
+
+.segmented-control button {
+  min-height: 34px;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--text-1);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.segmented-control button.active {
+  background: var(--text-0);
+  color: var(--bg-0);
+}
+
 .provider-empty-hint {
   margin: 12px 0 0;
   color: var(--text-muted);
@@ -985,6 +1010,34 @@ p {
   background: var(--bg-1);
 }
 
+.settings-tool-panel .settings-summary-export,
+.settings-tool-panel .settings-storage-usage,
+.settings-tool-panel .settings-config-backup {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.settings-config-backup-warning {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 7px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.settings-config-backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
 .settings-tool-panel-header {
   display: flex;
   align-items: flex-start;
@@ -1076,6 +1129,10 @@ p {
   }
 
   .settings-tool-panel-header {
+    display: grid;
+  }
+
+  .settings-storage-usage-header {
     display: grid;
   }
 }

@@ -14,8 +14,10 @@ import {
   enqueueSummary,
   enqueueTranscription,
   exportAllSummariesMarkdown,
+  exportSettingsBackup,
   exportRecording,
   getStorageUsage,
+  importSettingsBackup,
   listInputDevices,
   getRecorderStatus,
   getSession,
@@ -226,6 +228,22 @@ function createDefaultProvider(kind: ProviderConfig["kind"]): ProviderConfig {
     };
   }
 
+  if (kind === "custom_chat") {
+    return {
+      id: `custom-chat-${Date.now()}`,
+      name: "Compatible Provider",
+      kind: "custom_chat",
+      capabilities: ["summary"],
+      enabled: true,
+      customChat: {
+        apiMode: "openai",
+        apiKey: "",
+        baseUrl: "",
+        model: ""
+      }
+    };
+  }
+
   return {
     id: DEFAULT_LOCAL_STT_PROVIDER_ID,
     name: "Local STT",
@@ -321,6 +339,25 @@ type SummaryMarkdownExportState =
       status: "error";
       error: string;
       progress?: SummaryMarkdownExportProgress;
+    };
+
+type SettingsBackupState =
+  | {
+      status: "idle";
+    }
+  | {
+      status: "running";
+      action: "export" | "import";
+    }
+  | {
+      status: "success";
+      action: "export" | "import";
+      filePath: string;
+    }
+  | {
+      status: "error";
+      action: "export" | "import";
+      error: string;
     };
 
 type PollJobOptions = {
@@ -470,6 +507,7 @@ function normalizeSettings(input: Settings): Settings {
         aliyunTingwu: undefined,
         openrouter: undefined,
         ollama: undefined,
+        customChat: undefined,
         localStt: undefined
       };
     }
@@ -567,6 +605,7 @@ function normalizeSettings(input: Settings): Settings {
         bailian: undefined,
         openrouter: undefined,
         ollama: undefined,
+        customChat: undefined,
         localStt: undefined
       };
     }
@@ -590,6 +629,7 @@ function normalizeSettings(input: Settings): Settings {
         bailian: undefined,
         aliyunTingwu: undefined,
         ollama: undefined,
+        customChat: undefined,
         localStt: undefined
       };
     }
@@ -607,6 +647,7 @@ function normalizeSettings(input: Settings): Settings {
         bailian: undefined,
         aliyunTingwu: undefined,
         openrouter: undefined,
+        customChat: undefined,
         localStt: undefined
       };
     }
@@ -627,9 +668,33 @@ function normalizeSettings(input: Settings): Settings {
       bailian: undefined,
       aliyunTingwu: undefined,
       openrouter: undefined,
-      ollama: undefined
+      ollama: undefined,
+      customChat: undefined
     };
   });
+  const customProviders = (grouped.get("custom_chat") ?? []).map((provider, index): ProviderConfig => {
+    const defaults = createDefaultProvider("custom_chat");
+    const customChatConfig = provider.customChat ?? defaults.customChat!;
+    return {
+      ...provider,
+      id: provider.id?.trim() || `custom-chat-${index + 1}`,
+      name: provider.name?.trim() || "Compatible Provider",
+      kind: "custom_chat",
+      capabilities: ["summary"],
+      enabled: provider.enabled !== false,
+      customChat: {
+        ...defaults.customChat!,
+        ...customChatConfig,
+        apiMode: customChatConfig.apiMode === "anthropic" ? "anthropic" : "openai"
+      },
+      bailian: undefined,
+      aliyunTingwu: undefined,
+      openrouter: undefined,
+      ollama: undefined,
+      localStt: undefined
+    };
+  });
+  providers.push(...customProviders);
 
   const aliasedTranscriptionSelection = normalizeAliasProviderId(input.selectedTranscriptionProviderId);
   const aliasedSummarySelection = normalizeAliasProviderId(input.selectedSummaryProviderId);
@@ -819,6 +884,9 @@ function App() {
   const [storageUsageState, setStorageUsageState] = useState<StorageUsageState>({ status: "idle" });
   const [summaryMarkdownExportState, setSummaryMarkdownExportState] =
     useState<SummaryMarkdownExportState>({ status: "idle" });
+  const [settingsBackupState, setSettingsBackupState] = useState<SettingsBackupState>({
+    status: "idle"
+  });
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
@@ -1762,6 +1830,80 @@ function App() {
     }
   }
 
+  async function onExportSettingsBackup(filePath: string) {
+    const normalizedFilePath = filePath.trim();
+    if (!normalizedFilePath) {
+      setSettingsBackupState({
+        status: "error",
+        action: "export",
+        error: t("settings.backupPathRequired")
+      });
+      return;
+    }
+
+    setSettingsBackupState({ status: "running", action: "export" });
+    try {
+      const result = await exportSettingsBackup({
+        filePath: normalizedFilePath,
+        settings,
+        locale
+      });
+      setSettingsBackupState({
+        status: "success",
+        action: "export",
+        filePath: result.filePath
+      });
+      setStatus("status.settingsBackupExportFinished", { path: result.filePath });
+    } catch (error) {
+      const errorMessage = String(error);
+      setSettingsBackupState({ status: "error", action: "export", error: errorMessage });
+      setStatus("status.settingsBackupExportFailed", { error: errorMessage });
+    }
+  }
+
+  async function onImportSettingsBackup(filePath: string) {
+    const normalizedFilePath = filePath.trim();
+    if (!normalizedFilePath) {
+      setSettingsBackupState({
+        status: "error",
+        action: "import",
+        error: t("settings.backupPathRequired")
+      });
+      return;
+    }
+
+    setSettingsBackupState({ status: "running", action: "import" });
+    try {
+      const result = await importSettingsBackup(normalizedFilePath);
+      const normalized = normalizeSettings(result.settings);
+      const realtimeDefaults = getAliyunRealtimeDefaults(normalized);
+      setSettings(normalized);
+      setLocale(result.locale);
+      setRuntimeRecordingInputDeviceId(
+        typeof normalized.recordingInputDeviceId === "string"
+          ? normalized.recordingInputDeviceId
+          : ""
+      );
+      setSummaryTemplateId(normalized.defaultTemplateId);
+      if (!currentRecording) {
+        setRealtimeTranscriptionEnabled(realtimeDefaults.enabled);
+        setRealtimeSourceLanguage(realtimeDefaults.sourceLanguage);
+        setRealtimeTranslationEnabled(realtimeDefaults.translationEnabled);
+        setRealtimeTranslationTargetLanguage(realtimeDefaults.translationTargetLanguage);
+      }
+      setSettingsBackupState({
+        status: "success",
+        action: "import",
+        filePath: normalizedFilePath
+      });
+      setStatus("status.settingsBackupImportFinished", { path: normalizedFilePath });
+    } catch (error) {
+      const errorMessage = String(error);
+      setSettingsBackupState({ status: "error", action: "import", error: errorMessage });
+      setStatus("status.settingsBackupImportFailed", { error: errorMessage });
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="app-header panel">
@@ -1899,11 +2041,14 @@ function App() {
           inputDevices={inputDevices}
           storageUsageState={storageUsageState}
           summaryMarkdownExportState={summaryMarkdownExportState}
+          settingsBackupState={settingsBackupState}
           onLocaleChange={setLocale}
           onRefreshStorageUsage={() => void onRefreshStorageUsage()}
           onExportAllSummariesMarkdown={(folderPath) =>
             void onExportAllSummariesMarkdown(folderPath)
           }
+          onExportSettingsBackup={(filePath) => void onExportSettingsBackup(filePath)}
+          onImportSettingsBackup={(filePath) => void onImportSettingsBackup(filePath)}
           onSettingsChange={(patch) => {
             setSettings((previous) => normalizeSettings({ ...previous, ...patch }));
           }}

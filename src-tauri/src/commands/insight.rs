@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
-use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tauri::State;
 use uuid::Uuid;
@@ -13,7 +12,7 @@ use crate::{
         InsightSuggestionPriority, InsightTopic, InsightTopicStatus, Job, JobEnqueueResponse,
         JobKind, JobStatus, ProviderConfig, ProviderKind, Session,
     },
-    providers::bailian::ChatCompatibleSummaryConfig,
+    providers::bailian::{invoke_chat_compatible_text, ChatCompatibleSummaryConfig},
     state::AppState,
 };
 
@@ -42,29 +41,6 @@ struct InsightExtractionPayload {
     people: Vec<InsightPerson>,
     topics: Vec<InsightTopic>,
     upcoming_actions: Vec<InsightAction>,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatCompletionsRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
-    temperature: f32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ChatMessage {
-    role: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionsResponse {
-    choices: Vec<Choice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Choice {
-    message: ChatMessage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -772,67 +748,7 @@ fn invoke_chat_completion(
     system_prompt: &str,
     user_prompt: &str,
 ) -> Result<String, String> {
-    let request = ChatCompletionsRequest {
-        model: config.model.clone(),
-        messages: vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: system_prompt.to_string(),
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: user_prompt.to_string(),
-            },
-        ],
-        temperature: 0.1,
-    };
-
-    let client = Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|error| format!("failed to create http client: {error}"))?;
-
-    let request_builder = client.post(&config.endpoint);
-    let request_builder = if let Some(api_key) = config
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        request_builder.bearer_auth(api_key)
-    } else {
-        request_builder
-    };
-
-    let response = request_builder
-        .json(&request)
-        .send()
-        .map_err(|error| format!("{} request failed: {error}", config.provider_name))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        return Err(format!(
-            "{} request failed with {status}: {body}",
-            config.provider_name
-        ));
-    }
-
-    let payload: ChatCompletionsResponse = response
-        .json()
-        .map_err(|error| format!("failed to parse {} response: {error}", config.provider_name))?;
-
-    let raw_content = payload
-        .choices
-        .first()
-        .ok_or_else(|| format!("{} response has empty choices", config.provider_name))?
-        .message
-        .content
-        .trim()
-        .to_string();
-
-    Ok(raw_content)
+    invoke_chat_compatible_text(config, system_prompt, user_prompt, 0.1)
 }
 
 fn parse_json_payload<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, String> {

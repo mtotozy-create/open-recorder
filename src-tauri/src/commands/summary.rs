@@ -6,10 +6,14 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        Job, JobEnqueueResponse, JobKind, JobStatus, PersonNameMapping, PromptTemplate,
-        ProviderCapability, ProviderConfig, ProviderKind, SessionStatus, TranscriptSegment,
+        CustomChatApiMode, Job, JobEnqueueResponse, JobKind, JobStatus, PersonNameMapping,
+        PromptTemplate, ProviderCapability, ProviderConfig, ProviderKind, SessionStatus,
+        TranscriptSegment,
     },
-    providers::bailian::{summarize_with_chat_compatible, ChatCompatibleSummaryConfig},
+    providers::bailian::{
+        build_anthropic_messages_endpoint, build_openai_chat_endpoint,
+        summarize_with_chat_compatible, ChatCompatibleSummaryConfig,
+    },
     state::AppState,
 };
 
@@ -62,6 +66,7 @@ pub(crate) fn resolve_summary_config(
                 ),
                 api_key: Some(api_key),
                 model: bailian.summary_model.clone(),
+                api_mode: CustomChatApiMode::Openai,
             })
         }
         ProviderKind::Openrouter => {
@@ -89,16 +94,12 @@ pub(crate) fn resolve_summary_config(
                 ));
             }
 
-            let mut endpoint = openrouter.base_url.trim_end_matches('/').to_string();
-            if !endpoint.ends_with("/chat/completions") {
-                endpoint.push_str("/chat/completions");
-            }
-
             Ok(ChatCompatibleSummaryConfig {
                 provider_name: provider.name.clone(),
-                endpoint,
+                endpoint: build_openai_chat_endpoint(&openrouter.base_url),
                 api_key: Some(api_key),
                 model: openrouter.summary_model.clone(),
+                api_mode: CustomChatApiMode::Openai,
             })
         }
         ProviderKind::Ollama => {
@@ -119,16 +120,44 @@ pub(crate) fn resolve_summary_config(
                 ));
             }
 
-            let mut endpoint = ollama.base_url.trim_end_matches('/').to_string();
-            if !endpoint.ends_with("/chat/completions") {
-                endpoint.push_str("/chat/completions");
+            Ok(ChatCompatibleSummaryConfig {
+                provider_name: provider.name.clone(),
+                endpoint: build_openai_chat_endpoint(&ollama.base_url),
+                api_key: ollama.api_key.clone(),
+                model: ollama.summary_model.clone(),
+                api_mode: CustomChatApiMode::Openai,
+            })
+        }
+        ProviderKind::CustomChat => {
+            let custom_chat = provider.custom_chat.as_ref().ok_or_else(|| {
+                format!("provider '{}' missing custom chat config", provider.name)
+            })?;
+            if custom_chat.base_url.trim().is_empty() {
+                return Err(format!(
+                    "provider '{}' requires endpoint for summary",
+                    provider.name
+                ));
             }
+            if custom_chat.model.trim().is_empty() {
+                return Err(format!(
+                    "provider '{}' requires model for summary",
+                    provider.name
+                ));
+            }
+
+            let endpoint = match custom_chat.api_mode {
+                CustomChatApiMode::Openai => build_openai_chat_endpoint(&custom_chat.base_url),
+                CustomChatApiMode::Anthropic => {
+                    build_anthropic_messages_endpoint(&custom_chat.base_url)
+                }
+            };
 
             Ok(ChatCompatibleSummaryConfig {
                 provider_name: provider.name.clone(),
                 endpoint,
-                api_key: ollama.api_key.clone(),
-                model: ollama.summary_model.clone(),
+                api_key: custom_chat.api_key.clone(),
+                model: custom_chat.model.clone(),
+                api_mode: custom_chat.api_mode,
             })
         }
         ProviderKind::AliyunTingwu => Err(format!(

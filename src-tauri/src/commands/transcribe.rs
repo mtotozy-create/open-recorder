@@ -649,6 +649,12 @@ pub fn transcribe_enqueue(
                     provider.name
                 ))
             }
+            ProviderKind::CustomChat => {
+                return Err(format!(
+                    "provider '{}' does not support transcription",
+                    provider.name
+                ))
+            }
             ProviderKind::LocalStt => {
                 let local_stt = provider.local_stt.as_ref().ok_or_else(|| {
                     format!("provider '{}' missing local_stt config", provider.name)
