@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.9.0...v0.10.0) (2026-05-09)
+
+### Features
+
+* **summary:** support multiple session summaries ([0382c13](https://github-mtotozy/mtotozy-create/open-recorder/commit/0382c133d5326f13d3d54a40e15cd68c0ebe17c0))
+
+### Bug Fixes
+
+* **release:** sync Cargo.lock version ([60d5bb8](https://github-mtotozy/mtotozy-create/open-recorder/commit/60d5bb8a5af674d19e7e574989f3c5eead818a98))
+
 ## [0.9.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.8.1...v0.9.0) (2026-05-05)
 
 ### Features
