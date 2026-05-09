@@ -376,6 +376,9 @@ pub fn summarize_with_chat_compatible(
     let json_text = extract_json(&raw_content);
     if let Ok(summary) = serde_json::from_str::<SummaryPayload>(json_text) {
         return Ok(SummaryResult {
+            id: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
             title: summary.title,
             decisions: summary.decisions,
             action_items: summary.action_items,
@@ -386,6 +389,9 @@ pub fn summarize_with_chat_compatible(
     }
 
     Ok(SummaryResult {
+        id: String::new(),
+        created_at: String::new(),
+        updated_at: String::new(),
         title: derive_summary_title(&raw_content),
         decisions: vec![],
         action_items: vec![],

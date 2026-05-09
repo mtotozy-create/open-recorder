@@ -486,15 +486,14 @@ fn collect_source_sessions_by_time_range(
 
     let mut result = sessions
         .iter()
-        .filter_map(|session| {
-            let source = build_source_session(session)?;
+        .flat_map(|session| {
             let updated_at = parse_utc(session.updated_at.as_str());
             if let Some(value) = updated_at {
                 if value < cutoff {
-                    return None;
+                    return Vec::new();
                 }
             }
-            Some(source)
+            build_source_sessions(session)
         })
         .collect::<Vec<_>>();
 
@@ -511,33 +510,32 @@ fn collect_source_sessions_by_ids(
         let Some(session) = sessions.iter().find(|session| session.id == *session_id) else {
             continue;
         };
-        if let Some(source) = build_source_session(session) {
-            result.push(source);
-        }
+        result.extend(build_source_sessions(session));
     }
     result.sort_by(|a, b| a.created_at.cmp(&b.created_at));
     Ok(result)
 }
 
-fn build_source_session(session: &Session) -> Option<InsightSourceSession> {
+fn build_source_sessions(session: &Session) -> Vec<InsightSourceSession> {
     if !session.discoverable {
-        return None;
+        return vec![];
     }
-    let summary = session.summary.as_ref()?;
-    let raw_markdown = summary.raw_markdown.trim();
-    if raw_markdown.is_empty() {
-        return None;
-    }
+    let session_name = session.name.clone().unwrap_or_else(|| {
+        format!("Session {}", session.id.chars().take(8).collect::<String>())
+    });
 
-    Some(InsightSourceSession {
-        id: session.id.clone(),
-        name: session.name.clone().unwrap_or_else(|| {
-            format!("Session {}", session.id.chars().take(8).collect::<String>())
-        }),
-        created_at: session.created_at.clone(),
-        updated_at: session.updated_at.clone(),
-        raw_markdown: summary.raw_markdown.clone(),
-    })
+    session
+        .summaries
+        .iter()
+        .filter(|summary| !summary.raw_markdown.trim().is_empty())
+        .map(|summary| InsightSourceSession {
+            id: format!("{}:{}", session.id, summary.id),
+            name: format!("{} - {}", session_name, summary.title),
+            created_at: session.created_at.clone(),
+            updated_at: summary.updated_at.clone(),
+            raw_markdown: summary.raw_markdown.clone(),
+        })
+        .collect()
 }
 
 fn build_session_fingerprint(sessions: &[InsightSourceSession]) -> String {

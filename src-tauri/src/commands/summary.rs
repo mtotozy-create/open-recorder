@@ -303,9 +303,10 @@ pub fn summary_enqueue(
             match summary_result {
                 Ok(summary) => {
                     if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
-                        session.summary = Some(summary);
+                        let now = now_iso();
+                        session.append_summary(summary, &now);
                         session.status = SessionStatus::Completed;
-                        session.updated_at = now_iso();
+                        session.updated_at = now;
                         let _ = storage.upsert_session(&session);
                     }
 

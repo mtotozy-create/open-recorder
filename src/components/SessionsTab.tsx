@@ -22,7 +22,8 @@ import type {
   ProviderKind,
   RecordingQualityPreset,
   SessionDetail,
-  SessionSummary
+  SessionSummary,
+  SummaryResult
 } from "../types/domain";
 
 type DetailTab = "transcription" | "meta" | "tasks";
@@ -31,7 +32,8 @@ type CopyStatus = "idle" | "success" | "error";
 type DeleteDialogState =
   | { kind: "session" }
   | { kind: "segment"; path: string }
-  | { kind: "allSegments" };
+  | { kind: "allSegments" }
+  | { kind: "summary"; summaryId: string; title: string };
 type SessionSegmentListItem = {
   path: string;
   meta?: SessionDetail["audioSegmentMeta"][number];
@@ -74,10 +76,14 @@ type SessionsTabProps = {
   onRenameSession: (sessionId: string, name: string) => void;
   onSetSessionTags: (sessionId: string, tags: string[]) => void | Promise<void>;
   onSetSessionDiscoverable: (sessionId: string, discoverable: boolean) => void | Promise<void>;
+  onCreateSessionSummary: (sessionId: string, rawMarkdown?: string) => Promise<string>;
   onUpdateSessionSummaryRawMarkdown: (
     sessionId: string,
+    summaryId: string,
     rawMarkdown: string
   ) => void | Promise<void>;
+  onDeleteSessionSummary: (sessionId: string, summaryId: string) => void | Promise<void>;
+  onSetDefaultSessionSummary: (sessionId: string, summaryId: string) => void | Promise<void>;
   onDeleteSession: (sessionId: string) => void;
   onDeleteSessionSegment: (sessionId: string, segmentPath: string) => void | Promise<void>;
   onDeleteSessionSegments: (sessionId: string) => void | Promise<void>;
@@ -167,6 +173,22 @@ function formatDateTime(input: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
     date.getHours()
   )}:${pad(date.getMinutes())}`;
+}
+
+function getSummaryLabel(summary: SummaryResult): string {
+  const title = summary.title.trim() || "Summary";
+  const createdAt = formatDateTime(summary.createdAt);
+  return createdAt ? `${title} · ${createdAt}` : title;
+}
+
+function getDefaultSummary(session?: SessionDetail): SummaryResult | undefined {
+  if (!session) {
+    return undefined;
+  }
+  return (
+    session.summaries.find((summary) => summary.id === session.defaultSummaryId) ??
+    session.summaries[0]
+  );
 }
 
 function formatDuration(ms: number): string {
@@ -432,7 +454,10 @@ function SessionsTab({
   onRenameSession,
   onSetSessionTags,
   onSetSessionDiscoverable,
+  onCreateSessionSummary,
   onUpdateSessionSummaryRawMarkdown,
+  onDeleteSessionSummary,
+  onSetDefaultSessionSummary,
   onDeleteSession,
   onDeleteSessionSegment,
   onDeleteSessionSegments,
@@ -469,9 +494,12 @@ function SessionsTab({
   const [summaryStartMs, setSummaryStartMs] = useState<number>();
   const [summaryCopyStatus, setSummaryCopyStatus] = useState<CopyStatus>("idle");
   const [isSummaryEditing, setIsSummaryEditing] = useState(false);
+  const [selectedSummaryId, setSelectedSummaryId] = useState<string>();
   const [summaryDraft, setSummaryDraft] = useState("");
   const [summaryEditError, setSummaryEditError] = useState<string>();
   const [isSavingSummary, setIsSavingSummary] = useState(false);
+  const [isDeletingSummary, setIsDeletingSummary] = useState(false);
+  const [isSettingDefaultSummary, setIsSettingDefaultSummary] = useState(false);
   const [isTagFilterExpanded, setIsTagFilterExpanded] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState("");
   const [sessionSearchResults, setSessionSearchResults] = useState<SessionSummary[]>([]);
@@ -591,13 +619,30 @@ function SessionsTab({
   const canCreateSessionFromSegments = Boolean(
     activeSession && selectedSegmentCount > 0 && !isCreatingSession
   );
-  const summaryCopyText = activeSession?.summary?.rawMarkdown?.trim() ?? "";
+  const summaries = activeSession?.summaries ?? [];
+  const defaultSummary = getDefaultSummary(activeSession);
+  const selectedSummary =
+    summaries.find((summary) => summary.id === selectedSummaryId) ??
+    defaultSummary ??
+    summaries[0];
+  const selectedSummaryIsDefault = Boolean(
+    selectedSummary && selectedSummary.id === activeSession?.defaultSummaryId
+  );
+  const summaryCopyText = selectedSummary?.rawMarkdown?.trim() ?? "";
+  const defaultSummaryCopyText = defaultSummary?.rawMarkdown?.trim() ?? "";
   const canCopySummary =
     summaryViewMode === "readable" && !isSummaryEditing && summaryCopyText.length > 0;
   const canExportSummaryPdf =
-    summaryViewMode === "readable" && !isSummaryEditing && summaryCopyText.length > 0;
-  const canEditSummary = summaryViewMode === "readable" && !summaryTaskRunning;
-  const summaryEditActionLabel = activeSession?.summary
+    summaryViewMode === "readable" && !isSummaryEditing && defaultSummaryCopyText.length > 0;
+  const canEditSummary = summaryViewMode === "readable" && !summaryTaskRunning && !isDeletingSummary;
+  const canSetDefaultSummary = Boolean(
+    activeSession &&
+      selectedSummary &&
+      !selectedSummaryIsDefault &&
+      !summaryTaskRunning &&
+      !isSettingDefaultSummary
+  );
+  const summaryEditActionLabel = selectedSummary
     ? t("sessionDetail.editSummary")
     : t("sessionDetail.createSummary");
   const summaryCopyLabel = summaryCopyStatus === "success"
@@ -616,12 +661,27 @@ function SessionsTab({
   useEffect(() => {
     setDetailDraftName(activeSession?.name ?? "");
     setActiveDetailTab("transcription");
-    setIsTranscriptCollapsed(!!activeSession?.summary);
+    setIsTranscriptCollapsed((activeSession?.summaries.length ?? 0) > 0);
     setDeleteDialog(undefined);
     setIsDeletingSegments(false);
+    setIsDeletingSummary(false);
+    setIsSettingDefaultSummary(false);
     setDeletingSegmentPath(undefined);
     setSelectedSegmentPaths([]);
-  }, [activeSession?.id, activeSession?.name, !!activeSession?.summary]);
+  }, [activeSession?.id, activeSession?.name, activeSession?.summaries.length]);
+
+  useEffect(() => {
+    if (!activeSession || activeSession.summaries.length === 0) {
+      setSelectedSummaryId(undefined);
+      return;
+    }
+    setSelectedSummaryId((previous) => {
+      if (previous && activeSession.summaries.some((summary) => summary.id === previous)) {
+        return previous;
+      }
+      return activeSession.defaultSummaryId ?? activeSession.summaries[0]?.id;
+    });
+  }, [activeSession?.id, activeSession?.defaultSummaryId, activeSession?.summaries]);
 
   useEffect(() => {
     const availablePaths = new Set(segmentItems.map((item) => item.path));
@@ -636,10 +696,10 @@ function SessionsTab({
 
   useEffect(() => {
     setIsSummaryEditing(false);
-    setSummaryDraft(activeSession?.summary?.rawMarkdown ?? "");
+    setSummaryDraft(selectedSummary?.rawMarkdown ?? "");
     setSummaryEditError(undefined);
     setIsSavingSummary(false);
-  }, [activeSession?.id, activeSession?.summary?.rawMarkdown]);
+  }, [activeSession?.id, selectedSummary?.id, selectedSummary?.rawMarkdown]);
 
   useEffect(() => {
     setSummaryCopyStatus("idle");
@@ -647,7 +707,7 @@ function SessionsTab({
       window.clearTimeout(summaryCopyResetTimerRef.current);
       summaryCopyResetTimerRef.current = undefined;
     }
-  }, [activeSession?.id, activeSession?.summary?.rawMarkdown, summaryViewMode]);
+  }, [activeSession?.id, selectedSummary?.id, selectedSummary?.rawMarkdown, summaryViewMode]);
 
   useEffect(() => {
     if (summaryViewMode === "readable") {
@@ -662,9 +722,9 @@ function SessionsTab({
       return;
     }
     setIsSummaryEditing(false);
-    setSummaryDraft(activeSession?.summary?.rawMarkdown ?? "");
+    setSummaryDraft(selectedSummary?.rawMarkdown ?? "");
     setSummaryEditError(undefined);
-  }, [summaryTaskRunning, activeSession?.summary?.rawMarkdown]);
+  }, [summaryTaskRunning, selectedSummary?.rawMarkdown]);
 
   useEffect(() => {
     return () => {
@@ -1086,13 +1146,13 @@ function SessionsTab({
     if (!activeSession || !canEditSummary) {
       return;
     }
-    setSummaryDraft(activeSession.summary?.rawMarkdown ?? "");
+    setSummaryDraft(selectedSummary?.rawMarkdown ?? "");
     setSummaryEditError(undefined);
     setIsSummaryEditing(true);
   }
 
   function handleCancelSummaryEdit() {
-    setSummaryDraft(activeSession?.summary?.rawMarkdown ?? "");
+    setSummaryDraft(selectedSummary?.rawMarkdown ?? "");
     setSummaryEditError(undefined);
     setIsSummaryEditing(false);
   }
@@ -1104,12 +1164,61 @@ function SessionsTab({
     setIsSavingSummary(true);
     setSummaryEditError(undefined);
     try {
-      await onUpdateSessionSummaryRawMarkdown(activeSession.id, summaryDraft);
+      const summaryId =
+        selectedSummary?.id ?? (await onCreateSessionSummary(activeSession.id, summaryDraft));
+      setSelectedSummaryId(summaryId);
+      if (selectedSummary) {
+        await onUpdateSessionSummaryRawMarkdown(activeSession.id, selectedSummary.id, summaryDraft);
+      }
       setIsSummaryEditing(false);
     } catch (error) {
       setSummaryEditError(String(error));
     } finally {
       setIsSavingSummary(false);
+    }
+  }
+
+  async function handleCreateSummary() {
+    if (!activeSession || !canEditSummary || isSavingSummary) {
+      return;
+    }
+    setIsSavingSummary(true);
+    setSummaryEditError(undefined);
+    try {
+      const summaryId = await onCreateSessionSummary(activeSession.id, "");
+      setSelectedSummaryId(summaryId);
+      setSummaryDraft("");
+      setIsSummaryEditing(true);
+    } catch (error) {
+      setSummaryEditError(String(error));
+    } finally {
+      setIsSavingSummary(false);
+    }
+  }
+
+  async function handleSetDefaultSummary() {
+    if (!activeSession || !selectedSummary || !canSetDefaultSummary) {
+      return;
+    }
+    setIsSettingDefaultSummary(true);
+    try {
+      await onSetDefaultSessionSummary(activeSession.id, selectedSummary.id);
+    } finally {
+      setIsSettingDefaultSummary(false);
+    }
+  }
+
+  async function handleDeleteSummary(summaryId: string) {
+    if (!activeSession || isDeletingSummary) {
+      return;
+    }
+    setIsDeletingSummary(true);
+    try {
+      await onDeleteSessionSummary(activeSession.id, summaryId);
+      setDeleteDialog(undefined);
+      setIsSummaryEditing(false);
+    } finally {
+      setIsDeletingSummary(false);
     }
   }
 
@@ -1194,6 +1303,11 @@ function SessionsTab({
       return;
     }
 
+    if (deleteDialog.kind === "summary") {
+      await handleDeleteSummary(deleteDialog.summaryId);
+      return;
+    }
+
     await handleDeleteAllSegments();
   }
 
@@ -1204,7 +1318,9 @@ function SessionsTab({
         ? t("sessionDetail.deleteSegment")
         : deleteDialog?.kind === "allSegments"
           ? t("sessionDetail.deleteAllSegments")
-          : "";
+          : deleteDialog?.kind === "summary"
+            ? t("sessionDetail.deleteSummary")
+            : "";
   let deleteDialogMessage = "";
   if (deleteDialog?.kind === "session") {
     deleteDialogMessage = t("sessions.deleteConfirm");
@@ -1214,16 +1330,59 @@ function SessionsTab({
     });
   } else if (deleteDialog?.kind === "allSegments") {
     deleteDialogMessage = t("sessionDetail.deleteAllSegmentsConfirm");
+  } else if (deleteDialog?.kind === "summary") {
+    deleteDialogMessage = t("sessionDetail.deleteSummaryConfirm", {
+      title: deleteDialog.title
+    });
   }
   const deleteDialogConfirmLabel =
     deleteDialog?.kind === "session"
       ? t("action.confirm")
-      : isDeletingSegments
+      : isDeletingSummary && deleteDialog?.kind === "summary"
+        ? t("sessionDetail.deletingSummary")
+        : isDeletingSegments
         ? deleteDialog?.kind === "segment"
           ? t("sessionDetail.deletingSegment")
           : t("sessionDetail.deletingSegments")
         : t("action.confirm");
   const canShowCurrentShortcut = Boolean(activeSessionId);
+
+  function renderSummaryMarkdown(summary: SummaryResult, className: string) {
+    const markdown = normalizeSummaryMarkdown(summary.rawMarkdown);
+    return (
+      <div className={className}>
+        {markdown.trim() ? (
+          <ReactMarkdown
+            skipHtml
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeSanitize]}
+            components={{
+              a: ({ href, children, ...props }) => {
+                const safeHref = toSafeHref(href);
+                if (!safeHref) {
+                  return <span className="md-link-disabled">{children}</span>;
+                }
+                return (
+                  <a
+                    {...props}
+                    href={safeHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {children}
+                  </a>
+                );
+              }
+            }}
+          >
+            {markdown}
+          </ReactMarkdown>
+        ) : (
+          <p className="empty-hint">-</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={`sessions-layout${isListCollapsed ? " list-collapsed" : ""}`}>
@@ -2125,7 +2284,28 @@ function SessionsTab({
                   <div className="session-result-header">
                     <h3>{t("sessionDetail.summary")}</h3>
                     <div className="session-result-actions">
-                      {summaryViewMode === "readable" && !isSummaryEditing && (
+                      {summaryViewMode === "readable" && summaries.length > 0 && (
+                        <select
+                          className="summary-select"
+                          value={selectedSummary?.id ?? ""}
+                          onChange={(event) => {
+                            setSelectedSummaryId(event.target.value || undefined);
+                            setIsSummaryEditing(false);
+                            setSummaryEditError(undefined);
+                          }}
+                          disabled={isSummaryEditing || summaryTaskRunning}
+                        >
+                          {summaries.map((summary) => (
+                            <option key={summary.id} value={summary.id}>
+                              {getSummaryLabel(summary)}
+                              {summary.id === activeSession.defaultSummaryId
+                                ? ` (${t("sessionDetail.defaultSummary")})`
+                                : ""}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      {summaryViewMode === "readable" && !isSummaryEditing && summaries.length > 0 && (
                         <button
                           type="button"
                           className={`summary-copy-btn${summaryCopyStatus === "success" ? " success" : ""}${summaryCopyStatus === "error" ? " error" : ""}`}
@@ -2146,7 +2326,20 @@ function SessionsTab({
                           <span>{summaryCopyLabel}</span>
                         </button>
                       )}
-                      {summaryViewMode === "readable" && !isSummaryEditing && (
+                      {summaryViewMode === "readable" && !isSummaryEditing && summaries.length > 0 && (
+                        <button
+                          type="button"
+                          className="summary-edit-btn"
+                          onClick={() => void handleSetDefaultSummary()}
+                          disabled={!canSetDefaultSummary}
+                          title={selectedSummaryIsDefault ? t("sessionDetail.defaultSummary") : t("sessionDetail.setDefaultSummary")}
+                        >
+                          {selectedSummaryIsDefault
+                            ? t("sessionDetail.defaultSummary")
+                            : t("sessionDetail.setDefaultSummary")}
+                        </button>
+                      )}
+                      {summaryViewMode === "readable" && !isSummaryEditing && summaries.length > 0 && (
                         <button
                           type="button"
                           className="summary-edit-btn"
@@ -2157,7 +2350,18 @@ function SessionsTab({
                           {t("sessionDetail.exportPdf")}
                         </button>
                       )}
-                      {summaryViewMode === "readable" && !isSummaryEditing && (
+                      {summaryViewMode === "readable" && !isSummaryEditing && selectedSummary && (
+                        <button
+                          type="button"
+                          className="summary-edit-btn"
+                          onClick={() => void handleCreateSummary()}
+                          disabled={!canEditSummary || isSavingSummary}
+                          title={!canEditSummary ? t("sessionDetail.summaryEditingDisabled") : t("sessionDetail.createSummary")}
+                        >
+                          {t("sessionDetail.createSummary")}
+                        </button>
+                      )}
+                      {summaryViewMode === "readable" && !isSummaryEditing && selectedSummary && (
                         <button
                           type="button"
                           className="summary-edit-btn"
@@ -2166,6 +2370,22 @@ function SessionsTab({
                           title={!canEditSummary ? t("sessionDetail.summaryEditingDisabled") : summaryEditActionLabel}
                         >
                           {summaryEditActionLabel}
+                        </button>
+                      )}
+                      {summaryViewMode === "readable" && !isSummaryEditing && selectedSummary && (
+                        <button
+                          type="button"
+                          className="summary-edit-btn danger"
+                          onClick={() =>
+                            setDeleteDialog({
+                              kind: "summary",
+                              summaryId: selectedSummary.id,
+                              title: getSummaryLabel(selectedSummary)
+                            })
+                          }
+                          disabled={summaryTaskRunning || isDeletingSummary}
+                        >
+                          {t("sessionDetail.deleteSummary")}
                         </button>
                       )}
                       {summaryViewMode === "readable" && isSummaryEditing && (
@@ -2208,10 +2428,20 @@ function SessionsTab({
                   </div>
 
                   {summaryViewMode === "raw" && (
-                    <pre>{JSON.stringify(activeSession.summary ?? null, null, 2)}</pre>
+                    <pre>
+                      {JSON.stringify(
+                        {
+                          defaultSummaryId: activeSession.defaultSummaryId ?? null,
+                          selectedSummary: selectedSummary ?? null,
+                          summaries
+                        },
+                        null,
+                        2
+                      )}
+                    </pre>
                   )}
 
-                  {summaryViewMode === "readable" && !activeSession.summary && (
+                  {summaryViewMode === "readable" && summaries.length === 0 && (
                     <>
                       {!isSummaryEditing && (
                         <p className="empty-hint">{t("sessionDetail.summaryEmpty")}</p>
@@ -2220,7 +2450,7 @@ function SessionsTab({
                         <button
                           type="button"
                           className="summary-create-btn"
-                          onClick={handleStartSummaryEdit}
+                          onClick={() => void handleCreateSummary()}
                           disabled={!canEditSummary}
                           title={!canEditSummary ? t("sessionDetail.summaryEditingDisabled") : t("sessionDetail.createSummary")}
                         >
@@ -2248,38 +2478,18 @@ function SessionsTab({
                     </div>
                   )}
 
-                  {summaryViewMode === "readable" && !isSummaryEditing && activeSession.summary && (
-                    <div className="summary-markdown-view summary-print-root">
-                      {normalizeSummaryMarkdown(activeSession.summary.rawMarkdown).trim() ? (
-                        <ReactMarkdown
-                          skipHtml
-                          remarkPlugins={[remarkGfm]}
-                          rehypePlugins={[rehypeSanitize]}
-                          components={{
-                            a: ({ href, children, ...props }) => {
-                              const safeHref = toSafeHref(href);
-                              if (!safeHref) {
-                                return <span className="md-link-disabled">{children}</span>;
-                              }
-                              return (
-                                <a
-                                  {...props}
-                                  href={safeHref}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  {children}
-                                </a>
-                              );
-                            }
-                          }}
-                        >
-                          {normalizeSummaryMarkdown(activeSession.summary.rawMarkdown)}
-                        </ReactMarkdown>
-                      ) : (
-                        <p className="empty-hint">-</p>
+                  {summaryViewMode === "readable" && !isSummaryEditing && selectedSummary && (
+                    <>
+                      {renderSummaryMarkdown(
+                        selectedSummary,
+                        `summary-markdown-view${selectedSummaryIsDefault ? " summary-print-root" : ""}`
                       )}
-                    </div>
+                      {!selectedSummaryIsDefault && defaultSummary && (
+                        <div className="summary-export-hidden">
+                          {renderSummaryMarkdown(defaultSummary, "summary-markdown-view summary-print-root")}
+                        </div>
+                      )}
+                    </>
                   )}
                 </section>
               </div>
@@ -2298,7 +2508,7 @@ function SessionsTab({
                 type="button"
                 className="btn-secondary"
                 onClick={() => setDeleteDialog(undefined)}
-                disabled={isDeletingSegments}
+                disabled={isDeletingSegments || isDeletingSummary}
               >
                 {t("action.cancel")}
               </button>
@@ -2307,7 +2517,9 @@ function SessionsTab({
                 className="btn-primary"
                 style={{ background: "var(--danger)", color: "#fff" }}
                 onClick={() => void handleConfirmDelete()}
-                disabled={isDeletingSegments && deleteDialog.kind !== "session"}
+                disabled={
+                  (isDeletingSegments && deleteDialog.kind !== "session") || isDeletingSummary
+                }
               >
                 {deleteDialogConfirmLabel}
               </button>

@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 const DEFAULT_BAILIAN_PROVIDER_ID: &str = "bailian-default";
 const DEFAULT_ALIYUN_PROVIDER_ID: &str = "aliyun-tingwu-default";
@@ -490,12 +492,59 @@ pub struct TranscriptSegment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SummaryResult {
+    #[serde(default = "default_summary_result_id")]
+    pub id: String,
+    #[serde(default = "default_summary_result_timestamp")]
+    pub created_at: String,
+    #[serde(default = "default_summary_result_timestamp")]
+    pub updated_at: String,
     pub title: String,
     pub decisions: Vec<String>,
     pub action_items: Vec<String>,
     pub risks: Vec<String>,
     pub timeline: Vec<String>,
     pub raw_markdown: String,
+}
+
+fn default_summary_result_id() -> String {
+    Uuid::new_v4().to_string()
+}
+
+fn default_summary_result_timestamp() -> String {
+    Utc::now().to_rfc3339()
+}
+
+impl SummaryResult {
+    pub fn new_manual(raw_markdown: String, now: &str) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            created_at: now.to_string(),
+            updated_at: now.to_string(),
+            title: "Manual Summary".to_string(),
+            decisions: vec![],
+            action_items: vec![],
+            risks: vec![],
+            timeline: vec![],
+            raw_markdown,
+        }
+    }
+
+    pub fn ensure_metadata(&mut self, now: &str) {
+        if self.id.trim().is_empty() {
+            self.id = Uuid::new_v4().to_string();
+        }
+        if self.created_at.trim().is_empty() {
+            self.created_at = now.to_string();
+        }
+        if self.updated_at.trim().is_empty() {
+            self.updated_at = self.created_at.clone();
+        }
+    }
+
+    pub fn mark_updated(&mut self, now: &str) {
+        self.ensure_metadata(now);
+        self.updated_at = now.to_string();
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1807,7 +1856,107 @@ pub struct Session {
     pub exported_m4a_size: Option<u64>,
     pub exported_m4a_created_at: Option<String>,
     pub transcript: Vec<TranscriptSegment>,
+    pub summaries: Vec<SummaryResult>,
+    pub default_summary_id: Option<String>,
+    #[serde(default, skip_serializing)]
     pub summary: Option<SummaryResult>,
+}
+
+impl Session {
+    pub fn normalize_summaries(&mut self) {
+        let now = Utc::now().to_rfc3339();
+        if self.summaries.is_empty() {
+            if let Some(summary) = self.summary.take() {
+                self.summaries.push(summary);
+            }
+        }
+
+        for summary in &mut self.summaries {
+            summary.ensure_metadata(&now);
+        }
+
+        if let Some(default_summary_id) = self.default_summary_id.as_deref() {
+            if self
+                .summaries
+                .iter()
+                .any(|summary| summary.id == default_summary_id)
+            {
+                return;
+            }
+        }
+
+        self.default_summary_id = self
+            .latest_non_empty_summary_id()
+            .or_else(|| self.summaries.last().map(|summary| summary.id.clone()));
+    }
+
+    pub fn append_summary(&mut self, mut summary: SummaryResult, now: &str) -> String {
+        summary.ensure_metadata(now);
+        summary.created_at = now.to_string();
+        summary.updated_at = now.to_string();
+        let summary_id = summary.id.clone();
+        self.summaries.push(summary);
+        self.default_summary_id = Some(summary_id.clone());
+        summary_id
+    }
+
+    pub fn update_summary_raw_markdown(
+        &mut self,
+        summary_id: &str,
+        raw_markdown: String,
+        now: &str,
+    ) -> Result<(), String> {
+        self.normalize_summaries();
+        let summary = self
+            .summaries
+            .iter_mut()
+            .find(|summary| summary.id == summary_id)
+            .ok_or_else(|| "summary not found".to_string())?;
+        summary.raw_markdown = raw_markdown;
+        summary.mark_updated(now);
+        Ok(())
+    }
+
+    pub fn delete_summary(&mut self, summary_id: &str) -> Result<(), String> {
+        self.normalize_summaries();
+        let before_len = self.summaries.len();
+        self.summaries.retain(|summary| summary.id != summary_id);
+        if self.summaries.len() == before_len {
+            return Err("summary not found".to_string());
+        }
+
+        if self.default_summary_id.as_deref() == Some(summary_id) {
+            self.default_summary_id = self.latest_non_empty_summary_id();
+        }
+        Ok(())
+    }
+
+    pub fn set_default_summary(&mut self, summary_id: &str) -> Result<(), String> {
+        self.normalize_summaries();
+        if !self.summaries.iter().any(|summary| summary.id == summary_id) {
+            return Err("summary not found".to_string());
+        }
+        self.default_summary_id = Some(summary_id.to_string());
+        Ok(())
+    }
+
+    pub fn default_summary(&self) -> Option<&SummaryResult> {
+        self.default_summary_id
+            .as_deref()
+            .and_then(|summary_id| {
+                self.summaries
+                    .iter()
+                    .find(|summary| summary.id == summary_id)
+            })
+    }
+
+    fn latest_non_empty_summary_id(&self) -> Option<String> {
+        self.summaries
+            .iter()
+            .rev()
+            .find(|summary| !summary.raw_markdown.trim().is_empty())
+            .map(|summary| summary.id.clone())
+    }
 }
 
 impl Default for Session {
@@ -1837,6 +1986,8 @@ impl Default for Session {
             exported_m4a_size: None,
             exported_m4a_created_at: None,
             transcript: vec![],
+            summaries: vec![],
+            default_summary_id: None,
             summary: None,
         }
     }

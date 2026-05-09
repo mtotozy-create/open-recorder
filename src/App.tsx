@@ -9,8 +9,10 @@ import TabNav, { type AppTab } from "./components/TabNav";
 import {
   createSessionFromAudio,
   createSessionFromSegments,
+  createSessionSummary,
   deleteSessionSegment,
   deleteSessionSegments,
+  deleteSessionSummary,
   enqueueSummary,
   enqueueTranscription,
   exportAllSummariesMarkdown,
@@ -31,6 +33,7 @@ import {
   renameSession,
   resumeRecording,
   searchSessions,
+  setDefaultSessionSummary,
   setRealtimeSourceLanguage as setRealtimeSourceLanguageApi,
   setSessionDiscoverable,
   setSessionTags as saveSessionTags,
@@ -1685,9 +1688,28 @@ function App() {
     }
   }
 
-  async function onUpdateSessionSummaryRawMarkdown(sessionId: string, rawMarkdown: string) {
+  async function onCreateSessionSummary(sessionId: string, rawMarkdown?: string): Promise<string> {
     try {
-      await updateSessionSummaryRawMarkdownApi(sessionId, rawMarkdown);
+      const summaryId = await createSessionSummary(sessionId, rawMarkdown);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionSummaryUpdated");
+      return summaryId;
+    } catch (error) {
+      setStatus("status.sessionSummaryUpdateFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
+  async function onUpdateSessionSummaryRawMarkdown(
+    sessionId: string,
+    summaryId: string,
+    rawMarkdown: string
+  ) {
+    try {
+      await updateSessionSummaryRawMarkdownApi(sessionId, summaryId, rawMarkdown);
       await refreshSessions();
       if (activeSessionId === sessionId) {
         await refreshSessionDetail(sessionId);
@@ -1695,6 +1717,34 @@ function App() {
       setStatus("status.sessionSummaryUpdated");
     } catch (error) {
       setStatus("status.sessionSummaryUpdateFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
+  async function onDeleteSessionSummary(sessionId: string, summaryId: string) {
+    try {
+      await deleteSessionSummary(sessionId, summaryId);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionSummaryDeleted");
+    } catch (error) {
+      setStatus("status.sessionSummaryDeleteFailed", { error: String(error) });
+      throw error;
+    }
+  }
+
+  async function onSetDefaultSessionSummary(sessionId: string, summaryId: string) {
+    try {
+      await setDefaultSessionSummary(sessionId, summaryId);
+      await refreshSessions();
+      if (activeSessionId === sessionId) {
+        await refreshSessionDetail(sessionId);
+      }
+      setStatus("status.sessionSummaryDefaultUpdated");
+    } catch (error) {
+      setStatus("status.sessionSummaryDefaultUpdateFailed", { error: String(error) });
       throw error;
     }
   }
@@ -2005,8 +2055,17 @@ function App() {
           onSetSessionDiscoverable={(sessionId, discoverable) =>
             void onSetSessionDiscoverable(sessionId, discoverable)
           }
-          onUpdateSessionSummaryRawMarkdown={(sessionId, rawMarkdown) =>
-            void onUpdateSessionSummaryRawMarkdown(sessionId, rawMarkdown)
+          onCreateSessionSummary={(sessionId, rawMarkdown) =>
+            onCreateSessionSummary(sessionId, rawMarkdown)
+          }
+          onUpdateSessionSummaryRawMarkdown={(sessionId, summaryId, rawMarkdown) =>
+            void onUpdateSessionSummaryRawMarkdown(sessionId, summaryId, rawMarkdown)
+          }
+          onDeleteSessionSummary={(sessionId, summaryId) =>
+            void onDeleteSessionSummary(sessionId, summaryId)
+          }
+          onSetDefaultSessionSummary={(sessionId, summaryId) =>
+            void onSetDefaultSessionSummary(sessionId, summaryId)
           }
           onDeleteSession={(sessionId) => void handleDeleteSession(sessionId)}
           onDeleteSessionSegment={(sessionId, segmentPath) =>

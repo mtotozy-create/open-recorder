@@ -1513,6 +1513,17 @@ p {
   white-space: nowrap;
 }
 
+.summary-select {
+  min-height: 30px;
+  max-width: min(280px, 100%);
+  padding: 4px 28px 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 0.75rem;
+}
+
 .summary-edit-btn {
   width: auto;
   min-height: 30px;
@@ -1532,6 +1543,17 @@ p {
 
 .summary-edit-btn.secondary {
   background: transparent;
+}
+
+.summary-edit-btn.danger {
+  color: var(--danger);
+  border-color: #fecaca;
+}
+
+.summary-edit-btn.danger:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #b91c1c;
 }
 
 .summary-edit-actions {
@@ -1576,6 +1598,16 @@ p {
   margin: 0;
   color: var(--danger);
   font-size: 0.8rem;
+}
+
+.summary-export-hidden {
+  position: fixed;
+  left: -100000px;
+  top: 0;
+  width: 720px;
+  max-width: 720px;
+  pointer-events: none;
+  opacity: 0;
 }
 
 .view-switch {

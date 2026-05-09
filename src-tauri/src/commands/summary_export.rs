@@ -105,8 +105,7 @@ where
     for session in sessions {
         let current_session_name = display_session_name(&session);
         let raw_markdown = session
-            .summary
-            .as_ref()
+            .default_summary()
             .map(|summary| summary.raw_markdown.as_str())
             .unwrap_or("");
         let markdown = normalize_summary_markdown(raw_markdown);
@@ -322,14 +321,18 @@ mod tests {
             id: id.to_string(),
             name: name.map(str::to_string),
             created_at: created_at.to_string(),
-            summary: Some(SummaryResult {
+            summaries: vec![SummaryResult {
+                id: format!("summary-{id}"),
+                created_at: created_at.to_string(),
+                updated_at: created_at.to_string(),
                 title: String::new(),
                 decisions: vec![],
                 action_items: vec![],
                 risks: vec![],
                 timeline: vec![],
                 raw_markdown: raw_markdown.to_string(),
-            }),
+            }],
+            default_summary_id: Some(format!("summary-{id}")),
             ..Default::default()
         }
     }
@@ -399,6 +402,62 @@ mod tests {
                 .expect("second export should succeed");
         assert_eq!(result.exported_count, 0);
         assert_eq!(result.skipped_existing_count, 2);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn exports_only_default_summary_when_session_has_multiple_summaries() {
+        let temp_dir = env::temp_dir().join(format!(
+            "open-recorder-summary-export-default-test-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+
+        let session = Session {
+            id: "11111111-aaaa".to_string(),
+            name: Some("Daily Sync".to_string()),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            summaries: vec![
+                SummaryResult {
+                    id: "summary-a".to_string(),
+                    created_at: "2026-01-01T00:00:00Z".to_string(),
+                    updated_at: "2026-01-01T00:00:00Z".to_string(),
+                    title: "First".to_string(),
+                    decisions: vec![],
+                    action_items: vec![],
+                    risks: vec![],
+                    timeline: vec![],
+                    raw_markdown: "# First".to_string(),
+                },
+                SummaryResult {
+                    id: "summary-b".to_string(),
+                    created_at: "2026-01-02T00:00:00Z".to_string(),
+                    updated_at: "2026-01-02T00:00:00Z".to_string(),
+                    title: "Second".to_string(),
+                    decisions: vec![],
+                    action_items: vec![],
+                    risks: vec![],
+                    timeline: vec![],
+                    raw_markdown: "# Second".to_string(),
+                },
+            ],
+            default_summary_id: Some("summary-a".to_string()),
+            ..Default::default()
+        };
+
+        let result = export_sessions_to_markdown(
+            vec![session],
+            temp_dir.to_string_lossy().as_ref(),
+            |_| {},
+        )
+        .expect("export should succeed");
+
+        assert_eq!(result.exported_count, 1);
+        assert_eq!(
+            fs::read_to_string(temp_dir.join("Daily Sync.md")).unwrap(),
+            "# First"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

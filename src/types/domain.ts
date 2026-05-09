@@ -31,6 +31,9 @@ export type TranscriptSegment = {
 };
 
 export type SummaryResult = {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
   title: string;
   decisions: string[];
   actionItems: string[];
@@ -367,7 +370,8 @@ export type SessionDetail = SessionSummary & {
   exportedMp3Size?: number;
   exportedMp3CreatedAt?: string;
   transcript: TranscriptSegment[];
-  summary?: SummaryResult;
+  summaries: SummaryResult[];
+  defaultSummaryId?: string;
 };
 
 export type RecorderPhase = "idle" | "recording" | "paused" | "processing" | "error";

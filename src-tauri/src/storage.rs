@@ -589,7 +589,9 @@ fn load_all_sessions(connection: &Connection) -> Result<Vec<Session>, String> {
     let mut sessions = Vec::new();
     for row in rows {
         let payload = row.map_err(|error| format!("failed to read session row: {error}"))?;
-        sessions.push(deserialize_json::<Session>(&payload, "session")?);
+        let mut session = deserialize_json::<Session>(&payload, "session")?;
+        session.normalize_summaries();
+        sessions.push(session);
     }
     Ok(sessions)
 }
@@ -605,12 +607,18 @@ fn load_session(connection: &Connection, session_id: &str) -> Result<Option<Sess
         .map_err(|error| format!("failed to load session '{session_id}': {error}"))?;
 
     payload
-        .map(|value| deserialize_json::<Session>(&value, "session"))
+        .map(|value| {
+            let mut session = deserialize_json::<Session>(&value, "session")?;
+            session.normalize_summaries();
+            Ok(session)
+        })
         .transpose()
 }
 
 fn upsert_session(connection: &Connection, session: &Session) -> Result<(), String> {
-    let payload = serialize_json(session, "session")?;
+    let mut normalized = session.clone();
+    normalized.normalize_summaries();
+    let payload = serialize_json(&normalized, "session")?;
     connection
         .execute(
             "INSERT INTO sessions (id, created_at, updated_at, status, discoverable, name, payload_json)
@@ -623,16 +631,16 @@ fn upsert_session(connection: &Connection, session: &Session) -> Result<(), Stri
                name = excluded.name,
                payload_json = excluded.payload_json",
             params![
-                session.id,
-                session.created_at,
-                session.updated_at,
-                session_status_name(session),
-                if session.discoverable { 1_i64 } else { 0_i64 },
-                session.name,
+                normalized.id,
+                normalized.created_at,
+                normalized.updated_at,
+                session_status_name(&normalized),
+                if normalized.discoverable { 1_i64 } else { 0_i64 },
+                normalized.name,
                 payload,
             ],
         )
-        .map_err(|error| format!("failed to save session '{}': {error}", session.id))?;
+        .map_err(|error| format!("failed to save session '{}': {error}", normalized.id))?;
     Ok(())
 }
 

@@ -140,16 +140,12 @@ fn session_matches_search_query(session: &Session, normalized_query: &str) -> bo
         .as_deref()
         .map(|name| name.to_lowercase().contains(normalized_query))
         .unwrap_or(false)
-        || session
-            .summary
-            .as_ref()
-            .map(|summary| {
-                summary
-                    .raw_markdown
-                    .to_lowercase()
-                    .contains(normalized_query)
-            })
-            .unwrap_or(false)
+        || session.summaries.iter().any(|summary| {
+            summary
+                .raw_markdown
+                .to_lowercase()
+                .contains(normalized_query)
+        })
 }
 
 fn search_session_summaries(sessions: Vec<Session>, query: &str) -> Vec<SessionSummary> {
@@ -346,6 +342,8 @@ fn build_imported_session_from_segments(
         exported_m4a_size: None,
         exported_m4a_created_at: None,
         transcript: vec![],
+        summaries: vec![],
+        default_summary_id: None,
         summary: None,
     }
 }
@@ -476,6 +474,8 @@ pub fn session_create_from_audio(
         exported_m4a_size: None,
         exported_m4a_created_at: None,
         transcript: vec![],
+        summaries: vec![],
+        default_summary_id: None,
         summary: None,
     };
     merge_session_tags_into_catalog(&mut settings.session_tag_catalog, &default_tags);
@@ -705,6 +705,7 @@ pub fn session_set_discoverable(
 #[tauri::command]
 pub fn session_update_summary_raw_markdown(
     session_id: String,
+    summary_id: String,
     raw_markdown: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -716,19 +717,70 @@ pub fn session_update_summary_raw_markdown(
         .get_session(&session_id)?
         .ok_or_else(|| "session not found".to_string())?;
 
-    if let Some(summary) = session.summary.as_mut() {
-        summary.raw_markdown = raw_markdown;
-    } else {
-        session.summary = Some(SummaryResult {
-            title: "Manual Summary".to_string(),
-            decisions: vec![],
-            action_items: vec![],
-            risks: vec![],
-            timeline: vec![],
-            raw_markdown,
-        });
-    }
+    let now = now_iso();
+    session.update_summary_raw_markdown(&summary_id, raw_markdown, &now)?;
+    session.updated_at = now;
+    storage.upsert_session(&session)?;
+    Ok(())
+}
 
+#[tauri::command]
+pub fn session_create_summary(
+    session_id: String,
+    raw_markdown: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let mut session = storage
+        .get_session(&session_id)?
+        .ok_or_else(|| "session not found".to_string())?;
+
+    let now = now_iso();
+    let summary = SummaryResult::new_manual(raw_markdown.unwrap_or_default(), &now);
+    let summary_id = session.append_summary(summary, &now);
+    session.updated_at = now;
+    storage.upsert_session(&session)?;
+    Ok(summary_id)
+}
+
+#[tauri::command]
+pub fn session_delete_summary(
+    session_id: String,
+    summary_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let mut session = storage
+        .get_session(&session_id)?
+        .ok_or_else(|| "session not found".to_string())?;
+
+    session.delete_summary(&summary_id)?;
+    session.updated_at = now_iso();
+    storage.upsert_session(&session)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn session_set_default_summary(
+    session_id: String,
+    summary_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let mut session = storage
+        .get_session(&session_id)?
+        .ok_or_else(|| "session not found".to_string())?;
+
+    session.set_default_summary(&summary_id)?;
     session.updated_at = now_iso();
     storage.upsert_session(&session)?;
     Ok(())
@@ -860,28 +912,36 @@ mod tests {
                 id: "older".to_string(),
                 name: Some("Weekly Planning".to_string()),
                 created_at: "2026-04-12T10:00:00Z".to_string(),
-                summary: Some(SummaryResult {
+                summaries: vec![SummaryResult {
+                    id: "summary-older".to_string(),
+                    created_at: "2026-04-12T10:00:00Z".to_string(),
+                    updated_at: "2026-04-12T10:00:00Z".to_string(),
                     title: "Other".to_string(),
                     decisions: vec![],
                     action_items: vec![],
                     risks: vec![],
                     timeline: vec![],
                     raw_markdown: "Discussed launch readiness.".to_string(),
-                }),
+                }],
+                default_summary_id: Some("summary-older".to_string()),
                 ..Default::default()
             },
             Session {
                 id: "newer".to_string(),
                 name: Some("Design Review".to_string()),
                 created_at: "2026-04-13T10:00:00Z".to_string(),
-                summary: Some(SummaryResult {
+                summaries: vec![SummaryResult {
+                    id: "summary-newer".to_string(),
+                    created_at: "2026-04-13T10:00:00Z".to_string(),
+                    updated_at: "2026-04-13T10:00:00Z".to_string(),
                     title: "Summary".to_string(),
                     decisions: vec![],
                     action_items: vec![],
                     risks: vec![],
                     timeline: vec![],
                     raw_markdown: "The team finalized the onboarding flow.".to_string(),
-                }),
+                }],
+                default_summary_id: Some("summary-newer".to_string()),
                 ..Default::default()
             },
             Session {
@@ -921,6 +981,29 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, "newer");
         assert_eq!(results[1].id, "older");
+    }
+
+    #[test]
+    fn deleting_default_summary_promotes_latest_non_empty_summary() {
+        let mut session = Session::default();
+        session.append_summary(
+            SummaryResult::new_manual("first".to_string(), "2026-04-12T10:00:00Z"),
+            "2026-04-12T10:00:00Z",
+        );
+        let second_id = session.append_summary(
+            SummaryResult::new_manual("second".to_string(), "2026-04-13T10:00:00Z"),
+            "2026-04-13T10:00:00Z",
+        );
+        let third_id = session.append_summary(
+            SummaryResult::new_manual("".to_string(), "2026-04-14T10:00:00Z"),
+            "2026-04-14T10:00:00Z",
+        );
+
+        assert_eq!(session.default_summary_id.as_deref(), Some(third_id.as_str()));
+        session
+            .delete_summary(&third_id)
+            .expect("default summary should be deleted");
+        assert_eq!(session.default_summary_id.as_deref(), Some(second_id.as_str()));
     }
 
     #[test]
@@ -1029,6 +1112,9 @@ mod tests {
                 speaker_label: None,
             }],
             summary: Some(SummaryResult {
+                id: "summary-source".to_string(),
+                created_at: "2026-04-12T10:00:00Z".to_string(),
+                updated_at: "2026-04-12T10:00:00Z".to_string(),
                 title: "Summary".to_string(),
                 decisions: vec!["Decision".to_string()],
                 action_items: vec![],
@@ -1074,6 +1160,8 @@ mod tests {
         assert_eq!(session.tags, vec!["#imported".to_string()]);
         assert!(session.transcript.is_empty());
         assert!(session.summary.is_none());
+        assert!(session.summaries.is_empty());
+        assert!(session.default_summary_id.is_none());
         assert!(session.exported_m4a_path.is_none());
         assert!(session.exported_mp3_path.is_none());
         assert!(session.exported_wav_path.is_none());

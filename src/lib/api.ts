@@ -161,9 +161,31 @@ export async function setSessionDiscoverable(
 
 export async function updateSessionSummaryRawMarkdown(
   sessionId: string,
+  summaryId: string,
   rawMarkdown: string
 ): Promise<void> {
-  await invoke("session_update_summary_raw_markdown", { sessionId, rawMarkdown });
+  await invoke("session_update_summary_raw_markdown", { sessionId, summaryId, rawMarkdown });
+}
+
+export async function createSessionSummary(
+  sessionId: string,
+  rawMarkdown?: string
+): Promise<string> {
+  return invoke("session_create_summary", { sessionId, rawMarkdown });
+}
+
+export async function deleteSessionSummary(
+  sessionId: string,
+  summaryId: string
+): Promise<void> {
+  await invoke("session_delete_summary", { sessionId, summaryId });
+}
+
+export async function setDefaultSessionSummary(
+  sessionId: string,
+  summaryId: string
+): Promise<void> {
+  await invoke("session_set_default_summary", { sessionId, summaryId });
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {

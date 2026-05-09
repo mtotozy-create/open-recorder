@@ -1860,6 +1860,8 @@ pub fn recorder_start(
             exported_m4a_size: None,
             exported_m4a_created_at: None,
             transcript: vec![],
+            summaries: vec![],
+            default_summary_id: None,
             summary: None,
         };
         merge_session_tags_into_catalog(
