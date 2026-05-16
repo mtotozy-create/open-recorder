@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.10.0...v0.10.1) (2026-05-16)
+
+### Bug Fixes
+
+* **release:** sync Cargo.lock version ([499e17b](https://github-mtotozy/mtotozy-create/open-recorder/commit/499e17b10f0b1d38ca2f98bc1faa3247803ff058))
+* **session:** import audio from selected file path ([0e25663](https://github-mtotozy/mtotozy-create/open-recorder/commit/0e256639f1d929dfd98d3f7e6d3bb73ceb147aef))
+
 ## [0.10.0](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.9.0...v0.10.0) (2026-05-09)
 
 ### Features
