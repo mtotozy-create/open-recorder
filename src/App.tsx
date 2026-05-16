@@ -1528,54 +1528,25 @@ function App() {
     }
   }
 
-  async function readAudioDurationMs(file: File): Promise<number | undefined> {
-    const objectUrl = URL.createObjectURL(file);
-    try {
-      const durationSeconds = await new Promise<number>((resolve, reject) => {
-        const audio = new Audio();
-        audio.preload = "metadata";
-        audio.onloadedmetadata = () => {
-          const duration = audio.duration;
-          audio.src = "";
-          if (Number.isFinite(duration) && duration > 0) {
-            resolve(duration);
-            return;
-          }
-          reject(new Error("invalid audio duration"));
-        };
-        audio.onerror = () => {
-          audio.src = "";
-          reject(new Error("failed to load audio metadata"));
-        };
-        audio.src = objectUrl;
-      });
-      return Math.round(durationSeconds * 1000);
-    } catch {
-      return undefined;
-    } finally {
-      URL.revokeObjectURL(objectUrl);
-    }
+  function getFileNameFromPath(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, "/").replace(/\/+$/, "");
+    const fileName = normalized.split("/").pop();
+    return fileName && fileName.length > 0 ? fileName : filePath;
   }
 
-  async function onCreateSessionFromFile(file: File) {
+  async function onCreateSessionFromPath(filePath: string) {
     if (isCreatingSession) {
       return;
     }
 
     setIsCreatingSession(true);
     try {
-      const audioBytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-      const durationMs = await readAudioDurationMs(file);
-      const sessionId = await createSessionFromAudio(
-        file.name,
-        audioBytes,
-        file.type || undefined,
-        durationMs
-      );
+      const fileName = getFileNameFromPath(filePath);
+      const sessionId = await createSessionFromAudio(filePath, fileName);
       await refreshSessions();
       setActiveSessionId(sessionId);
       await refreshSessionDetail(sessionId);
-      setStatus("status.sessionCreateFinished", { fileName: file.name });
+      setStatus("status.sessionCreateFinished", { fileName });
     } catch (error) {
       setStatus("status.sessionCreateFailed", { error: String(error) });
     } finally {
@@ -2039,7 +2010,7 @@ function App() {
             }));
           }}
           onSummaryTemplateChange={setSummaryTemplateId}
-          onCreateSessionFromFile={(file) => void onCreateSessionFromFile(file)}
+          onCreateSessionFromPath={(filePath) => void onCreateSessionFromPath(filePath)}
           onCreateSessionFromSegments={(sessionId, segmentPaths) =>
             void onCreateSessionFromSelectedSegments(sessionId, segmentPaths)
           }

@@ -348,6 +348,53 @@ fn build_imported_session_from_segments(
     }
 }
 
+fn copy_imported_audio_to_session_dir(
+    source_path: &Path,
+    session_dir: &Path,
+    file_name: &str,
+    mime_type: Option<&str>,
+) -> Result<(PathBuf, u64, String), String> {
+    if source_path.as_os_str().is_empty() {
+        return Err("source audio path is required".to_string());
+    }
+    if !source_path.is_file() {
+        return Err(format!(
+            "source audio file does not exist: {}",
+            source_path.display()
+        ));
+    }
+
+    let extension = infer_extension(file_name, mime_type);
+    fs::create_dir_all(session_dir).map_err(|error| {
+        format!(
+            "failed to create session audio dir {}: {error}",
+            session_dir.display()
+        )
+    })?;
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let destination_path = session_dir.join(format!("imported-{timestamp}.{extension}"));
+
+    fs::copy(source_path, &destination_path).map_err(|error| {
+        format!(
+            "failed to copy imported audio file {} to {}: {error}",
+            source_path.display(),
+            destination_path.display()
+        )
+    })?;
+
+    let file_size = destination_path
+        .metadata()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let format = destination_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "bin".to_string());
+
+    Ok((destination_path, file_size, format))
+}
+
 fn remove_dir_if_present(path: &Path) {
     match fs::remove_dir_all(path) {
         Ok(()) => {}
@@ -396,48 +443,42 @@ pub fn session_get(session_id: String, state: State<'_, AppState>) -> Result<Ses
 
 #[tauri::command]
 pub fn session_create_from_audio(
+    source_path: String,
     file_name: String,
-    audio_bytes: Vec<u8>,
     mime_type: Option<String>,
     duration_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<StartSessionResponse, String> {
-    if audio_bytes.is_empty() {
-        return Err("audio file is empty".to_string());
-    }
-
     let session_id = Uuid::new_v4().to_string();
     let now = now_iso();
-    let extension = infer_extension(&file_name, mime_type.as_deref());
-    let file_path = {
+    let source_path = Path::new(source_path.trim()).to_path_buf();
+    let (session_dir, cleanup_dir): (PathBuf, PathBuf) = {
         let storage = state
             .storage
             .lock()
             .map_err(|_| "failed to acquire storage lock".to_string())?;
         let session_dir = storage.session_audio_dir(&session_id)?;
-        let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-        session_dir.join(format!("imported-{timestamp}.{extension}"))
+        let cleanup_dir = session_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| session_dir.clone());
+        (session_dir, cleanup_dir)
     };
 
-    std::fs::write(&file_path, &audio_bytes)
-        .map_err(|error| format!("failed to write imported audio file: {error}"))?;
+    let (file_path, file_size, format) = match copy_imported_audio_to_session_dir(
+        &source_path,
+        &session_dir,
+        &file_name,
+        mime_type.as_deref(),
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            remove_dir_if_present(&cleanup_dir);
+            return Err(error);
+        }
+    };
 
     let saved_path = file_path.to_string_lossy().to_string();
-    let file_size = file_path
-        .metadata()
-        .map(|metadata| metadata.len())
-        .unwrap_or(audio_bytes.len() as u64);
-    let format = file_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|value| value.to_ascii_lowercase())
-        .unwrap_or_else(|| "bin".to_string());
-
-    let mut storage = state
-        .storage
-        .lock()
-        .map_err(|_| "failed to acquire storage lock".to_string())?;
-    let mut settings = storage.get_settings()?;
     let default_tags = vec![DEFAULT_IMPORTED_SESSION_TAG.to_string()];
     let session = Session {
         id: session_id.clone(),
@@ -478,9 +519,22 @@ pub fn session_create_from_audio(
         default_summary_id: None,
         summary: None,
     };
-    merge_session_tags_into_catalog(&mut settings.session_tag_catalog, &default_tags);
-    settings.normalize();
-    storage.save_settings_and_session(&settings, &session)?;
+
+    let save_result = {
+        let mut storage = state
+            .storage
+            .lock()
+            .map_err(|_| "failed to acquire storage lock".to_string())?;
+        let mut settings = storage.get_settings()?;
+        merge_session_tags_into_catalog(&mut settings.session_tag_catalog, &default_tags);
+        settings.normalize();
+        storage.save_settings_and_session(&settings, &session)
+    };
+    if let Err(error) = save_result {
+        remove_dir_if_present(&cleanup_dir);
+        return Err(error);
+    }
+
     Ok(StartSessionResponse {
         session_id,
         input_device_id: None,
@@ -790,7 +844,8 @@ pub fn session_set_default_summary(
 mod tests {
     use super::{
         build_imported_session_from_segments, collect_selected_session_segments,
-        collect_session_audio_paths, copy_selected_segments_to_dir,
+        collect_session_audio_paths, copy_imported_audio_to_session_dir,
+        copy_selected_segments_to_dir,
         ensure_all_segments_deletion_allowed, ensure_single_segment_deletion_allowed,
         remove_segment_references, search_session_summaries, session_has_merged_audio,
     };
@@ -1090,6 +1145,50 @@ mod tests {
             fs::read(&copied[1].path).expect("copied segment b"),
             b"bbbb"
         );
+
+        remove_test_dir(&source_dir);
+        remove_test_dir(&target_dir);
+    }
+
+    #[test]
+    fn imported_audio_is_copied_from_source_path() {
+        let source_dir = create_test_dir("import-source");
+        let target_dir = create_test_dir("import-target");
+        let source_path = source_dir.join("voice.memo.mp3");
+        fs::write(&source_path, b"imported-audio").expect("source audio should be written");
+
+        let (copied_path, copied_size, copied_format) = copy_imported_audio_to_session_dir(
+            &source_path,
+            &target_dir,
+            "voice.memo.mp3",
+            Some("audio/mpeg"),
+        )
+        .expect("imported audio should be copied");
+
+        assert!(copied_path.exists());
+        assert_eq!(copied_size, 14);
+        assert_eq!(copied_format, "mp3");
+        assert_eq!(
+            fs::read(&copied_path).expect("copied audio should be readable"),
+            b"imported-audio"
+        );
+
+        remove_test_dir(&source_dir);
+        remove_test_dir(&target_dir);
+    }
+
+    #[test]
+    fn missing_imported_audio_source_returns_error() {
+        let source_dir = create_test_dir("missing-import-source");
+        let target_dir = create_test_dir("missing-import-target");
+        let missing_path = source_dir.join("missing.m4a");
+
+        let error =
+            copy_imported_audio_to_session_dir(&missing_path, &target_dir, "missing.m4a", None)
+                .unwrap_err();
+
+        assert!(error.contains("source audio file does not exist"));
+        assert!(!target_dir.join("imported").exists());
 
         remove_test_dir(&source_dir);
         remove_test_dir(&target_dir);

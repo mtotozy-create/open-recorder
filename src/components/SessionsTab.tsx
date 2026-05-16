@@ -8,6 +8,7 @@ import {
   type MouseEvent
 } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -65,7 +66,7 @@ type SessionsTabProps = {
   isTranscribing?: boolean;
   isSummarizing?: boolean;
   isCreatingSession?: boolean;
-  onCreateSessionFromFile: (file: File) => void | Promise<void>;
+  onCreateSessionFromPath: (filePath: string) => void | Promise<void>;
   onCreateSessionFromSegments: (
     sessionId: string,
     segmentPaths: string[]
@@ -446,7 +447,7 @@ function SessionsTab({
   isTranscribing = false,
   isSummarizing = false,
   isCreatingSession = false,
-  onCreateSessionFromFile,
+  onCreateSessionFromPath,
   onCreateSessionFromSegments,
   onRefresh,
   onSearchSessions,
@@ -514,7 +515,6 @@ function SessionsTab({
   const [isSavingTags, setIsSavingTags] = useState(false);
   const [discoverableUpdatingId, setDiscoverableUpdatingId] = useState<string>();
   const skipListBlurRef = useRef(false);
-  const audioFileInputRef = useRef<HTMLInputElement>(null);
   const playbackAudioRef = useRef<HTMLAudioElement>(null);
   const summaryCopyResetTimerRef = useRef<number | undefined>(undefined);
 
@@ -960,13 +960,29 @@ function SessionsTab({
     }
   }
 
-  function handleAudioFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) {
+  async function handleCreateSessionClick() {
+    if (isCreatingSession) {
       return;
     }
-    void onCreateSessionFromFile(file);
+
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        title: t("sessions.create"),
+        filters: [
+          {
+            name: "Audio",
+            extensions: ["wav", "m4a", "mp3", "aac", "flac", "ogg", "opus", "webm", "mp4", "m4b"]
+          }
+        ]
+      });
+      if (typeof selected === "string") {
+        await onCreateSessionFromPath(selected);
+      }
+    } catch (error) {
+      console.warn("[session-create] failed to choose audio file", { error: String(error) });
+    }
   }
 
   function toggleFilterTag(tag: string) {
@@ -1409,7 +1425,7 @@ function SessionsTab({
               <button
                 type="button"
                 className="btn-secondary sessions-toolbar-btn"
-                onClick={() => audioFileInputRef.current?.click()}
+                onClick={() => void handleCreateSessionClick()}
                 disabled={isCreatingSession}
                 aria-label={t("sessions.create")}
                 title={t("sessions.create")}
@@ -1444,13 +1460,6 @@ function SessionsTab({
                 </svg>
               </button>
 
-              <input
-                ref={audioFileInputRef}
-                type="file"
-                accept="audio/*"
-                style={{ display: "none" }}
-                onChange={handleAudioFileChange}
-              />
             </>
           )}
         </div>

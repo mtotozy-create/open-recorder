@@ -7,7 +7,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::models::{AudioSegmentMeta, LocalSttEngine, TranscriptSegment};
+use crate::{
+    models::{AudioSegmentMeta, LocalSttEngine, TranscriptSegment},
+    process_util::new_hidden_command,
+};
 
 const WORKER_SCRIPT_SOURCE: &str = include_str!("../../python/local_stt_worker.py");
 
@@ -112,7 +115,7 @@ impl PythonCommand {
     }
 
     pub(crate) fn to_command(&self) -> Command {
-        let mut command = Command::new(&self.program);
+        let mut command = new_hidden_command(&self.program);
         command.args(&self.args);
         command
     }

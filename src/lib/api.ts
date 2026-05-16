@@ -115,14 +115,14 @@ export async function searchSessions(query: string): Promise<SessionSummary[]> {
 }
 
 export async function createSessionFromAudio(
+  sourcePath: string,
   fileName: string,
-  audioBytes: number[],
   mimeType?: string,
   durationMs?: number
 ): Promise<string> {
   const response = await invoke<{ sessionId: string }>("session_create_from_audio", {
+    sourcePath,
     fileName,
-    audioBytes,
     mimeType,
     durationMs
   });

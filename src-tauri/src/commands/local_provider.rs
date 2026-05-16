@@ -2,7 +2,6 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use serde::Serialize;
@@ -10,6 +9,7 @@ use tauri::State;
 
 use crate::{
     models::{LocalSttEngine, LocalSttProviderSettings, ProviderKind, Settings},
+    process_util::new_hidden_command,
     providers::local_stt::{ensure_worker_script_on_disk, resolve_python_command, PythonCommand},
     state::AppState,
 };
@@ -89,7 +89,7 @@ fn build_status(
 }
 
 fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
-    let output = Command::new(program)
+    let output = new_hidden_command(program)
         .args(args)
         .output()
         .map_err(|error| format!("failed to run '{}': {error}", program))?;
@@ -194,7 +194,7 @@ for model_id in sys.argv[2:]:
 "#;
 
     let cache_dir = model_cache_dir.to_string_lossy().to_string();
-    let mut command = Command::new(python_executable);
+    let mut command = new_hidden_command(python_executable);
     command
         .arg("-c")
         .arg(preload_script)
