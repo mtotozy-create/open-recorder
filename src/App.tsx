@@ -6,6 +6,7 @@ import RecorderTab from "./components/RecorderTab";
 import SettingsTab from "./components/SettingsTab";
 import SessionsTab from "./components/SessionsTab";
 import TabNav, { type AppTab } from "./components/TabNav";
+import ciyuanHeaderIcon from "./assets/ciyuan-header-icon.svg";
 import {
   createSessionFromAudio,
   createSessionFromSegments,
@@ -1929,7 +1930,10 @@ function App() {
     <main className="app-shell">
       <header className="app-header panel">
         <div className="app-header-top">
-          <h1>{t("app.title")}</h1>
+          <div className="app-brand">
+            <img className="app-brand-icon" src={ciyuanHeaderIcon} alt="" aria-hidden="true" />
+            <h1>{t("app.title")}</h1>
+          </div>
           <span className="status-badge">{statusMessage}</span>
         </div>
         <TabNav activeTab={activeTab} onChange={setActiveTab} t={t} />

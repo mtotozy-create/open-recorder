@@ -1,7 +1,7 @@
 export type Locale = "zh-CN" | "en-US";
 
 const enUS = {
-  "app.title": "Open Recorder",
+  "app.title": "词元听会",
   "nav.recorder": "Recorder",
   "nav.sessions": "Sessions",
   "nav.discover": "Discover",
@@ -555,7 +555,7 @@ const enUS = {
 export type TranslationKey = keyof typeof enUS;
 
 const zhCN: Record<TranslationKey, string> = {
-  "app.title": "Open Recorder",
+  "app.title": "词元听会",
   "nav.recorder": "录音",
   "nav.sessions": "会话",
   "nav.discover": "发现",

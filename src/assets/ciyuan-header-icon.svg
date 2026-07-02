@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 940" role="img" aria-labelledby="title">
+  <title id="title">词元听会</title>
+  <rect width="940" height="940" fill="#123fd5"/>
+  <text
+    x="470"
+    y="356"
+    fill="#ffffff"
+    font-family="Noto Sans SC, PingFang SC, sans-serif"
+    font-size="148"
+    font-weight="900"
+    text-anchor="middle"
+    letter-spacing="18"
+    transform="skewX(-10)"
+  >词元</text>
+  <rect x="92" y="468" width="756" height="216" fill="#ffe900"/>
+  <text
+    x="470"
+    y="615"
+    fill="#253245"
+    font-family="Noto Sans SC, PingFang SC, sans-serif"
+    font-size="118"
+    font-weight="800"
+    text-anchor="middle"
+    letter-spacing="16"
+  >听会</text>
+</svg>
