@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.2](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.10.1...v0.10.2) (2026-07-02)
+
+### Features
+
+* rebrand app to ciyuan tinghui ([173bc85](https://github-mtotozy/mtotozy-create/open-recorder/commit/173bc85cc26162cce0cf595f42d079ae8a62af17))
+
+### Bug Fixes
+
+* **release:** sync Cargo.lock version ([0dd3d79](https://github-mtotozy/mtotozy-create/open-recorder/commit/0dd3d793ef6e02640292e7b2e7578c9980741c7e))
+
 ## [0.10.1](https://github-mtotozy/mtotozy-create/open-recorder/compare/v0.10.0...v0.10.1) (2026-05-16)
 
 ### Bug Fixes
