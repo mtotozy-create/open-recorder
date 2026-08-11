@@ -28,6 +28,7 @@ import {
   getSessionJobs,
   getJob,
   listSessions,
+  openStorageFolder,
   deleteSession,
   pauseRecording,
   prepareTranscriptionAudio,
@@ -2078,6 +2079,7 @@ function App() {
           settingsBackupState={settingsBackupState}
           onLocaleChange={setLocale}
           onRefreshStorageUsage={() => void onRefreshStorageUsage()}
+          onOpenStorageFolder={openStorageFolder}
           onExportAllSummariesMarkdown={(folderPath) =>
             void onExportAllSummariesMarkdown(folderPath)
           }

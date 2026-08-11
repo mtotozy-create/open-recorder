@@ -274,6 +274,10 @@ export async function getStorageUsage(): Promise<StorageUsageSummary> {
   return invoke("settings_get_storage_usage");
 }
 
+export async function openStorageFolder(): Promise<void> {
+  await invoke("settings_open_storage_folder");
+}
+
 export async function exportSettingsBackup(
   request: SettingsBackupExportRequest
 ): Promise<SettingsBackupExportResult> {

@@ -41,6 +41,7 @@ type SettingsTabProps = {
     | { status: "error"; action: "export" | "import"; error: string };
   onLocaleChange: (locale: Locale) => void;
   onRefreshStorageUsage: () => void;
+  onOpenStorageFolder: () => Promise<void>;
   onExportAllSummariesMarkdown: (folderPath: string) => void;
   onExportSettingsBackup: (filePath: string) => void;
   onImportSettingsBackup: (filePath: string) => void;
@@ -214,6 +215,7 @@ function SettingsTab({
   settingsBackupState,
   onLocaleChange,
   onRefreshStorageUsage,
+  onOpenStorageFolder,
   onExportAllSummariesMarkdown,
   onExportSettingsBackup,
   onImportSettingsBackup,
@@ -243,6 +245,8 @@ function SettingsTab({
   >({});
   const [summaryFolderPickerError, setSummaryFolderPickerError] = useState<string>();
   const [settingsBackupPickerError, setSettingsBackupPickerError] = useState<string>();
+  const [storageFolderError, setStorageFolderError] = useState<string>();
+  const [isOpeningStorageFolder, setIsOpeningStorageFolder] = useState(false);
 
   useEffect(() => {
     if (settings.providers.length === 0) {
@@ -364,6 +368,18 @@ function SettingsTab({
       }
     } catch (error) {
       setSettingsBackupPickerError(String(error));
+    }
+  }
+
+  async function handleOpenStorageFolder() {
+    setStorageFolderError(undefined);
+    setIsOpeningStorageFolder(true);
+    try {
+      await onOpenStorageFolder();
+    } catch (error) {
+      setStorageFolderError(String(error));
+    } finally {
+      setIsOpeningStorageFolder(false);
     }
   }
 
@@ -1544,6 +1560,9 @@ function SettingsTab({
       ? t("settings.storageUsageErrorDetail", { error: storageUsageState.error })
       : undefined;
   const isRefreshingStorageUsage = storageUsageState.status === "loading";
+  const storageFolderStatusText = storageFolderError
+    ? t("settings.storageUsageOpenFolderError", { error: storageFolderError })
+    : undefined;
   const summaryExportFolderPath = settings.summaryExportFolderPath ?? "";
   const isExportingSummaries = summaryMarkdownExportState.status === "running";
   const summaryExportProgress =
@@ -2217,16 +2236,28 @@ function SettingsTab({
                         <h4>{t("settings.storageUsageTitle")}</h4>
                         <p>{t("settings.storageUsageHint")}</p>
                       </div>
-                      <button
-                        type="button"
-                        className="btn-secondary settings-inline-btn"
-                        onClick={onRefreshStorageUsage}
-                        disabled={isRefreshingStorageUsage}
-                      >
-                        {isRefreshingStorageUsage
-                          ? t("settings.storageUsageRefreshing")
-                          : t("settings.storageUsageRefresh")}
-                      </button>
+                      <div className="settings-storage-usage-actions">
+                        <button
+                          type="button"
+                          className="btn-secondary settings-inline-btn"
+                          onClick={() => void handleOpenStorageFolder()}
+                          disabled={!storageUsageSummary || isOpeningStorageFolder}
+                        >
+                          {isOpeningStorageFolder
+                            ? t("settings.storageUsageOpeningFolder")
+                            : t("settings.storageUsageOpenFolder")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary settings-inline-btn"
+                          onClick={onRefreshStorageUsage}
+                          disabled={isRefreshingStorageUsage}
+                        >
+                          {isRefreshingStorageUsage
+                            ? t("settings.storageUsageRefreshing")
+                            : t("settings.storageUsageRefresh")}
+                        </button>
+                      </div>
                     </div>
 
                     <dl className="settings-storage-usage-grid">
@@ -2242,6 +2273,9 @@ function SettingsTab({
 
                     {storageUsageError ? (
                       <p className="settings-storage-usage-error">{storageUsageError}</p>
+                    ) : null}
+                    {storageFolderStatusText ? (
+                      <p className="settings-storage-usage-error">{storageFolderStatusText}</p>
                     ) : null}
                   </section>
                 )}

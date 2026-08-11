@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{Read, Seek, Write},
     path::Path,
+    process::Command,
 };
 
 use chrono::Utc;
@@ -152,6 +153,41 @@ pub fn settings_get_storage_usage(
         .map_err(|_| "failed to acquire storage lock".to_string())?;
 
     storage.get_storage_usage()
+}
+
+#[tauri::command]
+pub fn settings_open_storage_folder(state: State<'_, AppState>) -> Result<(), String> {
+    let storage = state
+        .storage
+        .lock()
+        .map_err(|_| "failed to acquire storage lock".to_string())?;
+    let data_dir = storage.data_root_dir()?;
+
+    if !data_dir.is_dir() {
+        return Err(format!(
+            "storage data directory does not exist: {}",
+            data_dir.display()
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let program = "xdg-open";
+
+    Command::new(program)
+        .arg(&data_dir)
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "failed to open storage data directory {}: {error}",
+                data_dir.display()
+            )
+        })?;
+
+    Ok(())
 }
 
 #[tauri::command]

@@ -23,7 +23,7 @@ use commands::{
     },
     settings::{
         settings_export_backup, settings_get, settings_get_storage_usage, settings_import_backup,
-        settings_update,
+        settings_open_storage_folder, settings_update,
     },
     summary::summary_enqueue,
     summary_export::summary_export_all_markdown,
@@ -77,6 +77,7 @@ pub fn run() {
             local_provider_prepare,
             settings_get,
             settings_get_storage_usage,
+            settings_open_storage_folder,
             settings_update,
             settings_export_backup,
             settings_import_backup,
