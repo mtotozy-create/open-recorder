@@ -115,6 +115,7 @@ pub enum ProviderKind {
     Ollama,
     LocalStt,
     CustomChat,
+    RemoteTranscription,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -358,6 +359,26 @@ pub struct CustomChatProviderSettings {
     pub model: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteTranscriptionProviderSettings {
+    pub base_url: String,
+    pub api_token: Option<String>,
+    pub poll_interval_seconds: u64,
+    pub max_polling_minutes: u64,
+}
+
+impl Default for RemoteTranscriptionProviderSettings {
+    fn default() -> Self {
+        Self {
+            base_url: "http://100.109.26.52:8182".to_string(),
+            api_token: None,
+            poll_interval_seconds: 5,
+            max_polling_minutes: 120,
+        }
+    }
+}
+
 impl Default for CustomChatProviderSettings {
     fn default() -> Self {
         Self {
@@ -436,6 +457,7 @@ pub struct ProviderConfig {
     pub ollama: Option<OllamaProviderSettings>,
     pub custom_chat: Option<CustomChatProviderSettings>,
     pub local_stt: Option<LocalSttProviderSettings>,
+    pub remote_transcription: Option<RemoteTranscriptionProviderSettings>,
 }
 
 impl Default for ProviderConfig {
@@ -455,6 +477,7 @@ impl Default for ProviderConfig {
             ollama: None,
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         }
     }
 }
@@ -1052,6 +1075,7 @@ impl Settings {
             ollama: None,
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         };
         let aliyun_provider = ProviderConfig {
             id: DEFAULT_ALIYUN_PROVIDER_ID.to_string(),
@@ -1138,6 +1162,7 @@ impl Settings {
             ollama: None,
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         };
         let openrouter_provider = ProviderConfig {
             id: DEFAULT_OPENROUTER_PROVIDER_ID.to_string(),
@@ -1156,6 +1181,7 @@ impl Settings {
             ollama: None,
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         };
         let ollama_provider = ProviderConfig {
             id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
@@ -1173,6 +1199,7 @@ impl Settings {
             }),
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         };
         let local_stt_provider = ProviderConfig {
             id: DEFAULT_LOCAL_STT_PROVIDER_ID.to_string(),
@@ -1186,6 +1213,7 @@ impl Settings {
             ollama: None,
             custom_chat: None,
             local_stt: Some(LocalSttProviderSettings::default()),
+            remote_transcription: None,
         };
 
         (
@@ -1254,6 +1282,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             ollama: None,
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         },
         ProviderConfig {
             id: DEFAULT_ALIYUN_PROVIDER_ID.to_string(),
@@ -1267,6 +1296,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             ollama: None,
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         },
         ProviderConfig {
             id: DEFAULT_OPENROUTER_PROVIDER_ID.to_string(),
@@ -1280,6 +1310,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             ollama: None,
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         },
         ProviderConfig {
             id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
@@ -1293,6 +1324,7 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             ollama: Some(OllamaProviderSettings::default()),
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         },
         ProviderConfig {
             id: DEFAULT_LOCAL_STT_PROVIDER_ID.to_string(),
@@ -1306,6 +1338,21 @@ fn create_default_providers() -> Vec<ProviderConfig> {
             ollama: None,
             custom_chat: None,
             local_stt: Some(LocalSttProviderSettings::default()),
+            remote_transcription: None,
+        },
+        ProviderConfig {
+            id: "remote-transcription-default".to_string(),
+            name: "TodoVoice".to_string(),
+            kind: ProviderKind::RemoteTranscription,
+            capabilities: vec![ProviderCapability::Transcription],
+            enabled: false,
+            bailian: None,
+            aliyun_tingwu: None,
+            openrouter: None,
+            ollama: None,
+            custom_chat: None,
+            local_stt: None,
+            remote_transcription: Some(RemoteTranscriptionProviderSettings::default()),
         },
     ]
 }
@@ -1420,6 +1467,17 @@ fn normalize_provider(provider: &mut ProviderConfig) {
         _ => None,
     };
 
+    provider.remote_transcription = match provider.kind {
+        ProviderKind::RemoteTranscription => {
+            provider.capabilities = vec![ProviderCapability::Transcription];
+            let mut config = provider.remote_transcription.clone().unwrap_or_default();
+            config.poll_interval_seconds = config.poll_interval_seconds.clamp(1, 300);
+            config.max_polling_minutes = config.max_polling_minutes.clamp(1, 720);
+            Some(config)
+        }
+        _ => None,
+    };
+
     provider.local_stt = match provider.kind {
         ProviderKind::LocalStt => {
             let mut config = provider.local_stt.clone().unwrap_or_default();
@@ -1444,6 +1502,7 @@ fn default_capabilities_for_kind(kind: &ProviderKind) -> Vec<ProviderCapability>
         ProviderKind::Ollama => vec![ProviderCapability::Summary],
         ProviderKind::LocalStt => vec![ProviderCapability::Transcription],
         ProviderKind::CustomChat => vec![ProviderCapability::Summary],
+        ProviderKind::RemoteTranscription => vec![ProviderCapability::Transcription],
     }
 }
 
@@ -1467,6 +1526,7 @@ fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderC
         ProviderKind::Openrouter,
         ProviderKind::Ollama,
         ProviderKind::LocalStt,
+        ProviderKind::RemoteTranscription,
     ];
 
     let mut canonical = ordered_kinds
@@ -1540,6 +1600,15 @@ fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderC
                     }
                 }
                 ProviderKind::CustomChat => {}
+                ProviderKind::RemoteTranscription => {
+                    if let Some(config) = candidates
+                        .iter()
+                        .find_map(|item| item.remote_transcription.as_ref())
+                        .cloned()
+                    {
+                        provider.remote_transcription = Some(config);
+                    }
+                }
             }
 
             provider
@@ -1565,6 +1634,7 @@ fn canonicalize_providers_by_kind(providers: &[ProviderConfig]) -> Vec<ProviderC
                 custom.openrouter = None;
                 custom.ollama = None;
                 custom.local_stt = None;
+                custom.remote_transcription = None;
                 custom.custom_chat = Some(custom.custom_chat.clone().unwrap_or_default());
                 custom
             }),
@@ -1632,6 +1702,7 @@ fn ensure_capability_provider(providers: &mut Vec<ProviderConfig>, capability: P
             ollama: None,
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         },
         ProviderCapability::Summary => ProviderConfig {
             id: DEFAULT_OLLAMA_PROVIDER_ID.to_string(),
@@ -1645,6 +1716,7 @@ fn ensure_capability_provider(providers: &mut Vec<ProviderConfig>, capability: P
             ollama: Some(OllamaProviderSettings::default()),
             custom_chat: None,
             local_stt: None,
+            remote_transcription: None,
         },
     };
 
@@ -1811,6 +1883,7 @@ impl ProviderConfig {
             ProviderKind::Ollama => "ollama",
             ProviderKind::LocalStt => "local_stt",
             ProviderKind::CustomChat => "custom_chat",
+            ProviderKind::RemoteTranscription => "remote_transcription",
         }
     }
 }
@@ -1933,7 +2006,11 @@ impl Session {
 
     pub fn set_default_summary(&mut self, summary_id: &str) -> Result<(), String> {
         self.normalize_summaries();
-        if !self.summaries.iter().any(|summary| summary.id == summary_id) {
+        if !self
+            .summaries
+            .iter()
+            .any(|summary| summary.id == summary_id)
+        {
             return Err("summary not found".to_string());
         }
         self.default_summary_id = Some(summary_id.to_string());
@@ -1941,13 +2018,11 @@ impl Session {
     }
 
     pub fn default_summary(&self) -> Option<&SummaryResult> {
-        self.default_summary_id
-            .as_deref()
-            .and_then(|summary_id| {
-                self.summaries
-                    .iter()
-                    .find(|summary| summary.id == summary_id)
-            })
+        self.default_summary_id.as_deref().and_then(|summary_id| {
+            self.summaries
+                .iter()
+                .find(|summary| summary.id == summary_id)
+        })
     }
 
     fn latest_non_empty_summary_id(&self) -> Option<String> {
@@ -2005,6 +2080,14 @@ pub struct SessionSummary {
     pub elapsed_ms: u64,
     pub quality_preset: RecordingQualityPreset,
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListResponse {
+    pub items: Vec<SessionSummary>,
+    pub total: usize,
+    pub has_more: bool,
 }
 
 impl From<&Session> for SessionSummary {
@@ -2221,6 +2304,7 @@ mod tests {
                 model: "model-a".to_string(),
             }),
             local_stt: None,
+            remote_transcription: None,
         });
         settings.providers.push(ProviderConfig {
             id: "custom-anthropic".to_string(),
@@ -2239,6 +2323,7 @@ mod tests {
                 model: "model-b".to_string(),
             }),
             local_stt: None,
+            remote_transcription: None,
         });
         settings.selected_summary_provider_id = "custom-anthropic".to_string();
 

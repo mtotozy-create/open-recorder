@@ -168,6 +168,10 @@ pub(crate) fn resolve_summary_config(
             "provider '{}' does not support summary",
             provider.name
         )),
+        ProviderKind::RemoteTranscription => Err(format!(
+            "provider '{}' does not support summary",
+            provider.name
+        )),
     }
 }
 
@@ -304,7 +308,20 @@ pub fn summary_enqueue(
                 Ok(summary) => {
                     if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
                         let now = now_iso();
+                        let summary_title = summary.title.trim().to_string();
+                        let should_auto_name = session
+                            .name
+                            .as_deref()
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .is_empty();
                         session.append_summary(summary, &now);
+                        if should_auto_name
+                            && !summary_title.is_empty()
+                            && summary_title.chars().count() <= 120
+                        {
+                            session.name = Some(summary_title);
+                        }
                         session.status = SessionStatus::Completed;
                         session.updated_at = now;
                         let _ = storage.upsert_session(&session);

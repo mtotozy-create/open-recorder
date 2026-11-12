@@ -162,12 +162,37 @@ impl Storage {
         self.save_settings_and_person_name_mappings(settings)
     }
 
-    pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, String> {
-        let sessions = load_all_sessions(&self.connection)?;
-        let mut summaries: Vec<SessionSummary> =
-            sessions.iter().map(SessionSummary::from).collect();
-        summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(summaries)
+    pub fn list_sessions_page(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<SessionSummary>, usize), String> {
+        let total: usize = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|error| format!("failed to count sessions: {error}"))?
+            as usize;
+        let mut stmt = self
+            .connection
+            .prepare(
+                "SELECT payload_json FROM sessions ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
+            )
+            .map_err(|error| format!("failed to prepare paged session query: {error}"))?;
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64, offset as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|error| format!("failed to query paged sessions: {error}"))?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(SessionSummary::from(&deserialize_json::<Session>(
+                &row.map_err(|e| e.to_string())?,
+                "session",
+            )?));
+        }
+        Ok((result, total))
     }
 
     pub fn list_all_sessions(&self) -> Result<Vec<Session>, String> {

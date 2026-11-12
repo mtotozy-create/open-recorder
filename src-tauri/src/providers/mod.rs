@@ -3,3 +3,4 @@ pub mod aliyun_tingwu_realtime;
 pub mod bailian;
 pub mod local_stt;
 pub mod oss;
+pub mod remote_transcription;

@@ -12,8 +12,8 @@ use uuid::Uuid;
 use crate::{
     models::{
         merge_session_tags_into_catalog, validate_session_tags, AudioSegmentMeta,
-        RecordingQualityPreset, Session, SessionStatus, SessionSummary, StartSessionResponse,
-        SummaryResult, DEFAULT_IMPORTED_SESSION_TAG,
+        RecordingQualityPreset, Session, SessionListResponse, SessionStatus, SessionSummary,
+        StartSessionResponse, SummaryResult, DEFAULT_IMPORTED_SESSION_TAG,
     },
     state::AppState,
 };
@@ -409,12 +409,23 @@ fn remove_dir_if_present(path: &Path) {
 }
 
 #[tauri::command]
-pub fn session_list(state: State<'_, AppState>) -> Result<Vec<SessionSummary>, String> {
+pub fn session_list(
+    limit: Option<usize>,
+    offset: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<SessionListResponse, String> {
     let storage = state
         .storage
         .lock()
         .map_err(|_| "failed to acquire storage lock".to_string())?;
-    storage.list_sessions()
+    let limit = limit.unwrap_or(100).clamp(1, 200);
+    let offset = offset.unwrap_or(0);
+    let (items, total) = storage.list_sessions_page(limit, offset)?;
+    Ok(SessionListResponse {
+        has_more: offset + items.len() < total,
+        items,
+        total,
+    })
 }
 
 #[tauri::command]
@@ -845,9 +856,9 @@ mod tests {
     use super::{
         build_imported_session_from_segments, collect_selected_session_segments,
         collect_session_audio_paths, copy_imported_audio_to_session_dir,
-        copy_selected_segments_to_dir,
-        ensure_all_segments_deletion_allowed, ensure_single_segment_deletion_allowed,
-        remove_segment_references, search_session_summaries, session_has_merged_audio,
+        copy_selected_segments_to_dir, ensure_all_segments_deletion_allowed,
+        ensure_single_segment_deletion_allowed, remove_segment_references,
+        search_session_summaries, session_has_merged_audio,
     };
     use crate::models::{
         AudioSegmentMeta, Session, SessionStatus, SummaryResult, TranscriptSegment,
@@ -1054,11 +1065,17 @@ mod tests {
             "2026-04-14T10:00:00Z",
         );
 
-        assert_eq!(session.default_summary_id.as_deref(), Some(third_id.as_str()));
+        assert_eq!(
+            session.default_summary_id.as_deref(),
+            Some(third_id.as_str())
+        );
         session
             .delete_summary(&third_id)
             .expect("default summary should be deleted");
-        assert_eq!(session.default_summary_id.as_deref(), Some(second_id.as_str()));
+        assert_eq!(
+            session.default_summary_id.as_deref(),
+            Some(second_id.as_str())
+        );
     }
 
     #[test]

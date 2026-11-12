@@ -80,6 +80,7 @@ const DEFAULT_ALIYUN_PROVIDER_ID = "aliyun-tingwu-default";
 const DEFAULT_OPENROUTER_PROVIDER_ID = "openrouter-default";
 const DEFAULT_OLLAMA_PROVIDER_ID = "ollama-default";
 const DEFAULT_LOCAL_STT_PROVIDER_ID = "local-stt-default";
+const DEFAULT_REMOTE_TRANSCRIPTION_PROVIDER_ID = "remote-transcription-default";
 const DEFAULT_OSS_CONFIG_ID = "oss-aliyun-default";
 const DEFAULT_RECORDING_SEGMENT_SECONDS = 120;
 const MIN_RECORDING_SEGMENT_SECONDS = 10;
@@ -202,6 +203,17 @@ function createDefaultProvider(kind: ProviderConfig["kind"]): ProviderConfig {
     };
   }
 
+  if (kind === "remote_transcription") {
+    return {
+      id: DEFAULT_REMOTE_TRANSCRIPTION_PROVIDER_ID,
+      name: "TodoVoice",
+      kind,
+      capabilities: ["transcription"],
+      enabled: false,
+      remoteTranscription: { baseUrl: "http://100.109.26.52:8182", apiToken: "", pollIntervalSeconds: 5, maxPollingMinutes: 120 }
+    };
+  }
+
   if (kind === "openrouter") {
     return {
       id: DEFAULT_OPENROUTER_PROVIDER_ID,
@@ -280,7 +292,8 @@ function createDefaultProviders(): ProviderConfig[] {
     createDefaultProvider("aliyun_tingwu"),
     createDefaultProvider("openrouter"),
     createDefaultProvider("ollama"),
-    createDefaultProvider("local_stt")
+    createDefaultProvider("local_stt"),
+    createDefaultProvider("remote_transcription")
   ];
 }
 
@@ -486,7 +499,8 @@ function normalizeSettings(input: Settings): Settings {
     "aliyun_tingwu",
     "openrouter",
     "ollama",
-    "local_stt"
+    "local_stt",
+    "remote_transcription"
   ];
 
   const providers = orderedKinds.map((kind): ProviderConfig => {
@@ -513,7 +527,8 @@ function normalizeSettings(input: Settings): Settings {
         openrouter: undefined,
         ollama: undefined,
         customChat: undefined,
-        localStt: undefined
+        localStt: undefined,
+        remoteTranscription: undefined
       };
     }
 
@@ -611,7 +626,8 @@ function normalizeSettings(input: Settings): Settings {
         openrouter: undefined,
         ollama: undefined,
         customChat: undefined,
-        localStt: undefined
+        localStt: undefined,
+        remoteTranscription: undefined
       };
     }
 
@@ -635,7 +651,8 @@ function normalizeSettings(input: Settings): Settings {
         aliyunTingwu: undefined,
         ollama: undefined,
         customChat: undefined,
-        localStt: undefined
+        localStt: undefined,
+        remoteTranscription: undefined
       };
     }
 
@@ -653,7 +670,20 @@ function normalizeSettings(input: Settings): Settings {
         aliyunTingwu: undefined,
         openrouter: undefined,
         customChat: undefined,
-        localStt: undefined
+        localStt: undefined,
+        remoteTranscription: undefined
+      };
+    }
+
+    if (kind === "remote_transcription") {
+      const remoteConfig = candidates.map((item) => item.remoteTranscription).find(Boolean) ?? defaults.remoteTranscription!;
+      return {
+        ...defaults,
+        name: mergedName,
+        enabled: mergedEnabled,
+        remoteTranscription: { ...defaults.remoteTranscription!, ...remoteConfig },
+        bailian: undefined, aliyunTingwu: undefined, openrouter: undefined,
+        ollama: undefined, customChat: undefined, localStt: undefined
       };
     }
 
@@ -696,7 +726,8 @@ function normalizeSettings(input: Settings): Settings {
       aliyunTingwu: undefined,
       openrouter: undefined,
       ollama: undefined,
-      localStt: undefined
+      localStt: undefined,
+      remoteTranscription: undefined
     };
   });
   providers.push(...customProviders);
@@ -847,6 +878,8 @@ function App() {
   const [locale, setLocale] = useState<Locale>(getInitialLocale);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>();
+  const [hasMoreSessions, setHasMoreSessions] = useState(false);
+  const [sessionPageOffset, setSessionPageOffset] = useState(0);
   const [activeSession, setActiveSession] = useState<SessionDetail>();
   const [sessionJobs, setSessionJobs] = useState<JobInfo[]>([]);
   const [currentRecording, setCurrentRecording] = useState<string>();
@@ -966,8 +999,11 @@ function App() {
   }
 
   async function refreshSessions() {
-    const data = await listSessions();
+    const page = await listSessions(100, 0);
+    const data = page.items;
     setSessions(data);
+    setSessionPageOffset(data.length);
+    setHasMoreSessions(page.hasMore);
     if (data.length === 0) {
       setActiveSessionId(undefined);
       setActiveSession(undefined);
@@ -977,6 +1013,13 @@ function App() {
     if (!activeSessionId || !data.some((session) => session.id === activeSessionId)) {
       setActiveSessionId(data[0].id);
     }
+  }
+
+  async function loadMoreSessions() {
+    const page = await listSessions(100, sessionPageOffset);
+    setSessions((previous) => [...previous, ...page.items.filter((item) => !previous.some((current) => current.id === item.id))]);
+    setSessionPageOffset((previous) => previous + page.items.length);
+    setHasMoreSessions(page.hasMore);
   }
 
   async function refreshSessionDetail(sessionId: string) {
@@ -1984,6 +2027,8 @@ function App() {
       {activeTab === "sessions" && (
         <SessionsTab
           sessions={sessions}
+          hasMoreSessions={hasMoreSessions}
+          onLoadMore={() => void loadMoreSessions()}
           providers={settings.providers}
           templates={settings.templates}
           activeSessionId={activeSessionId}

@@ -166,6 +166,9 @@ function providerKindLabel(kind: ProviderKind, t: Translator): string {
   if (kind === "custom_chat") {
     return t("settings.customChatProvider");
   }
+  if (kind === "remote_transcription") {
+    return "TodoVoice";
+  }
   return t("settings.localStt");
 }
 
@@ -582,6 +585,20 @@ function SettingsTab({
   }
 
   function renderProviderForm(provider: ProviderConfig) {
+    if (provider.kind === "remote_transcription") {
+      const remote = provider.remoteTranscription;
+      if (!remote) return null;
+      const updateRemote = (next: Partial<typeof remote>) =>
+        patchProvider(provider.id, (current) => ({ ...current, remoteTranscription: { ...remote, ...next } }));
+      return (
+        <>
+          <label>{t("settings.remoteTranscriptionBaseUrl")}<input value={remote.baseUrl} onChange={(event) => updateRemote({ baseUrl: event.target.value })} /></label>
+          <label>{t("settings.remoteTranscriptionToken")}<input type="password" value={remote.apiToken ?? ""} onChange={(event) => updateRemote({ apiToken: event.target.value })} /></label>
+          <label>{t("settings.remoteTranscriptionPollInterval")}<input type="number" min={1} max={300} value={remote.pollIntervalSeconds} onChange={(event) => updateRemote({ pollIntervalSeconds: Number(event.target.value) || 5 })} /></label>
+          <label>{t("settings.remoteTranscriptionMaxPolling")}<input type="number" min={1} max={720} value={remote.maxPollingMinutes} onChange={(event) => updateRemote({ maxPollingMinutes: Number(event.target.value) || 120 })} /></label>
+        </>
+      );
+    }
     if (provider.kind === "bailian") {
       const bailian = provider.bailian;
       if (!bailian) {

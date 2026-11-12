@@ -51,6 +51,8 @@ let textMeasureCanvas: HTMLCanvasElement | undefined;
 
 type SessionsTabProps = {
   sessions: SessionSummary[];
+  hasMoreSessions?: boolean;
+  onLoadMore?: () => void;
   providers: ProviderConfig[];
   templates: PromptTemplate[];
   activeSessionId?: string;
@@ -432,6 +434,8 @@ async function copyTextToClipboard(text: string): Promise<void> {
 
 function SessionsTab({
   sessions,
+  hasMoreSessions = false,
+  onLoadMore,
   providers,
   templates,
   activeSessionId,
@@ -1817,6 +1821,11 @@ function SessionsTab({
                 );
               })}
             </ul>
+            {!hasSessionSearchQuery && hasMoreSessions && (
+              <button type="button" className="btn-secondary session-load-more" onClick={onLoadMore}>
+                {t("sessions.loadMore")}
+              </button>
+            )}
           </>
         )}
       </section>

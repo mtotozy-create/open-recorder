@@ -62,7 +62,8 @@ export type ProviderKind =
   | "openrouter"
   | "ollama"
   | "local_stt"
-  | "custom_chat";
+  | "custom_chat"
+  | "remote_transcription";
 
 export type ProviderCapability = "transcription" | "summary";
 
@@ -150,6 +151,13 @@ export type CustomChatProviderSettings = {
   model: string;
 };
 
+export type RemoteTranscriptionProviderSettings = {
+  baseUrl: string;
+  apiToken?: string;
+  pollIntervalSeconds: number;
+  maxPollingMinutes: number;
+};
+
 export type LocalSttEngine = "whisper" | "sensevoice_small";
 
 export type LocalSttProviderSettings = {
@@ -181,6 +189,7 @@ export type ProviderConfig = {
   ollama?: OllamaProviderSettings;
   customChat?: CustomChatProviderSettings;
   localStt?: LocalSttProviderSettings;
+  remoteTranscription?: RemoteTranscriptionProviderSettings;
 };
 
 export type Settings = {
@@ -340,6 +349,12 @@ export type SessionSummary = {
   elapsedMs: number;
   qualityPreset: RecordingQualityPreset;
   tags: string[];
+};
+
+export type SessionListResponse = {
+  items: SessionSummary[];
+  total: number;
+  hasMore: boolean;
 };
 
 export type AudioSegmentMeta = {

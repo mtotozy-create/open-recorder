@@ -10,6 +10,7 @@ import type {
   RecordingQualityPreset,
   SessionDetail,
   SessionSummary,
+  SessionListResponse,
   StartRecordingResponse,
   Settings,
   SettingsBackupExportRequest,
@@ -106,8 +107,8 @@ export async function exportRecording(
   return response.path;
 }
 
-export async function listSessions(): Promise<SessionSummary[]> {
-  return invoke("session_list");
+export async function listSessions(limit = 100, offset = 0): Promise<SessionListResponse> {
+  return invoke("session_list", { limit, offset });
 }
 
 export async function searchSessions(query: string): Promise<SessionSummary[]> {

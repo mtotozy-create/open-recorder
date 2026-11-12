@@ -8,13 +8,15 @@ use crate::{
     commands::recorder::merge_segments_with_ffmpeg,
     models::{
         AudioSegmentMeta, Job, JobEnqueueResponse, JobKind, JobStatus, OssConfig, OssProviderKind,
-        ProviderCapability, ProviderKind, SessionStatus, Settings,
+        ProviderCapability, ProviderKind, RemoteTranscriptionProviderSettings, SessionStatus,
+        Settings,
     },
     providers::{
         aliyun_tingwu::{transcribe_with_aliyun_tingwu, AliyunTingwuConfig},
         bailian::{transcribe_with_bailian, BailianConfig},
         local_stt::{transcribe_with_local_stt, LocalSttConfig},
         oss::{OssConfig as ProviderOssConfig, OssProviderKind as ProviderOssProviderKind},
+        remote_transcription::transcribe_with_remote_service,
     },
     state::AppState,
 };
@@ -111,6 +113,7 @@ enum ActiveTranscriptionConfig {
     Bailian(BailianConfig),
     AliyunTingwu(AliyunTingwuConfig),
     LocalStt(LocalSttConfig),
+    Remote(RemoteTranscriptionProviderSettings),
 }
 
 struct PreparedTranscriptionAudio {
@@ -655,6 +658,15 @@ pub fn transcribe_enqueue(
                     provider.name
                 ))
             }
+            ProviderKind::RemoteTranscription => {
+                let remote = provider.remote_transcription.clone().ok_or_else(|| {
+                    format!(
+                        "provider '{}' missing remote transcription config",
+                        provider.name
+                    )
+                })?;
+                ActiveTranscriptionConfig::Remote(remote)
+            }
             ProviderKind::LocalStt => {
                 let local_stt = provider.local_stt.as_ref().ok_or_else(|| {
                     format!("provider '{}' missing local_stt config", provider.name)
@@ -779,6 +791,12 @@ pub fn transcribe_enqueue(
                 &config,
                 &segment_meta,
                 &session_id_clone,
+                &update_progress,
+            ),
+            ActiveTranscriptionConfig::Remote(config) => transcribe_with_remote_service(
+                &segment_paths,
+                &config,
+                &segment_meta,
                 &update_progress,
             ),
         };
