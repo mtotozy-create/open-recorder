@@ -7,12 +7,13 @@ use uuid::Uuid;
 use crate::{
     models::{
         CustomChatApiMode, Job, JobEnqueueResponse, JobKind, JobStatus, PersonNameMapping,
-        PromptTemplate, ProviderCapability, ProviderConfig, ProviderKind, SessionStatus,
-        TranscriptSegment,
+        PromptTemplate, ProviderCapability, ProviderConfig, ProviderKind, Session, SessionStatus,
+        SummaryResult, TranscriptSegment,
     },
     providers::bailian::{
-        build_anthropic_messages_endpoint, build_openai_chat_endpoint,
-        summarize_with_chat_compatible, ChatCompatibleSummaryConfig,
+        build_anthropic_messages_endpoint, build_openai_chat_endpoint, generate_meeting_title,
+        is_generic_meeting_title, meeting_title_candidate, summarize_with_chat_compatible,
+        ChatCompatibleSummaryConfig,
     },
     state::AppState,
 };
@@ -303,24 +304,43 @@ pub fn summary_enqueue(
             &summary_config,
         );
 
+        let meeting_title = summary_result.as_ref().ok().and_then(|summary| {
+            let needs_name = storage_arc
+                .lock()
+                .ok()
+                .and_then(|storage| storage.get_session(&session_id_clone).ok().flatten())
+                .map(|session| session_needs_meeting_name(&session))
+                .unwrap_or(false);
+            if !needs_name {
+                return None;
+            }
+            // Naming is optional: never turn a successfully generated summary into a failure.
+            update_progress("Determining meeting topic...");
+            match resolve_meeting_name(summary, || {
+                generate_meeting_title(&transcript, summary, &summary_config)
+            }) {
+                Ok(title) => title,
+                Err(error) => {
+                    eprintln!(
+                        "Warning: could not generate meeting name for {session_id_clone}: {error}"
+                    );
+                    None
+                }
+            }
+        });
+
         if let Ok(storage) = storage_arc.lock() {
             match summary_result {
                 Ok(summary) => {
                     if let Ok(Some(mut session)) = storage.get_session(&session_id_clone) {
                         let now = now_iso();
-                        let summary_title = summary.title.trim().to_string();
-                        let should_auto_name = session
-                            .name
-                            .as_deref()
-                            .map(str::trim)
-                            .unwrap_or("")
-                            .is_empty();
+                        // Recheck after the request so a concurrent manual rename is preserved.
+                        let should_auto_name = session_needs_meeting_name(&session);
                         session.append_summary(summary, &now);
-                        if should_auto_name
-                            && !summary_title.is_empty()
-                            && summary_title.chars().count() <= 120
-                        {
-                            session.name = Some(summary_title);
+                        if should_auto_name {
+                            if let Some(title) = meeting_title {
+                                session.name = Some(title);
+                            }
                         }
                         session.status = SessionStatus::Completed;
                         session.updated_at = now;
@@ -330,6 +350,7 @@ pub fn summary_enqueue(
                     if let Ok(Some(mut job)) = storage.get_job(&job_id_clone) {
                         job.status = JobStatus::Completed;
                         job.error = None;
+                        job.progress_msg = None;
                         job.updated_at = now_iso();
                         let _ = storage.upsert_job(&job);
                     }
@@ -353,6 +374,26 @@ pub fn summary_enqueue(
     });
 
     Ok(JobEnqueueResponse { job_id })
+}
+
+fn session_needs_meeting_name(session: &Session) -> bool {
+    let name = session.name.as_deref().unwrap_or("").trim();
+    name.is_empty()
+        || (is_generic_meeting_title(name)
+            && session
+                .default_summary()
+                .map(|summary| summary.title.trim() == name)
+                .unwrap_or(false))
+}
+
+fn resolve_meeting_name(
+    summary: &SummaryResult,
+    generate: impl FnOnce() -> Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    if is_generic_meeting_title(&summary.title) {
+        return generate().map(|title| title.and_then(|value| meeting_title_candidate(&value)));
+    }
+    Ok(meeting_title_candidate(&summary.title))
 }
 
 fn resolve_template<'a>(
@@ -405,8 +446,119 @@ fn normalized_person_name_mapping_rules(mappings: &[PersonNameMapping]) -> Vec<(
 
 #[cfg(test)]
 mod tests {
-    use super::apply_person_name_mappings;
-    use crate::models::{PersonNameMapping, TranscriptSegment};
+    use super::{apply_person_name_mappings, resolve_meeting_name, session_needs_meeting_name};
+    use crate::models::{
+        PersonNameMapping, Session, SessionStatus, SummaryResult, TranscriptSegment,
+    };
+
+    #[test]
+    fn generic_summary_heading_uses_a_generated_subject() {
+        let summary = SummaryResult {
+            title: "会议纪要".to_string(),
+            ..SummaryResult::new_manual(String::new(), "2026-11-12T00:00:00Z")
+        };
+        let title =
+            resolve_meeting_name(&summary, || Ok(Some("支付系统上线与风险评审".to_string())))
+                .unwrap();
+        assert_eq!(title.as_deref(), Some("支付系统上线与风险评审"));
+    }
+
+    #[test]
+    fn specific_summary_title_does_not_need_another_request() {
+        let summary = SummaryResult {
+            title: "支付系统上线与风险评审".to_string(),
+            ..SummaryResult::new_manual(String::new(), "2026-11-12T00:00:00Z")
+        };
+        let title =
+            resolve_meeting_name(&summary, || panic!("specific title must be reused")).unwrap();
+        assert_eq!(title.as_deref(), Some("支付系统上线与风险评审"));
+    }
+
+    #[test]
+    fn invalid_generated_titles_are_skipped() {
+        let summary = SummaryResult {
+            title: "Meeting Notes".to_string(),
+            ..SummaryResult::new_manual(String::new(), "2026-11-12T00:00:00Z")
+        };
+        for title in ["".to_string(), "会议纪要".to_string(), "题".repeat(121)] {
+            assert!(resolve_meeting_name(&summary, || Ok(Some(title)))
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn overlong_summary_title_skips_naming_without_a_request() {
+        let summary = SummaryResult {
+            title: "题".repeat(121),
+            ..SummaryResult::new_manual(String::new(), "2026-11-12T00:00:00Z")
+        };
+        assert!(
+            resolve_meeting_name(&summary, || panic!("overlong title must be skipped"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn naming_failure_does_not_discard_completed_summary() {
+        let summary = SummaryResult {
+            title: "会议纪要".to_string(),
+            raw_markdown: "讨论支付系统上线计划".to_string(),
+            ..SummaryResult::new_manual(String::new(), "2026-11-12T00:00:00Z")
+        };
+        let title = resolve_meeting_name(&summary, || Err("provider unavailable".to_string()))
+            .ok()
+            .flatten();
+        let mut session = Session::default();
+        session.append_summary(summary, "2026-11-12T00:00:00Z");
+        if let Some(title) = title {
+            session.name = Some(title);
+        }
+        session.status = SessionStatus::Completed;
+        assert!(session.name.is_none());
+        assert!(matches!(session.status, SessionStatus::Completed));
+        assert_eq!(session.summaries.len(), 1);
+        assert_eq!(session.summaries[0].raw_markdown, "讨论支付系统上线计划");
+    }
+
+    #[test]
+    fn specific_manual_names_are_not_replaced() {
+        let mut session = Session {
+            name: Some("客户验收评审".to_string()),
+            ..Default::default()
+        };
+        session.append_summary(
+            SummaryResult {
+                title: "会议纪要".to_string(),
+                ..SummaryResult::new_manual(String::new(), "2026-11-12T00:00:00Z")
+            },
+            "2026-11-12T00:00:00Z",
+        );
+        assert!(!session_needs_meeting_name(&session));
+        session.name = Some("  ".to_string());
+        assert!(session_needs_meeting_name(&session));
+    }
+
+    #[test]
+    fn previously_copied_generic_summary_names_can_be_repaired() {
+        let mut session = Session {
+            name: Some("会议纪要".to_string()),
+            ..Default::default()
+        };
+        // An explicit name without a matching summary is left untouched.
+        assert!(!session_needs_meeting_name(&session));
+        session.append_summary(
+            SummaryResult {
+                title: "会议纪要".to_string(),
+                ..SummaryResult::new_manual(String::new(), "2026-11-12T00:00:00Z")
+            },
+            "2026-11-12T00:00:00Z",
+        );
+        assert!(session_needs_meeting_name(&session));
+        session.name = Some("团队季度复盘".to_string());
+        assert!(!session_needs_meeting_name(&session));
+    }
 
     fn mapping(id: &str, source_name: &str, target_name: &str) -> PersonNameMapping {
         PersonNameMapping {
